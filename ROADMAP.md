@@ -27,14 +27,18 @@ tight, make its results durable, then make the canvas scale.
       surfaced in the activity feed
 - [x] Skill etiquette: write the record into the user's repo at session end
 
-## Next — v0.3
+## Done — v0.3
 
-- [ ] User graph editing: add/rename/delete nodes and edges from the UI,
-      user-owned and surviving agent upserts (like notes and positions do),
-      flowing back to the agent as decision events
-- [ ] Scale & navigation UX: search/filter, minimap, keyboard navigation,
-      zoom-to-node
-- [ ] Export polish: native save dialog, copy-to-clipboard, mermaid-only export
+- [x] User graph editing: add/rename/delete nodes and edges from the UI
+      (buttons, gestures, and keyboard), origin-tracked so user elements
+      survive agent proposes until adopted, flowing back to the agent as
+      decision events (`node_added`, `node_edited`, `node_deleted`,
+      `removal_requested`, `edge_added`, `edge_deleted`)
+- [x] Scale & navigation UX: search with highlight/zoom-cycle, minimap with
+      click/drag panning, keyboard navigation, zoom-to-node
+- [x] Export polish: Export ▾ menu — Save As… (native dialog),
+      copy Markdown/Mermaid to clipboard, mermaid-only export, and a
+      `format` param on `export_markdown`
 
 ## Later
 
