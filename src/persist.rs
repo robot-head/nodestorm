@@ -42,9 +42,10 @@ pub fn load(path: &Path) -> Option<SessionState> {
     }
 }
 
-/// Atomic write primitive shared by [`save`] and [`save_export`]: temp file
-/// (`<name>.tmp`) in the same directory, then rename over the target.
-fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+/// Atomic write primitive shared by [`save`], [`save_export`], and the
+/// preferences file: temp file (`<name>.tmp`) in the same directory, then
+/// rename over the target.
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;

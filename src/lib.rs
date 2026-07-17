@@ -13,6 +13,7 @@ pub mod export;
 pub mod layout;
 pub mod model;
 pub mod persist;
+pub mod prefs;
 pub mod server;
 pub mod sessions;
 pub mod store;
