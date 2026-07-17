@@ -12,10 +12,7 @@ fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let session_path = match &cli.session {
-        Some(p) => p.clone(),
-        None => nodestorm::persist::default_session_path()?,
-    };
+    let session_path = cli.session_path()?;
     let store = if cli.demo {
         Store::with_doc(nodestorm::demo::demo_doc())
     } else {

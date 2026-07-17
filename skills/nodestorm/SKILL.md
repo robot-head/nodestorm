@@ -19,7 +19,8 @@ through `await_decisions`.
 
 Availability check: the tools are named `mcp__nodestorm__propose_graph`,
 `mcp__nodestorm__update_graph`, `mcp__nodestorm__await_decisions`,
-`mcp__nodestorm__get_state`, `mcp__nodestorm__clear_session`. If they are not
+`mcp__nodestorm__get_state`, `mcp__nodestorm__clear_session`,
+`mcp__nodestorm__export_markdown`. If they are not
 connected, tell the user they can start nodestorm and run
 `claude mcp add --transport http nodestorm http://127.0.0.1:4747/mcp`, then
 continue without it — never block on its absence.
@@ -54,6 +55,12 @@ continue without it — never block on its absence.
    toggled between two options) is worth a follow-up question. `note_added`
    events are constraints; treat them as requirements. A `flush_requested`
    comment is the user talking to you directly.
+6. **Leave a record.** When the brainstorm winds down (no open choices, or
+   the user says they're done), call `export_markdown` and write the result
+   into the repo's design docs (e.g. `docs/decisions/<topic-slug>.md`). Tell
+   the user the path in the terminal, and ask before overwriting an existing
+   record. The user can also click **Export** in the app — that copy lands
+   next to the session file, not in the repo.
 
 ## Etiquette
 

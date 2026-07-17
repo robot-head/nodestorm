@@ -31,6 +31,10 @@ HTTP).
 - **Exactly-once delivery**: decisions queue until you click *Send to agent*
   (or the last open choice is decided); a timed-out agent re-calls and gets
   them — nothing is ever lost.
+- **Everything leaves a record**: the agent pulls a Markdown decision record
+  (with an embedded Mermaid diagram) over `export_markdown` and writes it
+  into your repo — or you click **Export** and it lands next to the session
+  file.
 
 ## Install
 
@@ -106,6 +110,7 @@ cargo run --example drive        # simulates an agent against a running app
 | `await_decisions` | block until the user sends decisions (default 240 s, then `status:"timeout"` → call again) |
 | `get_state` | non-blocking full state + undelivered decisions (post-error resync) |
 | `clear_session` | wipe canvas and decision log |
+| `export_markdown` | the brainstorm as a Markdown decision record with an embedded Mermaid diagram (plain text — save it into the repo's docs) |
 
 User positions, notes, and already-decided choices survive agent upserts;
 re-opening a decided choice requires the agent to set `"reopen": true`.
@@ -144,9 +149,11 @@ cursor nor the foreground — it runs quietly in the background even while a
 human uses the desktop (the app window is pushed to the bottom of the
 z-order). Full mode runs `examples/drive.rs` as the agent, clicks through
 both proposed choices in the real UI, waits for the autoflush delivery, and
-fails unless the drive client actually receives the decisions over MCP.
-Screenshots and logs land in `target\verify\`. Note that clicks land at an
+fails unless the drive client actually receives the decisions over MCP —
+then clicks **Export** and fails unless the Markdown decision record lands
+on disk. Screenshots and logs land in `target\verify\`. Note that clicks land at an
 element's *visual* position: close the choice panel (its `✕`) before
 selecting a card the panel overlaps, as the script does.
 
 Design cap: ~100 nodes per graph, one brainstorm session at a time.
+Where this is going: see [ROADMAP.md](ROADMAP.md).

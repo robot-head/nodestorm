@@ -65,7 +65,7 @@ async fn full_decision_roundtrip() {
         .await
         .expect("mcp handshake");
 
-    // Tool discovery: all five tools are advertised.
+    // Tool discovery: all six tools are advertised.
     let tools = client.list_all_tools().await.expect("list tools");
     let names: Vec<_> = tools.iter().map(|t| t.name.as_ref()).collect();
     for expected in [
@@ -74,6 +74,7 @@ async fn full_decision_roundtrip() {
         "await_decisions",
         "get_state",
         "clear_session",
+        "export_markdown",
     ] {
         assert!(
             names.contains(&expected),
@@ -169,6 +170,41 @@ async fn full_decision_roundtrip() {
     assert_eq!(state["doc"]["nodes"][0]["status"], "affected");
     assert_eq!(state["undelivered_decisions"].as_array().unwrap().len(), 0);
     assert_eq!(state["decision_log_len"], 1);
+
+    // export_markdown returns the decision record as plain Markdown (not
+    // JSON): the Redis decision with its exploration trail, and the follow-up
+    // choice under Open questions.
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("export_markdown")
+                .with_arguments(json!({}).as_object().cloned().unwrap_or_default()),
+        )
+        .await
+        .expect("export_markdown");
+    let record = &result.content[0]
+        .as_text()
+        .expect("plain text content")
+        .text;
+    assert!(record.starts_with("# test graph\n"), "got: {record}");
+    assert!(
+        record.contains("```mermaid\nflowchart LR\n"),
+        "in: {record}"
+    );
+    assert!(
+        record.contains("**Decision: Redis ★ agent-recommended**"),
+        "in: {record}"
+    );
+    assert!(
+        record.contains("after first exploring Memcached"),
+        "trail, in: {record}"
+    );
+    let decisions_at = record.find("## Decisions").expect("decisions section");
+    let open_at = record.find("## Open questions").expect("open section");
+    assert!(decisions_at < open_at, "section order, in: {record}");
+    assert!(
+        record[open_at..].contains("Cache invalidation strategy?"),
+        "in: {record}"
+    );
 
     client.cancel().await.expect("client shutdown");
 }
