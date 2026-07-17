@@ -65,13 +65,17 @@ function Fail([string]$msg) {
 $script:AppWindow = $null   # cached UIA element for the app's top-level window
 
 function Get-AppWindow([int]$ProcessId, [int]$TimeoutSec = 30) {
+    # The process owns two top-level windows: the real one ("nodestorm") and
+    # tao's hidden "Tao Thread Event Target". Enumeration order is not
+    # guaranteed, so pick by name instead of taking the first match.
     $root = [System.Windows.Automation.AutomationElement]::RootElement
     $cond = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $ProcessId)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
-        $win = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond)
-        if ($win) { return $win }
+        foreach ($win in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)) {
+            if ($win.Current.Name -eq 'nodestorm') { return $win }
+        }
         Start-Sleep -Milliseconds 300
     }
     return $null
@@ -344,13 +348,14 @@ try {
     Click-Element $hwnd '+ Component'
     if (-not (Wait-Element 'New component' 10)) { Fail 'user component did not appear' }
 
-    # Rename it via the panel's Edit form: expand, focus the label input
-    # (just below the Edit summary — inputs have no reliable UIA name),
+    # Rename it via the panel's Edit form: open the form, focus the label
+    # input (just below the actions row — inputs have no reliable UIA name),
     # clear, type, save.
+    if (-not (Wait-Element 'Edit' 10)) { Fail 'panel did not open with an Edit button' }
     Click-Element $hwnd 'Edit'
     Start-Sleep -Milliseconds 300
     $editEl = Find-Element 'Edit'
-    if (-not $editEl) { Fail 'Edit summary not found after expanding' }
+    if (-not $editEl) { Fail 'Edit button vanished after opening the form' }
     $er = $editEl.Current.BoundingRectangle
     Click-Point $hwnd ($er.X + $er.Width / 2) ($er.Y + $er.Height + 18)
     Send-Key $hwnd 0x23   # VK_END
@@ -374,7 +379,9 @@ try {
     Click-Element $hwnd 'Delivery Store'
     if (-not (Wait-Element 'Delete' 10)) { Fail 'panel Delete button missing' }
     Click-Element $hwnd 'Delete'
-    if (-not (Wait-Element 'removed' 10)) { Fail 'agent node was not marked removed' }
+    # The status tag renders lowercase but CSS text-transform: uppercase
+    # changes the UIA-exposed name.
+    if (-not (Wait-Element 'REMOVED' 10)) { Fail 'agent node was not marked removed' }
     Log 'agent node soft-removed (removal_requested queued)'
     Save-WindowPng $hwnd (Join-Path $OutDir '03-edited.png')
 

@@ -65,6 +65,7 @@ pub fn ChoicePanel(
     let mut label_draft = use_signal(|| node.label.clone());
     let mut kind_draft = use_signal(|| kind_value(node.kind).to_owned());
     let mut desc_draft = use_signal(|| node.description.clone());
+    let mut edit_open = use_signal(|| false);
     let store = use_store();
     let mut connect_from = use_context::<super::ConnectFrom>().0;
     let node_id = node.id.clone();
@@ -108,51 +109,16 @@ pub fn ChoicePanel(
                 p { class: "panel-desc", "{node.description}" }
             }
 
-            details { class: "edit-form",
-                summary { "Edit" }
-                input {
-                    class: "edit-label",
-                    value: "{label_draft}",
-                    placeholder: "component label",
-                    oninput: move |ev| label_draft.set(ev.value()),
-                }
-                select {
-                    class: "edit-kind",
-                    value: "{kind_draft}",
-                    onchange: move |ev| kind_draft.set(ev.value()),
-                    for (value, _) in KIND_VALUES {
-                        option { value: "{value}", selected: *kind_draft.read() == value, "{value}" }
-                    }
-                }
-                textarea {
-                    class: "edit-desc",
-                    value: "{desc_draft}",
-                    placeholder: "description",
-                    oninput: move |ev| desc_draft.set(ev.value()),
-                }
-                button {
-                    class: "btn",
-                    disabled: label_draft.read().trim().is_empty(),
-                    onclick: {
-                        let store = store.clone();
-                        let node_id = node_id.clone();
-                        move |_| {
-                            let label = label_draft.read().trim().to_owned();
-                            if let Err(err) = store.edit_node(
-                                &node_id,
-                                label,
-                                kind_from_value(&kind_draft.read()),
-                                desc_draft.read().trim().to_owned(),
-                            ) {
-                                tracing::warn!(%err, "edit_node failed");
-                            }
-                        }
-                    },
-                    "Save"
-                }
-            }
-
             div { class: "panel-actions",
+                // A plain toggled button (not <details>/<summary>): WebView2
+                // does not reliably expose a collapsed summary by name in the
+                // UIA tree, and the E2E script drives this by name.
+                button {
+                    class: if edit_open() { "btn btn-armed" } else { "btn" },
+                    title: "Edit this component's label, kind, and description",
+                    onclick: move |_| edit_open.toggle(),
+                    "Edit"
+                }
                 button {
                     class: if connecting { "btn btn-armed" } else { "btn" },
                     title: "Then click the target card to draw an edge from this component",
@@ -182,6 +148,55 @@ pub fn ChoicePanel(
                         }
                     },
                     "Delete"
+                }
+            }
+
+            if edit_open() {
+                div { class: "edit-form",
+                    input {
+                        class: "edit-label",
+                        value: "{label_draft}",
+                        placeholder: "component label",
+                        oninput: move |ev| label_draft.set(ev.value()),
+                    }
+                    select {
+                        class: "edit-kind",
+                        value: "{kind_draft}",
+                        onchange: move |ev| kind_draft.set(ev.value()),
+                        for (value, _) in KIND_VALUES {
+                            option {
+                                value: "{value}",
+                                selected: *kind_draft.read() == value,
+                                "{value}"
+                            }
+                        }
+                    }
+                    textarea {
+                        class: "edit-desc",
+                        value: "{desc_draft}",
+                        placeholder: "description",
+                        oninput: move |ev| desc_draft.set(ev.value()),
+                    }
+                    button {
+                        class: "btn",
+                        disabled: label_draft.read().trim().is_empty(),
+                        onclick: {
+                            let store = store.clone();
+                            let node_id = node_id.clone();
+                            move |_| {
+                                let label = label_draft.read().trim().to_owned();
+                                if let Err(err) = store.edit_node(
+                                    &node_id,
+                                    label,
+                                    kind_from_value(&kind_draft.read()),
+                                    desc_draft.read().trim().to_owned(),
+                                ) {
+                                    tracing::warn!(%err, "edit_node failed");
+                                }
+                            }
+                        },
+                        "Save"
+                    }
                 }
             }
 
