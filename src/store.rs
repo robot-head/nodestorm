@@ -518,6 +518,11 @@ impl Store {
         self.mutate(|s| push_activity(s, ActivityOrigin::User, format!("export failed: {err}")));
     }
 
+    /// Generic user-action receipt for the activity feed (clipboard copies…).
+    pub fn record_user_action(&self, text: String) {
+        self.mutate(|s| push_activity(s, ActivityOrigin::User, text));
+    }
+
     /// "Send to agent": flush everything undelivered (an empty flush is a
     /// valid "reviewed, proceed" signal).
     pub fn request_flush(&self, comment: Option<String>) {
@@ -771,7 +776,8 @@ fn summary(s: &SessionState, warnings: Vec<String>) -> UpdateSummary {
 
 /// Slug for a user-created node id: lowercase ASCII alphanumeric runs
 /// joined by `-`; anything else separates. Empty input → `"component"`.
-fn slugify(label: &str) -> String {
+/// (Also used by the UI for suggested export filenames.)
+pub(crate) fn slugify(label: &str) -> String {
     let mut out = String::new();
     let mut pending_sep = false;
     for c in label.to_lowercase().chars() {
@@ -1298,6 +1304,12 @@ mod tests {
             "text: {}",
             entry.text
         );
+
+        store.record_user_action("copied the diagram to the clipboard".into());
+        let meta = store.snapshot_meta();
+        let entry = meta.activity.last().unwrap();
+        assert_eq!(entry.origin, ActivityOrigin::User);
+        assert!(entry.text.contains("clipboard"), "text: {}", entry.text);
     }
 
     fn pick_first_choice(store: &Arc<Store>) {
