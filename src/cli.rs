@@ -25,6 +25,11 @@ pub struct Cli {
     #[arg(long)]
     pub sessions_dir: Option<PathBuf>,
 
+    /// Preferences file (default: `preferences.json` in the platform data
+    /// dir). Lets tests and E2E runs avoid the real user preferences.
+    #[arg(long)]
+    pub prefs: Option<PathBuf>,
+
     /// Load the built-in demo graph instead of restoring the last session.
     #[arg(long)]
     pub demo: bool,
@@ -51,6 +56,15 @@ impl Cli {
         match &self.session {
             Some(path) => Ok(path.clone()),
             None => crate::persist::default_session_path(),
+        }
+    }
+
+    /// The global preferences file: the `--prefs` override, or the
+    /// platform default.
+    pub fn prefs_path(&self) -> anyhow::Result<PathBuf> {
+        match &self.prefs {
+            Some(path) => Ok(path.clone()),
+            None => crate::prefs::default_prefs_path(),
         }
     }
 
@@ -83,6 +97,20 @@ mod tests {
         assert_eq!(
             cli.session_path().unwrap(),
             crate::persist::default_session_path().unwrap()
+        );
+    }
+
+    #[test]
+    fn prefs_path_prefers_override() {
+        let cli = Cli::parse_from(["nodestorm", "--prefs", "some/dir/my-prefs.json"]);
+        assert_eq!(
+            cli.prefs_path().unwrap(),
+            PathBuf::from("some/dir/my-prefs.json")
+        );
+        let cli = Cli::parse_from(["nodestorm"]);
+        assert_eq!(
+            cli.prefs_path().unwrap(),
+            crate::prefs::default_prefs_path().unwrap()
         );
     }
 }

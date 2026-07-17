@@ -10,6 +10,7 @@ mod diff_panel;
 mod edge_layer;
 mod minimap;
 mod node_card;
+mod theme_menu;
 mod timeline;
 mod topbar;
 
@@ -49,6 +50,22 @@ pub(crate) struct SearchQuery(pub Signal<String>);
 /// `other`.
 #[derive(Clone, Copy)]
 pub(crate) struct CompareWith(pub Signal<Option<String>>);
+
+/// The live theme/mode preference (loaded in [`launch`], edited by the
+/// topbar's theme menu, persisted to the global preferences file).
+#[derive(Clone, Copy)]
+pub(crate) struct ThemePref(pub Signal<crate::prefs::Preferences>);
+
+/// Map the color mode onto the native window chrome: explicit modes force
+/// the title bar, `Auto` (tao's `None`) follows the OS.
+pub(crate) fn tao_theme(mode: crate::theme::Mode) -> Option<dioxus::desktop::tao::window::Theme> {
+    use dioxus::desktop::tao::window::Theme;
+    match mode {
+        crate::theme::Mode::Auto => None,
+        crate::theme::Mode::Dark => Some(Theme::Dark),
+        crate::theme::Mode::Light => Some(Theme::Light),
+    }
+}
 
 /// Case-insensitive substring match over label, id, and group.
 pub(crate) fn node_matches(node: &Node, query: &str) -> bool {
@@ -103,19 +120,35 @@ impl ViewTransform {
 
 /// Launch the desktop window. Must be called on the main thread.
 pub fn launch(sessions: Arc<crate::sessions::Sessions>, cli: Cli) {
+    // Load preferences before the window exists so the native title bar is
+    // right from first paint; the App seeds its signal from this context.
+    let prefs = cli
+        .prefs_path()
+        .map(|p| crate::prefs::load_or_default(&p))
+        .unwrap_or_default();
     let window = WindowBuilder::new()
         .with_title("nodestorm")
-        .with_inner_size(dioxus::desktop::tao::dpi::LogicalSize::new(1280.0, 840.0));
+        .with_inner_size(dioxus::desktop::tao::dpi::LogicalSize::new(1280.0, 840.0))
+        .with_theme(tao_theme(prefs.mode));
     dioxus::LaunchBuilder::new()
         .with_cfg(Config::new().with_window(window).with_menu(None))
         .with_context(cli)
         .with_context(sessions)
+        .with_context(prefs)
         .launch(app::App);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tao_theme_maps_modes() {
+        use dioxus::desktop::tao::window::Theme;
+        assert_eq!(tao_theme(crate::theme::Mode::Auto), None);
+        assert_eq!(tao_theme(crate::theme::Mode::Dark), Some(Theme::Dark));
+        assert_eq!(tao_theme(crate::theme::Mode::Light), Some(Theme::Light));
+    }
 
     #[test]
     fn fit_never_zooms_below_floor() {

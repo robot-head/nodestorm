@@ -169,6 +169,22 @@ you typed into the Send box.
 | double-click card | zoom to it |
 | double-click background | new component there |
 
+## Theming
+
+The **Theme ▾** menu in the top bar picks a color palette and mode. Twelve
+palette families, each with a dark **and** a light variant: Nodestorm (the
+default), Solarized, Gruvbox, Catppuccin (Mocha/Latte), Nord, Dracula,
+Tokyo Night, One, GitHub, Everforest, Rosé Pine, and Monokai. Each row
+shows live swatches of that palette in the current mode.
+
+The mode row switches **Auto / Light / Dark**. Auto (the default) follows
+the system setting — on Windows, *Settings → Personalization → Colors →
+"Choose your default app mode"* — and tracks changes live, no restart
+needed. The native title bar follows the chosen mode too. The choice is
+global (all sessions) and persists in `preferences.json` in the data dir;
+it never touches session files, undo history, agents, or exported records
+(export colors stay fixed so records read the same everywhere).
+
 ## CLI
 
 | Flag | Meaning |
@@ -176,6 +192,7 @@ you typed into the Send box.
 | `--port <N>` | MCP port (default 4747, loopback only) |
 | `--session <file>` | pin this exact file as the active session (named after the file stem) |
 | `--sessions-dir <dir>` | where named sessions live (default: `sessions/` in the data dir) |
+| `--prefs <file>` | preferences file (default: `preferences.json` in the data dir) |
 | `--demo` | load the demo graph instead of restoring |
 | `--demo-big <N>` | load a deterministic N-component graph (scaling checks) |
 | `--headless` | MCP server without a window (CI / remote) |

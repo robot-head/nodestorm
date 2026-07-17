@@ -10,6 +10,7 @@ use crate::model::{NodeId, NodeKind, SessionDoc};
 use crate::store::{Store, UiMeta};
 
 use super::app::use_store;
+use super::theme_menu::ThemeMenu;
 
 /// Render the full decision record from current store state.
 fn render_markdown_now(store: &Arc<Store>) -> String {
@@ -467,6 +468,7 @@ pub fn TopBar(
                     }
                 }
             }
+            ThemeMenu {}
             input {
                 class: "send-comment",
                 placeholder: "optional message to the agent…",

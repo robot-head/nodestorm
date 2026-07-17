@@ -68,6 +68,18 @@ tight, make its results durable, then make the canvas scale.
 - [x] Channel-lane routing for rank-spanning edges (cosmetic bundling for
       expanded graphs)
 
+## Done — v0.7
+
+- [x] Theming: twelve terminal-palette families (Solarized, Gruvbox,
+      Catppuccin, Nord, Dracula, Tokyo Night, One, GitHub, Everforest,
+      Rosé Pine, Monokai + the Nodestorm default), each with dark and
+      light variants via CSS `light-dark()`
+- [x] Auto / Light / Dark mode — Auto follows the OS live; the native
+      title bar tracks the mode (tao `set_theme`)
+- [x] Theme ▾ picker in the top bar with per-family live swatches; choice
+      persists globally in `preferences.json` (new `--prefs` flag), never
+      touching sessions, undo, agents, or exports
+
 ## Later
 
 - [ ] Minimap virtualization for very large graphs

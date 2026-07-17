@@ -37,6 +37,9 @@ $ExportFile = $SessionFile -replace '\.json$', '.export.md'
 # Isolated named-sessions dir: without this, created sessions land in the
 # user's real data dir and dedup renames break re-runs.
 $SessionsDir = Join-Path $env:TEMP "nodestorm-verify-sessions-$Port"
+# Isolated preferences file: the theme step must not touch the user's real
+# preferences.json.
+$PrefsFile = Join-Path $env:TEMP "nodestorm-verify-prefs-$Port.json"
 
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName UIAutomationClient
@@ -49,6 +52,7 @@ Add-Type -Namespace NodestormVerify -Name Native -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
 [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
 [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int w, int ht, uint flags);
+[DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int attr, out int val, int size);
 public delegate bool EnumProc(IntPtr h, IntPtr lp);
 public struct RECT { public int Left, Top, Right, Bottom; }
 '@
@@ -254,6 +258,7 @@ New-Item -ItemType Directory -Force $OutDir | Out-Null
 Remove-Item $SessionFile -Force -ErrorAction SilentlyContinue
 Remove-Item $ExportFile -Force -ErrorAction SilentlyContinue
 Remove-Item $SessionsDir -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item $PrefsFile -Force -ErrorAction SilentlyContinue
 
 if (-not $NoBuild) {
     Log 'cargo build (nodestorm + drive example)...'
@@ -271,7 +276,7 @@ $driveExe = Join-Path $RepoRoot 'target\debug\examples\drive.exe'
 if (-not (Test-Path $exe)) { Fail "$exe not built" }
 if (-not $DemoShot -and -not (Test-Path $driveExe)) { Fail "$driveExe not built" }
 
-$appArgs = @('--port', $Port, '--session', $SessionFile, '--sessions-dir', $SessionsDir)
+$appArgs = @('--port', $Port, '--session', $SessionFile, '--sessions-dir', $SessionsDir, '--prefs', $PrefsFile)
 if ($DemoShot) { $appArgs += '--demo' }
 $appLog = Join-Path $OutDir 'nodestorm.log'
 Log "launching nodestorm on port $Port..."
@@ -462,6 +467,54 @@ try {
         if ($record -notlike "*$needle*") { Fail "export record missing '$needle':`n$record" }
     }
     Log "Export menu wrote the decision record ($ExportFile)"
+
+    # ---- v0.7 theming through the real controls ----
+
+    # Open the picker; a non-active family row's UIA name is its plain
+    # display name (the active row flattens to "<Name> ✓").
+    Click-Element $hwnd ('Theme ' + [char]0x25BE)
+    if (-not (Wait-Element 'Gruvbox' 5)) { Fail 'theme menu did not open' }
+    # Mode clicks keep the menu open; family clicks close it.
+    Click-Element $hwnd 'Light'
+    Click-Element $hwnd 'Gruvbox'
+    if (-not (Wait-ElementGone 'Gruvbox' 10)) { Fail 'theme menu did not close after picking a palette' }
+
+    # The preference file must record the choice (written on every click).
+    $deadline = (Get-Date).AddSeconds(10)
+    while ((Get-Date) -lt $deadline -and -not (Test-Path $PrefsFile)) { Start-Sleep -Milliseconds 250 }
+    if (-not (Test-Path $PrefsFile)) { Fail "preferences file did not appear: $PrefsFile" }
+    $prefs = Get-Content $PrefsFile -Raw | ConvertFrom-Json
+    if ($prefs.theme -ne 'gruvbox' -or $prefs.mode -ne 'light') {
+        Fail "preferences not persisted (theme=$($prefs.theme), mode=$($prefs.mode))"
+    }
+    Log 'theme choice persisted (gruvbox, light)'
+
+    # Visual hard-assert: gruvbox-light content is unambiguously bright
+    # (the dark UI averages ~0.1 on the same grid).
+    Start-Sleep -Milliseconds 500
+    $themeShot = Join-Path $OutDir '06-theme-gruvbox-light.png'
+    Save-WindowPng $hwnd $themeShot
+    $bmp = New-Object System.Drawing.Bitmap $themeShot
+    $sum = 0.0; $n = 0
+    for ($x = 50; $x -lt $bmp.Width - 50; $x += 20) {
+        for ($y = 60; $y -lt $bmp.Height - 50; $y += 20) {
+            $sum += $bmp.GetPixel($x, $y).GetBrightness(); $n++
+        }
+    }
+    $bmp.Dispose()
+    $avg = $sum / $n
+    if ($avg -le 0.5) { Fail ("content did not switch to a light palette (mean brightness {0:N2})" -f $avg) }
+    Log ("gruvbox-light content verified (mean brightness {0:N2})" -f $avg)
+
+    # Native title bar follows the mode: after clicking Light the DWM
+    # immersive-dark flag must be off. (Pixel checks are unreliable here —
+    # accent-on-title-bars paints active bars the accent color either way.)
+    $dark = 0
+    $hr = [NodestormVerify.Native]::DwmGetWindowAttribute($hwnd, 20, [ref]$dark, 4)
+    if ($hr -ne 0) { Fail "DwmGetWindowAttribute failed (hr=$hr)" }
+    if ($dark -ne 0) { Fail 'native title bar still dark after switching the mode to Light' }
+    Log 'native title bar switched to light with the mode'
+
     Write-Host 'PASS: decisions + user editing verified through the real GUI' -ForegroundColor Green
     Write-Host "artifacts: $OutDir"
     exit 0
@@ -471,4 +524,5 @@ try {
     Remove-Item $SessionFile -Force -ErrorAction SilentlyContinue
     Remove-Item $ExportFile -Force -ErrorAction SilentlyContinue
     Remove-Item $SessionsDir -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item $PrefsFile -Force -ErrorAction SilentlyContinue
 }
