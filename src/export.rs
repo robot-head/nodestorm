@@ -582,7 +582,7 @@ fn escape_edge_label(label: &str) -> String {
 mod tests {
     use super::*;
     use crate::demo::demo_doc;
-    use crate::model::{Edge, EdgeKind, ElementStatus, Node, NodeId, NodeKind, SessionDoc};
+    use crate::model::{Edge, EdgeKind, ElementStatus, Node, NodeId, NodeKind, Origin, SessionDoc};
 
     fn tnode(id: &str, label: &str) -> Node {
         Node {
@@ -595,6 +595,7 @@ mod tests {
             choices: vec![],
             notes: vec![],
             position: None,
+            origin: Origin::Agent,
         }
     }
 
@@ -605,6 +606,7 @@ mod tests {
             kind,
             label: None,
             status,
+            origin: Origin::Agent,
         }
     }
 

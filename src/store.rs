@@ -527,6 +527,7 @@ fn placeholder_node() -> Node {
         choices: vec![],
         notes: vec![],
         position: None,
+        origin: Default::default(),
     }
 }
 

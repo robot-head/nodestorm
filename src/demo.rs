@@ -2,7 +2,7 @@
 
 use crate::model::{
     Choice, ChoiceOption, ChoiceStatus, Edge, EdgeKind, ElementStatus, Node, NodeId, NodeKind,
-    SessionDoc,
+    Origin, SessionDoc,
 };
 
 fn n(id: &str, label: &str, kind: NodeKind, status: ElementStatus, description: &str) -> Node {
@@ -16,6 +16,7 @@ fn n(id: &str, label: &str, kind: NodeKind, status: ElementStatus, description: 
         choices: vec![],
         notes: vec![],
         position: None,
+        origin: Origin::Agent,
     }
 }
 
@@ -26,6 +27,7 @@ fn e(from: &str, to: &str, kind: EdgeKind, status: ElementStatus) -> Edge {
         kind,
         label: None,
         status,
+        origin: Origin::Agent,
     }
 }
 
