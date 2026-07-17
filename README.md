@@ -136,6 +136,13 @@ you work in another**: every MCP tool takes an optional `session` name
 names, and `list_sessions` shows what exists. Only you switch what's on
 screen.
 
+The menu's Manage block also **renames** the active session (the file
+follows; a waiting agent is unaffected), **deletes** it permanently, and
+**unarchives** anything in `sessions/archive/`. Every other session's row
+has a **Compare** button: a side panel shows how it differs from the
+active one — components added/removed/changed, edges, and decision drift —
+the same summary agents get from `diff_sessions`.
+
 ## Timeline
 
 The **Timeline** button opens the session log: every pick, dismissal,
@@ -177,6 +184,7 @@ you typed into the Send box.
 | `clear_session` | wipe canvas and decision log |
 | `export_markdown` | the brainstorm as a Markdown decision record with an embedded Mermaid diagram (plain text — save it into the repo's docs); `format: "mermaid"` returns just the diagram |
 | `list_sessions` | the named sessions with per-session counts and agent-waiting flags |
+| `diff_sessions` | structural comparison of two sessions — components added/removed/changed, edges, decision drift — as plain Markdown |
 
 Every tool also takes an optional `session: "name"` (default: the session
 on screen); `propose_graph` creates missing sessions on the spot, and

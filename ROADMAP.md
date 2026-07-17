@@ -52,9 +52,15 @@ tight, make its results durable, then make the canvas scale.
 - [x] Session timeline: Timeline panel + `## Session log` in exported
       records (flush comments included)
 
+## Done — v0.5
+
+- [x] Session lifecycle: rename (file follows, waiting agents unaffected),
+      hard delete, unarchive from the switcher's Manage block
+- [x] Cross-brainstorm diffing: structural session-vs-session comparison
+      (components/edges/decision drift) via the `diff_sessions` tool and a
+      per-session Compare panel
+
 ## Later
 
-- [ ] Diff decision records across brainstorms
-- [ ] Session rename and hard delete; unarchive from the UI
 - [ ] Cosmetic curve bundling for expanded graphs
 - [ ] Minimap virtualization for very large graphs

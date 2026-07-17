@@ -89,6 +89,9 @@ that session — use this for a parallel brainstorm ("I'll sketch the
 migration plan in a separate session called `db-migration`"). Etiquette:
 
 - Call `list_sessions` to orient before assuming what exists.
+- Before re-proposing into a brainstorm you have not touched recently,
+  `diff_sessions` against your working session shows what drifted — cite
+  the differences instead of overwriting them.
 - **The user only sees the active session.** You cannot switch it — always
   say which session you touched, and don't expect decisions from a session
   the user isn't looking at (they'll switch when ready; your
