@@ -40,10 +40,21 @@ tight, make its results durable, then make the canvas scale.
       copy Markdown/Mermaid to clipboard, mermaid-only export, and a
       `format` param on `export_markdown`
 
+## Done — v0.4
+
+- [x] Concurrent named sessions: per-session stores, `session` param on
+      every MCP tool (propose auto-creates; awaits on different sessions run
+      concurrently), `list_sessions`, session switcher with badges,
+      create/archive, legacy `session.json` migration
+- [x] Graphs beyond ~100 nodes: always-on viewport culling, collapsible
+      groups as cluster cards, aggregated `×N` cluster edges (structural
+      bundling), `--demo-big N`
+- [x] Session timeline: Timeline panel + `## Session log` in exported
+      records (flush comments included)
+
 ## Later
 
-- [ ] Multiple named sessions: list, switch, archive
-- [ ] Graphs beyond ~100 nodes: canvas virtualization, edge bundling,
-      clustering
-- [ ] Session timeline: flush comments as a session log; diff decision records
-      across brainstorms
+- [ ] Diff decision records across brainstorms
+- [ ] Session rename and hard delete; unarchive from the UI
+- [ ] Cosmetic curve bundling for expanded graphs
+- [ ] Minimap virtualization for very large graphs

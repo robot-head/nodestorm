@@ -385,6 +385,32 @@ try {
     Log 'agent node soft-removed (removal_requested queued)'
     Save-WindowPng $hwnd (Join-Path $OutDir '03-edited.png')
 
+    # ---- v0.4 sessions + timeline through the real controls ----
+
+    # Create a second session, land in its empty state, switch back, and the
+    # original graph must return intact.
+    $SessionStem = [IO.Path]::GetFileNameWithoutExtension($SessionFile)
+    Click-Element $hwnd ($SessionStem + ' ' + [char]0x25BE)
+    if (-not (Wait-Element 'Create' 5)) { Fail 'sessions menu did not open' }
+    Click-Element $hwnd ('new session' + [char]0x2026)
+    Type-Text $hwnd 'scratch'
+    Click-Element $hwnd 'Create'
+    if (-not (Wait-Element 'Waiting for an agent to connect.' 10)) {
+        Fail 'created session did not become the active empty canvas'
+    }
+    Log 'created and switched to session "scratch"'
+    Click-Element $hwnd ('scratch ' + [char]0x25BE)
+    if (-not (Wait-Element $SessionStem 5)) { Fail 'original session missing from the list' }
+    Click-Element $hwnd $SessionStem
+    if (-not (Wait-Element 'Webhook Dispatcher' 10)) { Fail 'original graph did not return after switching back' }
+    Log 'sessions: create/switch round-trip OK'
+
+    # Timeline: the session-log panel opens and is captured.
+    Click-Element $hwnd 'Timeline'
+    if (-not (Wait-Element 'Session timeline' 5)) { Fail 'timeline panel did not open' }
+    Save-WindowPng $hwnd (Join-Path $OutDir '04-sessions-timeline.png')
+    Click-Element $hwnd 'Timeline'
+
     # Export via the menu: the record must include the user edits.
     Click-Element $hwnd ('Export ' + [char]0x25BE)
     if (-not (Wait-Element 'Copy Markdown' 5)) { Fail 'export menu did not open' }
@@ -394,7 +420,7 @@ try {
     if (-not (Test-Path $ExportFile)) { Fail "export file did not appear: $ExportFile" }
     $record = Get-Content $ExportFile -Raw
     foreach ($needle in @('```mermaid', '# Add a webhook subsystem', 'At-least-once with retries',
-            'Rate Limiter', 'Delivery Store')) {
+            'Rate Limiter', 'Delivery Store', '## Session log')) {
         if ($record -notlike "*$needle*") { Fail "export record missing '$needle':`n$record" }
     }
     Log "Export menu wrote the decision record ($ExportFile)"

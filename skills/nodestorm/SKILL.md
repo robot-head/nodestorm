@@ -81,6 +81,20 @@ notes — handle each kind:
   edge). Never silently re-add one; if you disagree, say so first.
 - `edge_added` — the user drew a dependency. Factor it into your analysis.
 
+## Named sessions
+
+Every tool takes an optional `session: "name"`. Omit it to drive the
+session the user is looking at. `propose_graph` with a new name creates
+that session — use this for a parallel brainstorm ("I'll sketch the
+migration plan in a separate session called `db-migration`"). Etiquette:
+
+- Call `list_sessions` to orient before assuming what exists.
+- **The user only sees the active session.** You cannot switch it — always
+  say which session you touched, and don't expect decisions from a session
+  the user isn't looking at (they'll switch when ready; your
+  `await_decisions` on that session keeps waiting concurrently).
+- Keep one topic per session; name sessions with short slugs.
+
 ## Etiquette
 
 - **The terminal stays the primary channel.** Narrate what's on the canvas
