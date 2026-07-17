@@ -12,18 +12,26 @@ use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig
 use serde_json::{Value, json};
 
 use nodestorm::model::{ChoiceId, NodeId, NodeKind, OptionId};
+use nodestorm::sessions::Sessions;
 use nodestorm::store::{SessionState, Store};
 
-async fn start_server(store: Arc<Store>) -> (u16, tokio::sync::watch::Sender<bool>) {
+async fn start_server(store: Arc<Store>) -> (u16, tokio::sync::watch::Sender<bool>, Arc<Sessions>) {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
         .expect("bind ephemeral");
     let port = listener.local_addr().expect("addr").port();
-    tokio::spawn(async move {
-        let _ = nodestorm::server::serve(listener, store, shutdown_rx).await;
+    let dir = std::env::temp_dir().join(format!("nodestorm-mcp-{}-{port}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("session dir");
+    let sessions = Sessions::single(store, dir);
+    tokio::spawn({
+        let sessions = sessions.clone();
+        async move {
+            let _ = nodestorm::server::serve(listener, sessions, shutdown_rx).await;
+        }
     });
-    (port, shutdown_tx)
+    (port, shutdown_tx, sessions)
 }
 
 fn tool_json(result: &rmcp::model::CallToolResult) -> Value {
@@ -55,7 +63,7 @@ fn propose_args() -> Value {
 #[tokio::test]
 async fn full_decision_roundtrip() {
     let store = Store::new(SessionState::default());
-    let (port, _shutdown) = start_server(store.clone()).await;
+    let (port, _shutdown, _sessions) = start_server(store.clone()).await;
 
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(format!("http://127.0.0.1:{port}/mcp")),
@@ -249,7 +257,7 @@ async fn full_decision_roundtrip() {
 #[tokio::test]
 async fn await_decisions_times_out_without_losing_anything() {
     let store = Store::new(SessionState::default());
-    let (port, _shutdown) = start_server(store.clone()).await;
+    let (port, _shutdown, _sessions) = start_server(store.clone()).await;
 
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(format!("http://127.0.0.1:{port}/mcp")),
@@ -331,7 +339,7 @@ async fn await_decisions_times_out_without_losing_anything() {
 #[tokio::test]
 async fn invalid_propose_returns_actionable_error() {
     let store = Store::new(SessionState::default());
-    let (port, _shutdown) = start_server(store.clone()).await;
+    let (port, _shutdown, _sessions) = start_server(store.clone()).await;
 
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(format!("http://127.0.0.1:{port}/mcp")),

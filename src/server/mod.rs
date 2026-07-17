@@ -13,7 +13,7 @@ use rmcp::transport::streamable_http_server::{
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
-use crate::store::Store;
+use crate::sessions::Sessions;
 
 /// Bind the MCP port, failing with an actionable message when it is taken.
 /// Called from inside the server runtime (`Runtime::block_on`) so the
@@ -33,12 +33,12 @@ pub async fn bind(port: u16) -> anyhow::Result<TcpListener> {
 /// drops, meaning the UI side is gone).
 pub async fn serve(
     listener: TcpListener,
-    store: Arc<Store>,
+    sessions: Arc<Sessions>,
     mut shutdown: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     let service: StreamableHttpService<tools::NodestormServer, LocalSessionManager> =
         StreamableHttpService::new(
-            move || Ok(tools::NodestormServer::new(store.clone())),
+            move || Ok(tools::NodestormServer::new(sessions.clone())),
             Arc::new(LocalSessionManager::default()),
             StreamableHttpServerConfig::default(),
         );

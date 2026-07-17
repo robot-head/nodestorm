@@ -30,12 +30,20 @@ const MAX_AWAIT_SECS: u64 = 3600;
 
 #[derive(Clone)]
 pub struct NodestormServer {
-    store: Arc<Store>,
+    sessions: Arc<crate::sessions::Sessions>,
 }
 
 impl NodestormServer {
-    pub fn new(store: Arc<Store>) -> Self {
-        Self { store }
+    pub fn new(sessions: Arc<crate::sessions::Sessions>) -> Self {
+        Self { sessions }
+    }
+
+    /// Route a tool call to its session's store: `None` → the active
+    /// session; unknown names error listing what exists.
+    fn store_for(&self, session: &Option<String>) -> Result<Arc<Store>, ErrorData> {
+        self.sessions
+            .resolve(session.as_deref())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 }
 
@@ -178,9 +186,12 @@ impl NodestormServer {
             nodes: p.nodes,
             edges: p.edges,
         };
-        let summary = self.store.apply_propose(doc).map_err(store_err)?;
+        let summary = self
+            .store_for(&None)?
+            .apply_propose(doc)
+            .map_err(store_err)?;
         if let Some(msg) = p.announce {
-            self.store.announce(msg);
+            self.store_for(&None)?.announce(msg);
         }
         json_result(GraphSummary::from(summary))
     }
@@ -196,7 +207,10 @@ impl NodestormServer {
         &self,
         Parameters(p): Parameters<UpdateGraphParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let summary = self.store.apply_update(p.ops).map_err(store_err)?;
+        let summary = self
+            .store_for(&None)?
+            .apply_update(p.ops)
+            .map_err(store_err)?;
         json_result(GraphSummary::from(summary))
     }
 
@@ -218,7 +232,7 @@ impl NodestormServer {
         // Best-effort heartbeat so long waits survive client idle-abort.
         let cancel = CancellationToken::new();
         if let Some(token) = meta.get_progress_token() {
-            let store = self.store.clone();
+            let store = self.store_for(&None)?.clone();
             let cancel = cancel.clone();
             tokio::spawn(async move {
                 let mut elapsed = 0u64;
@@ -239,11 +253,11 @@ impl NodestormServer {
             });
         }
 
-        let outcome = self.store.await_flush(timeout).await;
+        let outcome = self.store_for(&None)?.await_flush(timeout).await;
         cancel.cancel();
 
         let (open, revision) = self
-            .store
+            .store_for(&None)?
             .read(|s| (s.doc.open_choice_count(), s.doc.revision));
         match outcome {
             FlushOutcome::Delivered(decisions) => json_result(AwaitResult::Delivered {
@@ -273,7 +287,7 @@ impl NodestormServer {
         &self,
         Parameters(_): Parameters<EmptyParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let (doc, undelivered, log_len, waiting) = self.store.read(|s| {
+        let (doc, undelivered, log_len, waiting) = self.store_for(&None)?.read(|s| {
             (
                 s.doc.clone(),
                 s.decision_log[s.delivery_cursor..].to_vec(),
@@ -294,7 +308,7 @@ impl NodestormServer {
         &self,
         Parameters(_): Parameters<EmptyParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let summary = self.store.clear_session();
+        let summary = self.store_for(&None)?.clear_session();
         json_result(GraphSummary::from(summary))
     }
 
@@ -310,7 +324,7 @@ impl NodestormServer {
         &self,
         Parameters(p): Parameters<ExportParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let text = self.store.read(|s| match p.format {
+        let text = self.store_for(&None)?.read(|s| match p.format {
             ExportFormat::Markdown => {
                 crate::export::render_markdown(&s.doc, &s.decision_log, chrono::Utc::now())
             }

@@ -130,6 +130,35 @@ impl Sessions {
         Sessions::open(cli.sessions_dir()?, cli.session.clone())
     }
 
+    /// A manager wrapping one pre-built store as `default` — the test and
+    /// embedding harness path (no files are touched until save/create).
+    pub fn single(store: Arc<Store>, dir: PathBuf) -> Arc<Self> {
+        let mut map = BTreeMap::new();
+        map.insert(
+            "default".to_owned(),
+            Entry {
+                store,
+                path: dir.join("default.json"),
+            },
+        );
+        let (generation, _) = watch::channel(0);
+        Arc::new(Self {
+            inner: Mutex::new(Inner {
+                map,
+                active: "default".into(),
+            }),
+            dir,
+            generation,
+            runtime: Mutex::new(None),
+        })
+    }
+
+    /// The active session's backing file (export paths derive from it).
+    pub fn active_path(&self) -> PathBuf {
+        let inner = self.lock();
+        inner.map[&inner.active].path.clone()
+    }
+
     fn lock(&self) -> MutexGuard<'_, Inner> {
         self.inner.lock().expect("sessions mutex poisoned")
     }
