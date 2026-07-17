@@ -424,7 +424,7 @@ fn compute_bounds(rects: &HashMap<NodeId, Rect>) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Edge, ElementStatus, Node, NodeKind};
+    use crate::model::{Edge, ElementStatus, Node, NodeKind, Origin};
 
     fn node(id: &str) -> Node {
         Node {
@@ -437,6 +437,7 @@ mod tests {
             choices: vec![],
             notes: vec![],
             position: None,
+            origin: Origin::Agent,
         }
     }
 
@@ -447,6 +448,7 @@ mod tests {
             kind: EdgeKind::DependsOn,
             label: None,
             status: ElementStatus::Proposed,
+            origin: Origin::Agent,
         }
     }
 

@@ -101,6 +101,26 @@ pub enum ElementStatus {
     Removed,
 }
 
+/// Who authored a graph element. Agent-authored content follows the agent
+/// merge rules; user-authored elements survive proposes that omit them.
+/// The server forces everything arriving over MCP to `Agent`, so agents
+/// cannot claim (and need not know about) user authorship.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Origin {
+    #[default]
+    Agent,
+    User,
+}
+
+impl Origin {
+    /// serde `skip_serializing_if` — agent origin is the wire default.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    pub fn is_agent(&self) -> bool {
+        *self == Origin::Agent
+    }
+}
+
 /// Relationship carried by an edge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -206,6 +226,9 @@ pub struct Node {
     /// User-owned drag override. `None` means auto-layout places the node.
     #[serde(default)]
     pub position: Option<Point>,
+    /// Who created this node. Forced to `Agent` for MCP-supplied nodes.
+    #[serde(default, skip_serializing_if = "Origin::is_agent")]
+    pub origin: Origin,
 }
 
 impl Node {
@@ -251,6 +274,9 @@ pub struct Edge {
     pub label: Option<String>,
     #[serde(default)]
     pub status: ElementStatus,
+    /// Who created this edge. Forced to `Agent` for MCP-supplied edges.
+    #[serde(default, skip_serializing_if = "Origin::is_agent")]
+    pub origin: Origin,
 }
 
 impl Edge {
@@ -561,6 +587,7 @@ mod tests {
             choices: vec![],
             notes: vec![],
             position: None,
+            origin: Origin::Agent,
         }
     }
 
@@ -571,6 +598,7 @@ mod tests {
             kind: EdgeKind::DependsOn,
             label: None,
             status: ElementStatus::Proposed,
+            origin: Origin::Agent,
         }
     }
 
@@ -596,6 +624,44 @@ mod tests {
         let json = serde_json::to_string_pretty(&doc).unwrap();
         let back: SessionDoc = serde_json::from_str(&json).unwrap();
         assert_eq!(doc, back);
+    }
+
+    #[test]
+    fn origin_defaults_to_agent_and_is_skipped_in_json() {
+        // Agent-facing JSON is unchanged: origin absent parses as Agent and
+        // agent origin never serializes.
+        let n: Node = serde_json::from_str(r#"{"id":"a","label":"A"}"#).unwrap();
+        assert_eq!(n.origin, Origin::Agent);
+        let out = serde_json::to_string(&n).unwrap();
+        assert!(
+            !out.contains("origin"),
+            "agent origin must not serialize: {out}"
+        );
+
+        let mut user = n.clone();
+        user.origin = Origin::User;
+        let out = serde_json::to_string(&user).unwrap();
+        assert!(
+            out.contains(r#""origin":"user""#),
+            "user origin must persist: {out}"
+        );
+        let back: Node = serde_json::from_str(&out).unwrap();
+        assert_eq!(back.origin, Origin::User);
+    }
+
+    #[test]
+    fn edge_origin_defaults_and_round_trips() {
+        let e: Edge = serde_json::from_str(r#"{"from":"a","to":"b"}"#).unwrap();
+        assert_eq!(e.origin, Origin::Agent);
+        let out = serde_json::to_string(&e).unwrap();
+        assert!(!out.contains("origin"), "in: {out}");
+
+        let mut user = e.clone();
+        user.origin = Origin::User;
+        let out = serde_json::to_string(&user).unwrap();
+        assert!(out.contains(r#""origin":"user""#), "in: {out}");
+        let back: Edge = serde_json::from_str(&out).unwrap();
+        assert_eq!(back.origin, Origin::User);
     }
 
     #[test]
