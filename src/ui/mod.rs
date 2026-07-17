@@ -6,8 +6,14 @@ mod canvas;
 mod choice_panel;
 mod context_menu;
 mod edge_layer;
+mod minimap;
 mod node_card;
 mod topbar;
+
+/// Nominal viewport for zoom math (the topbar is 48px tall).
+pub(crate) const VIEW_W: f64 = 1280.0;
+pub(crate) const VIEW_H: f64 = 780.0;
+pub(crate) const TOPBAR_H: f64 = 48.0;
 
 use std::sync::Arc;
 

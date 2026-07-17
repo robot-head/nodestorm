@@ -538,6 +538,37 @@ body {
   opacity: 0.35;
 }
 
+/* ---------- minimap ---------- */
+
+.minimap {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  opacity: 0.92;
+  z-index: 15;
+  cursor: pointer;
+}
+
+.mini-node {
+  stroke: none;
+}
+
+.mini-existing { fill: var(--status-existing); }
+.mini-proposed { fill: var(--status-proposed); }
+.mini-modified { fill: var(--status-modified); }
+.mini-affected { fill: var(--status-affected); }
+.mini-removed { fill: var(--status-removed); }
+
+.mini-viewport {
+  fill: rgba(255, 255, 255, 0.07);
+  stroke: var(--accent);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
 .connect-handle {
   position: absolute;
   top: -8px;
