@@ -1,4 +1,4 @@
-//! The six nodestorm MCP tools.
+//! The seven nodestorm MCP tools.
 //!
 //! All rmcp contact stays in this module (and `server::mod`): the store knows
 //! nothing about MCP, which keeps it unit-testable and shields the rest of
@@ -30,12 +30,30 @@ const MAX_AWAIT_SECS: u64 = 3600;
 
 #[derive(Clone)]
 pub struct NodestormServer {
-    store: Arc<Store>,
+    sessions: Arc<crate::sessions::Sessions>,
 }
 
 impl NodestormServer {
-    pub fn new(store: Arc<Store>) -> Self {
-        Self { store }
+    pub fn new(sessions: Arc<crate::sessions::Sessions>) -> Self {
+        Self { sessions }
+    }
+
+    /// Route a tool call to its session's store: `None` → the active
+    /// session; unknown names error listing what exists.
+    fn store_for(&self, session: &Option<String>) -> Result<Arc<Store>, ErrorData> {
+        self.sessions
+            .resolve(session.as_deref())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// Like [`Self::store_for`], plus the canonical session slug for results.
+    fn session_and_store(
+        &self,
+        session: &Option<String>,
+    ) -> Result<(String, Arc<Store>), ErrorData> {
+        self.sessions
+            .resolve_named(session.as_deref())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 }
 
@@ -55,6 +73,10 @@ pub struct ProposeGraphParams {
     /// Message for the user's activity feed, e.g. what you just proposed.
     #[serde(default)]
     pub announce: Option<String>,
+    /// Named session to propose into (created if missing). Omit for the
+    /// session the user is looking at.
+    #[serde(default)]
+    pub session: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -62,6 +84,9 @@ pub struct ProposeGraphParams {
 pub struct UpdateGraphParams {
     /// Ops apply in order, atomically: if any fails validation nothing commits.
     pub ops: Vec<GraphOp>,
+    /// Named session to patch. Omit for the active one.
+    #[serde(default)]
+    pub session: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -71,6 +96,10 @@ pub struct AwaitDecisionsParams {
     /// simply call this tool again — decisions are never lost.
     #[serde(default = "default_await_secs")]
     pub timeout_seconds: u64,
+    /// Named session to wait on — waits on different sessions run
+    /// concurrently. Omit for the active one.
+    #[serde(default)]
+    pub session: Option<String>,
 }
 
 fn default_await_secs() -> u64 {
@@ -81,10 +110,40 @@ fn default_await_secs() -> u64 {
 #[serde(deny_unknown_fields)]
 pub struct EmptyParams {}
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SessionOnlyParams {
+    /// Named session. Omit for the active one.
+    #[serde(default)]
+    pub session: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExportParams {
+    /// What to return: the full Markdown decision record (default), or just
+    /// the Mermaid `flowchart` block body.
+    #[serde(default)]
+    pub format: ExportFormat,
+    /// Named session to export. Omit for the active one.
+    #[serde(default)]
+    pub session: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportFormat {
+    #[default]
+    Markdown,
+    Mermaid,
+}
+
 // ---------- results ----------
 
 #[derive(Debug, Serialize)]
 struct GraphSummary {
+    /// Canonical slug of the session this mutation landed in.
+    session: String,
     revision: u64,
     node_count: usize,
     open_choice_count: usize,
@@ -92,9 +151,10 @@ struct GraphSummary {
     warnings: Vec<String>,
 }
 
-impl From<UpdateSummary> for GraphSummary {
-    fn from(s: UpdateSummary) -> Self {
+impl GraphSummary {
+    fn new(session: String, s: UpdateSummary) -> Self {
         Self {
+            session,
             revision: s.revision,
             node_count: s.node_count,
             open_choice_count: s.open_choice_count,
@@ -124,6 +184,8 @@ enum AwaitResult {
 
 #[derive(Debug, Serialize)]
 struct StateResult {
+    /// Canonical slug of the session this state describes.
+    session: String,
     doc: SessionDoc,
     undelivered_decisions: Vec<DecisionEvent>,
     decision_log_len: usize,
@@ -161,11 +223,20 @@ impl NodestormServer {
             nodes: p.nodes,
             edges: p.edges,
         };
-        let summary = self.store.apply_propose(doc).map_err(store_err)?;
+        // A named session is created on the spot — agents can spin up a
+        // parallel brainstorm without a separate call.
+        let (name, store) = match &p.session {
+            Some(n) => self
+                .sessions
+                .get_or_create(n)
+                .map_err(|e| ErrorData::internal_error(e.to_string(), None))?,
+            None => (self.sessions.active_name(), self.sessions.active_store()),
+        };
+        let summary = store.apply_propose(doc).map_err(store_err)?;
         if let Some(msg) = p.announce {
-            self.store.announce(msg);
+            store.announce(msg);
         }
-        json_result(GraphSummary::from(summary))
+        json_result(GraphSummary::new(name, summary))
     }
 
     #[tool(
@@ -179,8 +250,9 @@ impl NodestormServer {
         &self,
         Parameters(p): Parameters<UpdateGraphParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let summary = self.store.apply_update(p.ops).map_err(store_err)?;
-        json_result(GraphSummary::from(summary))
+        let (name, store) = self.session_and_store(&p.session)?;
+        let summary = store.apply_update(p.ops).map_err(store_err)?;
+        json_result(GraphSummary::new(name, summary))
     }
 
     #[tool(
@@ -198,10 +270,12 @@ impl NodestormServer {
     ) -> Result<CallToolResult, ErrorData> {
         let timeout = Duration::from_secs(p.timeout_seconds.clamp(5, MAX_AWAIT_SECS));
 
+        let (_, session_store) = self.session_and_store(&p.session)?;
+
         // Best-effort heartbeat so long waits survive client idle-abort.
         let cancel = CancellationToken::new();
         if let Some(token) = meta.get_progress_token() {
-            let store = self.store.clone();
+            let store = session_store.clone();
             let cancel = cancel.clone();
             tokio::spawn(async move {
                 let mut elapsed = 0u64;
@@ -222,12 +296,10 @@ impl NodestormServer {
             });
         }
 
-        let outcome = self.store.await_flush(timeout).await;
+        let outcome = session_store.await_flush(timeout).await;
         cancel.cancel();
 
-        let (open, revision) = self
-            .store
-            .read(|s| (s.doc.open_choice_count(), s.doc.revision));
+        let (open, revision) = session_store.read(|s| (s.doc.open_choice_count(), s.doc.revision));
         match outcome {
             FlushOutcome::Delivered(decisions) => json_result(AwaitResult::Delivered {
                 decisions,
@@ -254,9 +326,10 @@ impl NodestormServer {
     )]
     async fn get_state(
         &self,
-        Parameters(_): Parameters<EmptyParams>,
+        Parameters(p): Parameters<SessionOnlyParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let (doc, undelivered, log_len, waiting) = self.store.read(|s| {
+        let (name, store) = self.session_and_store(&p.session)?;
+        let (doc, undelivered, log_len, waiting) = store.read(|s| {
             (
                 s.doc.clone(),
                 s.decision_log[s.delivery_cursor..].to_vec(),
@@ -265,6 +338,7 @@ impl NodestormServer {
             )
         });
         json_result(StateResult {
+            session: name,
             doc,
             undelivered_decisions: undelivered,
             decision_log_len: log_len,
@@ -272,13 +346,30 @@ impl NodestormServer {
         })
     }
 
-    #[tool(description = "Wipe the canvas and decision log to start a fresh brainstorm.")]
+    #[tool(description = "Wipe a session's canvas and decision log to start a fresh brainstorm.")]
     async fn clear_session(
+        &self,
+        Parameters(p): Parameters<SessionOnlyParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let (name, store) = self.session_and_store(&p.session)?;
+        let summary = store.clear_session();
+        json_result(GraphSummary::new(name, summary))
+    }
+
+    #[tool(
+        description = "List the named brainstorm sessions: name, whether it is the one the user \
+                       is looking at (active), node/open-choice counts, and whether an agent is \
+                       currently waiting in it. Address any tool at a session via its `session` \
+                       param; only the user switches which session is active on screen."
+    )]
+    async fn list_sessions(
         &self,
         Parameters(_): Parameters<EmptyParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let summary = self.store.clear_session();
-        json_result(GraphSummary::from(summary))
+        json_result(serde_json::json!({
+            "sessions": self.sessions.list(),
+            "active": self.sessions.active_name(),
+        }))
     }
 
     #[tool(
@@ -286,16 +377,20 @@ impl NodestormServer {
                        embedded Mermaid architecture diagram: decisions with pros/cons and the \
                        user's considered trail, dismissed choices, open questions, notes, and a \
                        component inventory. Returns plain Markdown — write it into the user's \
-                       repo (e.g. docs/decisions/)."
+                       repo (e.g. docs/decisions/). Pass format: \"mermaid\" for just the \
+                       diagram block."
     )]
     async fn export_markdown(
         &self,
-        Parameters(_): Parameters<EmptyParams>,
+        Parameters(p): Parameters<ExportParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let markdown = self
-            .store
-            .read(|s| crate::export::render_markdown(&s.doc, &s.decision_log, chrono::Utc::now()));
-        Ok(CallToolResult::success(vec![ContentBlock::text(markdown)]))
+        let text = self.store_for(&p.session)?.read(|s| match p.format {
+            ExportFormat::Markdown => {
+                crate::export::render_markdown(&s.doc, &s.decision_log, chrono::Utc::now())
+            }
+            ExportFormat::Mermaid => crate::export::render_mermaid(&s.doc),
+        });
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 }
 
@@ -314,7 +409,10 @@ impl ServerHandler for NodestormServer {
              (3) apply the ripple with update_graph (mark affected nodes, open follow-up \
              choices, announce a summary) and repeat. Keep discussing in the terminal; the \
              canvas is a companion, not a replacement. When the brainstorm winds down, call \
-             export_markdown and save the decision record into the user's repo."
+             export_markdown and save the decision record into the user's repo. Named \
+             sessions: every tool takes an optional `session`; propose_graph creates missing \
+             ones, list_sessions shows what exists, and only the user switches which session \
+             is on screen — say which session you touched."
                 .into(),
         );
         info

@@ -14,8 +14,9 @@ use chrono::Utc;
 use tokio::sync::watch;
 
 use crate::model::{
-    ActivityEntry, ActivityOrigin, ChoiceId, ChoiceStatus, DecisionEvent, DecisionKind, GraphOp,
-    Node, NodeId, Note, NoteId, OptionId, Point, SessionDoc,
+    ActivityEntry, ActivityOrigin, ChoiceId, ChoiceStatus, DecisionEvent, DecisionKind, Edge,
+    EdgeKind, ElementStatus, GraphOp, Node, NodeId, NodeKind, Note, NoteId, OptionId, Origin,
+    Point, SessionDoc,
 };
 
 const ACTIVITY_CAP: usize = 200;
@@ -34,6 +35,12 @@ pub enum StoreError {
     },
     #[error("document rejected: {}", errors.join("; "))]
     Invalid { errors: Vec<String> },
+    #[error("edge {0} -> {1} of that kind already exists")]
+    DuplicateEdge(NodeId, NodeId),
+    #[error("an edge cannot connect a node to itself")]
+    SelfLoop,
+    #[error("no edge {0} -> {1} of that kind")]
+    UnknownEdge(NodeId, NodeId),
 }
 
 /// Full session state guarded by the store mutex.
@@ -49,6 +56,10 @@ pub struct SessionState {
     /// The last `flush_seq` actually delivered to an `await_decisions` call.
     pub delivered_flush_seq: u64,
     pub activity: Vec<ActivityEntry>,
+    /// Groups the user collapsed on the canvas. View state: persisted per
+    /// session, never part of the doc, invisible to agents.
+    #[serde(default)]
+    pub collapsed_groups: Vec<String>,
     /// Live `await_decisions` calls (transient; not persisted).
     #[serde(skip)]
     pub waiting_agents: usize,
@@ -61,6 +72,7 @@ pub struct UiMeta {
     pub undelivered: usize,
     pub open_choices: usize,
     pub activity: Vec<ActivityEntry>,
+    pub collapsed_groups: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -83,6 +95,7 @@ pub struct UpdateSummary {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug)]
 pub struct Store {
     state: Mutex<SessionState>,
     revision_tx: watch::Sender<u64>,
@@ -143,6 +156,7 @@ impl Store {
             undelivered: s.decision_log.len() - s.delivery_cursor,
             open_choices: s.doc.open_choice_count(),
             activity: s.activity.clone(),
+            collapsed_groups: s.collapsed_groups.clone(),
         })
     }
 
@@ -152,6 +166,18 @@ impl Store {
         self.mutate(|s| {
             if let Some(n) = s.doc.node_mut(node) {
                 n.position = Some(position);
+            }
+        });
+    }
+
+    /// Collapse/expand a group on the canvas. View state only: no decision
+    /// event, invisible to agents, persisted with the session.
+    pub fn toggle_group_collapsed(&self, group: &str) {
+        self.mutate(|s| {
+            if let Some(i) = s.collapsed_groups.iter().position(|g| g == group) {
+                s.collapsed_groups.remove(i);
+            } else {
+                s.collapsed_groups.push(group.to_owned());
             }
         });
     }
@@ -278,6 +304,222 @@ impl Store {
         self.mutate(|s| push_activity(s, ActivityOrigin::Agent, message));
     }
 
+    // ---------- user graph editing (called from the UI) ----------
+    //
+    // Each mutation records a decision event that rides along with the next
+    // Send/flush — editing never autoflushes (unlike deciding the last open
+    // choice), so the user batches edits with their decisions.
+
+    /// Create a user-authored node. The id is a slug of the label, suffixed
+    /// `-2`, `-3`… on collision. `position: None` lets auto-layout place it.
+    pub fn add_user_node(
+        &self,
+        label: String,
+        kind: NodeKind,
+        position: Option<Point>,
+    ) -> Result<NodeId, StoreError> {
+        self.mutate(|s| {
+            let base = slugify(&label);
+            let mut candidate = base.clone();
+            let mut n = 2;
+            while s.doc.node(&NodeId::new(candidate.clone())).is_some() {
+                candidate = format!("{base}-{n}");
+                n += 1;
+            }
+            let id = NodeId::new(candidate);
+            s.doc.nodes.push(Node {
+                id: id.clone(),
+                label: label.clone(),
+                kind,
+                description: String::new(),
+                status: ElementStatus::Proposed,
+                group: None,
+                choices: vec![],
+                notes: vec![],
+                position,
+                origin: Origin::User,
+            });
+            push_event(
+                s,
+                DecisionKind::NodeAdded {
+                    node_id: id.clone(),
+                    label: label.clone(),
+                    node_kind: kind,
+                },
+            );
+            push_activity(
+                s,
+                ActivityOrigin::User,
+                format!("added component \u{201c}{label}\u{201d}"),
+            );
+            Ok(id)
+        })
+    }
+
+    /// Edit a card's content. Allowed on any node; on agent-authored nodes
+    /// the `node_edited` event tells the agent to treat the new content as
+    /// canonical (its next upsert should carry it forward).
+    pub fn edit_node(
+        &self,
+        id: &NodeId,
+        label: String,
+        kind: NodeKind,
+        description: String,
+    ) -> Result<(), StoreError> {
+        self.mutate(|s| {
+            let n = s
+                .doc
+                .node_mut(id)
+                .ok_or_else(|| StoreError::UnknownNode(id.clone()))?;
+            n.label = label.clone();
+            n.kind = kind;
+            n.description = description.clone();
+            push_event(
+                s,
+                DecisionKind::NodeEdited {
+                    node_id: id.clone(),
+                    label: label.clone(),
+                    node_kind: kind,
+                    description,
+                },
+            );
+            push_activity(
+                s,
+                ActivityOrigin::User,
+                format!("edited \u{201c}{label}\u{201d}"),
+            );
+            Ok(())
+        })
+    }
+
+    /// Delete a node. User-authored nodes hard-delete (with their incident
+    /// edges) and emit `node_deleted`; agent-authored nodes are only marked
+    /// `removed` and emit `removal_requested` — the agent applies the real
+    /// removal via `update_graph` (or pushes back). Idempotent on
+    /// already-marked agent nodes.
+    pub fn delete_node(&self, id: &NodeId) -> Result<(), StoreError> {
+        self.mutate(|s| {
+            let node = s
+                .doc
+                .node(id)
+                .ok_or_else(|| StoreError::UnknownNode(id.clone()))?;
+            let label = node.label.clone();
+            match node.origin {
+                Origin::User => {
+                    s.doc.nodes.retain(|n| &n.id != id);
+                    s.doc.edges.retain(|e| &e.from != id && &e.to != id);
+                    push_event(
+                        s,
+                        DecisionKind::NodeDeleted {
+                            node_id: id.clone(),
+                        },
+                    );
+                    push_activity(
+                        s,
+                        ActivityOrigin::User,
+                        format!("deleted \u{201c}{label}\u{201d}"),
+                    );
+                }
+                Origin::Agent => {
+                    let n = s.doc.node_mut(id).expect("existence checked above");
+                    if n.status == ElementStatus::Removed {
+                        return Ok(());
+                    }
+                    n.status = ElementStatus::Removed;
+                    push_event(
+                        s,
+                        DecisionKind::RemovalRequested {
+                            node_id: id.clone(),
+                        },
+                    );
+                    push_activity(
+                        s,
+                        ActivityOrigin::User,
+                        format!("asked the agent to remove \u{201c}{label}\u{201d}"),
+                    );
+                }
+            }
+            Ok(())
+        })
+    }
+
+    /// Draw a user edge. Rejects self-loops, dangling endpoints, and
+    /// duplicate `(from, to, kind)` keys.
+    pub fn add_user_edge(
+        &self,
+        from: &NodeId,
+        to: &NodeId,
+        kind: EdgeKind,
+    ) -> Result<(), StoreError> {
+        self.mutate(|s| {
+            if from == to {
+                return Err(StoreError::SelfLoop);
+            }
+            if s.doc.node(from).is_none() {
+                return Err(StoreError::UnknownNode(from.clone()));
+            }
+            if s.doc.node(to).is_none() {
+                return Err(StoreError::UnknownNode(to.clone()));
+            }
+            if s.doc.edges.iter().any(|e| e.key() == (from, to, kind)) {
+                return Err(StoreError::DuplicateEdge(from.clone(), to.clone()));
+            }
+            s.doc.edges.push(Edge {
+                from: from.clone(),
+                to: to.clone(),
+                kind,
+                label: None,
+                status: ElementStatus::Proposed,
+                origin: Origin::User,
+            });
+            push_event(
+                s,
+                DecisionKind::EdgeAdded {
+                    from: from.clone(),
+                    to: to.clone(),
+                    edge_kind: kind,
+                },
+            );
+            push_activity(
+                s,
+                ActivityOrigin::User,
+                format!("connected {from} \u{2192} {to}"),
+            );
+            Ok(())
+        })
+    }
+
+    /// Delete an edge of any origin — edges always hard-delete (they carry
+    /// no choices or notes; the agent re-adds if it disagrees).
+    pub fn delete_edge(
+        &self,
+        from: &NodeId,
+        to: &NodeId,
+        kind: EdgeKind,
+    ) -> Result<(), StoreError> {
+        self.mutate(|s| {
+            let before = s.doc.edges.len();
+            s.doc.edges.retain(|e| e.key() != (from, to, kind));
+            if s.doc.edges.len() == before {
+                return Err(StoreError::UnknownEdge(from.clone(), to.clone()));
+            }
+            push_event(
+                s,
+                DecisionKind::EdgeDeleted {
+                    from: from.clone(),
+                    to: to.clone(),
+                    edge_kind: kind,
+                },
+            );
+            push_activity(
+                s,
+                ActivityOrigin::User,
+                format!("removed the edge {from} \u{2192} {to}"),
+            );
+            Ok(())
+        })
+    }
+
     /// Record a completed UI export in the activity feed — the feed entry is
     /// the user's receipt for where the record landed.
     pub fn record_export(&self, path: &std::path::Path) {
@@ -293,6 +535,11 @@ impl Store {
     /// Surface a failed UI export in the activity feed.
     pub fn record_export_failed(&self, err: &str) {
         self.mutate(|s| push_activity(s, ActivityOrigin::User, format!("export failed: {err}")));
+    }
+
+    /// Generic user-action receipt for the activity feed (clipboard copies…).
+    pub fn record_user_action(&self, text: String) {
+        self.mutate(|s| push_activity(s, ActivityOrigin::User, text));
     }
 
     /// "Send to agent": flush everything undelivered (an empty flush is a
@@ -319,13 +566,21 @@ impl Store {
     // ---------- agent-facing mutations (called from MCP tools) ----------
 
     /// Replace the document, preserving user-owned state (positions, notes,
-    /// decided choices) for nodes whose ids survive.
-    pub fn apply_propose(&self, incoming: SessionDoc) -> Result<UpdateSummary, StoreError> {
+    /// decided choices) for nodes whose ids survive, and preserving whole
+    /// user-authored nodes/edges the proposal did not mention.
+    pub fn apply_propose(&self, mut incoming: SessionDoc) -> Result<UpdateSummary, StoreError> {
         let validation = incoming.validate();
         if !validation.is_ok() {
             return Err(StoreError::Invalid {
                 errors: validation.errors,
             });
+        }
+        // Everything arriving over MCP is agent-authored, whatever it claims.
+        for node in &mut incoming.nodes {
+            node.origin = Origin::Agent;
+        }
+        for edge in &mut incoming.edges {
+            edge.origin = Origin::Agent;
         }
         Ok(self.mutate(|s| {
             let old_revision = s.doc.revision;
@@ -340,13 +595,35 @@ impl Store {
                     *node = merged;
                 }
             }
+            // Preserve user-authored elements the proposal did not mention.
+            // (A user node whose id IS mentioned was adopted by the merge
+            // above.) User edges only survive while both endpoints exist.
+            let mut warnings = validation.warnings.clone();
+            for prev in &previous.nodes {
+                if prev.origin == Origin::User && s.doc.node(&prev.id).is_none() {
+                    s.doc.nodes.push(prev.clone());
+                }
+            }
+            for prev in &previous.edges {
+                if prev.origin == Origin::User && !s.doc.edges.iter().any(|e| e.key() == prev.key())
+                {
+                    if s.doc.node(&prev.from).is_some() && s.doc.node(&prev.to).is_some() {
+                        s.doc.edges.push(prev.clone());
+                    } else {
+                        warnings.push(format!(
+                            "user edge {} -> {} dropped: endpoint no longer exists",
+                            prev.from, prev.to
+                        ));
+                    }
+                }
+            }
             let title = if s.doc.title.is_empty() {
                 "a graph".to_owned()
             } else {
                 format!("\u{201c}{}\u{201d}", s.doc.title)
             };
             push_activity(s, ActivityOrigin::Agent, format!("proposed {title}"));
-            summary(s, validation.warnings.clone())
+            summary(s, warnings)
         }))
     }
 
@@ -516,6 +793,30 @@ fn summary(s: &SessionState, warnings: Vec<String>) -> UpdateSummary {
     }
 }
 
+/// Slug for a user-created node id: lowercase ASCII alphanumeric runs
+/// joined by `-`; anything else separates. Empty input → `"component"`.
+/// (Also used by the UI for suggested export filenames.)
+pub(crate) fn slugify(label: &str) -> String {
+    let mut out = String::new();
+    let mut pending_sep = false;
+    for c in label.to_lowercase().chars() {
+        if c.is_ascii_alphanumeric() {
+            if pending_sep && !out.is_empty() {
+                out.push('-');
+            }
+            pending_sep = false;
+            out.push(c);
+        } else {
+            pending_sep = true;
+        }
+    }
+    if out.is_empty() {
+        "component".into()
+    } else {
+        out
+    }
+}
+
 fn placeholder_node() -> Node {
     Node {
         id: NodeId::new(""),
@@ -527,6 +828,7 @@ fn placeholder_node() -> Node {
         choices: vec![],
         notes: vec![],
         position: None,
+        origin: Default::default(),
     }
 }
 
@@ -537,6 +839,9 @@ fn apply_op(
 ) -> Result<(), StoreError> {
     match op {
         GraphOp::UpsertNode { mut node } => {
+            // Agent-supplied content is agent-authored; upserting a user
+            // node's id adopts it (user-owned fields survive via the merge).
+            node.origin = Origin::Agent;
             if let Some(existing) = doc.node_mut(&node.id) {
                 existing.merge_from_agent(node);
             } else {
@@ -557,7 +862,8 @@ fn apply_op(
                 doc.focus = None;
             }
         }
-        GraphOp::UpsertEdge { edge } => {
+        GraphOp::UpsertEdge { mut edge } => {
+            edge.origin = Origin::Agent;
             if let Some(existing) = doc.edges.iter_mut().find(|e| e.key() == edge.key()) {
                 *existing = edge;
             } else {
@@ -641,6 +947,379 @@ mod tests {
         Store::with_doc(demo_doc())
     }
 
+    fn user_node(id: &str) -> Node {
+        Node {
+            id: NodeId::from(id),
+            label: id.to_owned(),
+            kind: crate::model::NodeKind::Component,
+            description: String::new(),
+            status: crate::model::ElementStatus::Proposed,
+            group: None,
+            choices: vec![],
+            notes: vec![],
+            position: None,
+            origin: crate::model::Origin::User,
+        }
+    }
+
+    fn user_edge(from: &str, to: &str) -> crate::model::Edge {
+        crate::model::Edge {
+            from: NodeId::from(from),
+            to: NodeId::from(to),
+            kind: crate::model::EdgeKind::DependsOn,
+            label: None,
+            status: crate::model::ElementStatus::Proposed,
+            origin: crate::model::Origin::User,
+        }
+    }
+
+    #[test]
+    fn propose_preserves_unmentioned_user_elements() {
+        use crate::model::Origin;
+        let mut doc = demo_doc();
+        doc.nodes.push(user_node("my-cache"));
+        doc.edges.push(user_edge("my-cache", "postgres"));
+        let store = Store::with_doc(doc);
+
+        let mut incoming = demo_doc();
+        incoming.title = "second round".into();
+        // An agent claiming user origin must be normalized to agent.
+        incoming.nodes[0].origin = Origin::User;
+        store.apply_propose(incoming).unwrap();
+
+        let doc = store.snapshot_doc();
+        let cache = doc
+            .node(&NodeId::from("my-cache"))
+            .expect("user node survives a propose that omits it");
+        assert_eq!(cache.origin, Origin::User);
+        assert!(
+            doc.edges
+                .iter()
+                .any(|e| e.from.as_str() == "my-cache" && e.origin == Origin::User),
+            "user edge survives"
+        );
+        assert_eq!(
+            doc.node(&NodeId::from("web-ui")).unwrap().origin,
+            Origin::Agent,
+            "claimed user origin is normalized"
+        );
+    }
+
+    #[test]
+    fn propose_drops_user_edge_with_dead_endpoint_and_warns() {
+        let mut doc = demo_doc();
+        doc.nodes.push(user_node("widget"));
+        doc.edges.push(user_edge("widget", "job-queue"));
+        let store = Store::with_doc(doc);
+
+        let mut incoming = demo_doc();
+        incoming.nodes.retain(|n| n.id.as_str() != "job-queue");
+        incoming
+            .edges
+            .retain(|e| e.from.as_str() != "job-queue" && e.to.as_str() != "job-queue");
+        let summary = store.apply_propose(incoming).unwrap();
+
+        let doc = store.snapshot_doc();
+        assert!(doc.node(&NodeId::from("widget")).is_some(), "node survives");
+        assert!(
+            !doc.edges.iter().any(|e| e.from.as_str() == "widget"),
+            "user edge with vanished endpoint is dropped"
+        );
+        assert!(
+            summary.warnings.iter().any(|w| w.contains("user edge")),
+            "warnings: {:?}",
+            summary.warnings
+        );
+    }
+
+    #[test]
+    fn slugify_cases() {
+        assert_eq!(slugify("My Cache!"), "my-cache");
+        assert_eq!(slugify("  "), "component");
+        assert_eq!(slugify("Ünïcode Näme"), "n-code-n-me");
+        assert_eq!(slugify("API Gateway 2"), "api-gateway-2");
+    }
+
+    #[test]
+    fn add_user_node_slugs_and_dedups() {
+        use crate::model::{ElementStatus, NodeKind, Origin, Point};
+        let store = demo_store();
+        let flush_before = store.read(|s| s.flush_seq);
+
+        let id = store
+            .add_user_node(
+                "My Cache".into(),
+                NodeKind::DataStore,
+                Some(Point { x: 10.0, y: 20.0 }),
+            )
+            .unwrap();
+        assert_eq!(id.as_str(), "my-cache");
+        let id2 = store
+            .add_user_node("My Cache".into(), NodeKind::DataStore, None)
+            .unwrap();
+        assert_eq!(id2.as_str(), "my-cache-2", "id collision suffixed");
+
+        let doc = store.snapshot_doc();
+        let n = doc.node(&id).unwrap();
+        assert_eq!(n.origin, Origin::User);
+        assert_eq!(n.status, ElementStatus::Proposed);
+        assert_eq!(n.kind, NodeKind::DataStore);
+        assert_eq!(n.label, "My Cache");
+        assert_eq!(n.position, Some(Point { x: 10.0, y: 20.0 }));
+
+        let log = store.read(|s| s.decision_log.clone());
+        assert!(
+            matches!(
+                &log.last().unwrap().kind,
+                DecisionKind::NodeAdded { node_id, label, node_kind }
+                    if node_id == &id2 && label == "My Cache" && *node_kind == NodeKind::DataStore
+            ),
+            "last event: {:?}",
+            log.last()
+        );
+        assert_eq!(
+            store.read(|s| s.flush_seq),
+            flush_before,
+            "editing never autoflushes"
+        );
+        assert!(
+            store
+                .snapshot_meta()
+                .activity
+                .last()
+                .unwrap()
+                .text
+                .contains("My Cache"),
+            "activity entry present"
+        );
+    }
+
+    #[test]
+    fn edit_node_updates_and_events() {
+        use crate::model::NodeKind;
+        let store = demo_store();
+        store
+            .edit_node(
+                &NodeId::from("redis"),
+                "Redis Cluster".into(),
+                NodeKind::DataStore,
+                "now clustered".into(),
+            )
+            .unwrap();
+        let doc = store.snapshot_doc();
+        let n = doc.node(&NodeId::from("redis")).unwrap();
+        assert_eq!(n.label, "Redis Cluster");
+        assert_eq!(n.description, "now clustered");
+
+        let log = store.read(|s| s.decision_log.clone());
+        assert!(matches!(
+            &log.last().unwrap().kind,
+            DecisionKind::NodeEdited { node_id, label, description, .. }
+                if node_id.as_str() == "redis" && label == "Redis Cluster" && description == "now clustered"
+        ));
+        assert!(
+            store
+                .edit_node(
+                    &NodeId::from("ghost"),
+                    "x".into(),
+                    NodeKind::Component,
+                    String::new()
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn delete_node_matrix() {
+        use crate::model::ElementStatus;
+        let mut doc = demo_doc();
+        doc.nodes.push(user_node("mine"));
+        doc.edges.push(user_edge("mine", "postgres"));
+        let store = Store::with_doc(doc);
+
+        // User-origin: hard delete, incident edges included.
+        store.delete_node(&NodeId::from("mine")).unwrap();
+        let doc = store.snapshot_doc();
+        assert!(doc.node(&NodeId::from("mine")).is_none());
+        assert!(
+            !doc.edges
+                .iter()
+                .any(|e| e.from.as_str() == "mine" || e.to.as_str() == "mine")
+        );
+        let log = store.read(|s| s.decision_log.clone());
+        assert!(matches!(
+            &log.last().unwrap().kind,
+            DecisionKind::NodeDeleted { node_id } if node_id.as_str() == "mine"
+        ));
+
+        // Agent-origin: soft — marked removed, node stays.
+        store.delete_node(&NodeId::from("redis")).unwrap();
+        let doc = store.snapshot_doc();
+        assert_eq!(
+            doc.node(&NodeId::from("redis")).unwrap().status,
+            ElementStatus::Removed
+        );
+        let log = store.read(|s| s.decision_log.clone());
+        assert!(matches!(
+            &log.last().unwrap().kind,
+            DecisionKind::RemovalRequested { node_id } if node_id.as_str() == "redis"
+        ));
+
+        // Idempotent: a second delete of an already-Removed agent node is a no-op.
+        let log_len = store.read(|s| s.decision_log.len());
+        store.delete_node(&NodeId::from("redis")).unwrap();
+        assert_eq!(store.read(|s| s.decision_log.len()), log_len);
+
+        assert!(store.delete_node(&NodeId::from("ghost")).is_err());
+    }
+
+    #[test]
+    fn add_user_edge_validates() {
+        use crate::model::{EdgeKind, ElementStatus, Origin};
+        let store = demo_store();
+        store
+            .add_user_edge(
+                &NodeId::from("web-ui"),
+                &NodeId::from("postgres"),
+                EdgeKind::DataFlow,
+            )
+            .unwrap();
+        let doc = store.snapshot_doc();
+        let e = doc
+            .edges
+            .iter()
+            .find(|e| e.from.as_str() == "web-ui" && e.to.as_str() == "postgres")
+            .unwrap();
+        assert_eq!(e.origin, Origin::User);
+        assert_eq!(e.status, ElementStatus::Proposed);
+        let log = store.read(|s| s.decision_log.clone());
+        assert!(matches!(
+            &log.last().unwrap().kind,
+            DecisionKind::EdgeAdded { from, to, edge_kind }
+                if from.as_str() == "web-ui" && to.as_str() == "postgres"
+                    && *edge_kind == EdgeKind::DataFlow
+        ));
+
+        // Duplicate of the edge we just added, and of a demo edge.
+        assert!(
+            store
+                .add_user_edge(
+                    &NodeId::from("web-ui"),
+                    &NodeId::from("postgres"),
+                    EdgeKind::DataFlow
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .add_user_edge(
+                    &NodeId::from("web-ui"),
+                    &NodeId::from("api-gateway"),
+                    EdgeKind::DataFlow
+                )
+                .is_err()
+        );
+        // Self-loop and dangling endpoint.
+        assert!(
+            store
+                .add_user_edge(
+                    &NodeId::from("web-ui"),
+                    &NodeId::from("web-ui"),
+                    EdgeKind::DependsOn
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .add_user_edge(
+                    &NodeId::from("web-ui"),
+                    &NodeId::from("ghost"),
+                    EdgeKind::DependsOn
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn delete_edge_events() {
+        use crate::model::EdgeKind;
+        let store = demo_store();
+        store
+            .delete_edge(
+                &NodeId::from("web-ui"),
+                &NodeId::from("api-gateway"),
+                EdgeKind::DataFlow,
+            )
+            .unwrap();
+        let doc = store.snapshot_doc();
+        assert!(
+            !doc.edges
+                .iter()
+                .any(|e| e.from.as_str() == "web-ui" && e.to.as_str() == "api-gateway")
+        );
+        let log = store.read(|s| s.decision_log.clone());
+        assert!(matches!(
+            &log.last().unwrap().kind,
+            DecisionKind::EdgeDeleted { from, .. } if from.as_str() == "web-ui"
+        ));
+        assert!(
+            store
+                .delete_edge(
+                    &NodeId::from("web-ui"),
+                    &NodeId::from("api-gateway"),
+                    EdgeKind::DataFlow
+                )
+                .is_err(),
+            "already gone"
+        );
+    }
+
+    #[test]
+    fn agent_upsert_adopts_user_node() {
+        use crate::model::{Origin, Point};
+        let mut doc = demo_doc();
+        let mut mine = user_node("adoptee");
+        mine.notes.push(Note {
+            id: NoteId::from("n1"),
+            text: "keep me".into(),
+            created_at: Utc::now(),
+        });
+        mine.position = Some(Point { x: 5.0, y: 6.0 });
+        doc.nodes.push(mine);
+        let store = Store::with_doc(doc);
+
+        let mut incoming = user_node("adoptee"); // claims User — normalized away
+        incoming.label = "Adoptee (enriched)".into();
+        store
+            .apply_update(vec![GraphOp::UpsertNode { node: incoming }])
+            .unwrap();
+
+        let doc = store.snapshot_doc();
+        let n = doc.node(&NodeId::from("adoptee")).unwrap();
+        assert_eq!(n.origin, Origin::Agent, "agent upsert adopts the node");
+        assert_eq!(n.label, "Adoptee (enriched)");
+        assert_eq!(n.notes.len(), 1, "user note survives adoption");
+        assert_eq!(n.position, Some(Point { x: 5.0, y: 6.0 }));
+    }
+
+    #[test]
+    fn toggle_group_collapsed_round_trips_and_never_events() {
+        let store = demo_store();
+        let log_before = store.read(|s| s.decision_log.len());
+        store.toggle_group_collapsed("Platform");
+        assert_eq!(
+            store.snapshot_meta().collapsed_groups,
+            vec!["Platform".to_owned()]
+        );
+        store.toggle_group_collapsed("Platform");
+        assert!(store.snapshot_meta().collapsed_groups.is_empty());
+        assert_eq!(
+            store.read(|s| s.decision_log.len()),
+            log_before,
+            "view state emits no decision events"
+        );
+    }
+
     #[test]
     fn record_export_lands_in_activity() {
         let store = demo_store();
@@ -662,6 +1341,12 @@ mod tests {
             "text: {}",
             entry.text
         );
+
+        store.record_user_action("copied the diagram to the clipboard".into());
+        let meta = store.snapshot_meta();
+        let entry = meta.activity.last().unwrap();
+        assert_eq!(entry.origin, ActivityOrigin::User);
+        assert!(entry.text.contains("clipboard"), "text: {}", entry.text);
     }
 
     fn pick_first_choice(store: &Arc<Store>) {

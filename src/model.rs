@@ -101,6 +101,26 @@ pub enum ElementStatus {
     Removed,
 }
 
+/// Who authored a graph element. Agent-authored content follows the agent
+/// merge rules; user-authored elements survive proposes that omit them.
+/// The server forces everything arriving over MCP to `Agent`, so agents
+/// cannot claim (and need not know about) user authorship.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Origin {
+    #[default]
+    Agent,
+    User,
+}
+
+impl Origin {
+    /// serde `skip_serializing_if` — agent origin is the wire default.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    pub fn is_agent(&self) -> bool {
+        *self == Origin::Agent
+    }
+}
+
 /// Relationship carried by an edge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -206,6 +226,9 @@ pub struct Node {
     /// User-owned drag override. `None` means auto-layout places the node.
     #[serde(default)]
     pub position: Option<Point>,
+    /// Who created this node. Forced to `Agent` for MCP-supplied nodes.
+    #[serde(default, skip_serializing_if = "Origin::is_agent")]
+    pub origin: Origin,
 }
 
 impl Node {
@@ -251,6 +274,9 @@ pub struct Edge {
     pub label: Option<String>,
     #[serde(default)]
     pub status: ElementStatus,
+    /// Who created this edge. Forced to `Agent` for MCP-supplied edges.
+    #[serde(default, skip_serializing_if = "Origin::is_agent")]
+    pub origin: Origin,
 }
 
 impl Edge {
@@ -504,6 +530,42 @@ pub enum DecisionKind {
         #[serde(default)]
         comment: Option<String>,
     },
+    /// The user created a node on the canvas. Enriching it via upsert adopts
+    /// it — from then on the agent carries it forward like its own nodes.
+    /// (Field is `node_kind`, not `kind`: the envelope's tag owns that name.)
+    NodeAdded {
+        node_id: NodeId,
+        label: String,
+        node_kind: NodeKind,
+    },
+    /// The user edited a card. Treat the new content as canonical.
+    NodeEdited {
+        node_id: NodeId,
+        label: String,
+        node_kind: NodeKind,
+        description: String,
+    },
+    /// The user hard-deleted a node they created (its edges went with it).
+    NodeDeleted {
+        node_id: NodeId,
+    },
+    /// The user marked an agent-authored node `removed`. Apply the real
+    /// removal via `update_graph` (or push back with reasons).
+    RemovalRequested {
+        node_id: NodeId,
+    },
+    /// The user drew an edge.
+    EdgeAdded {
+        from: NodeId,
+        to: NodeId,
+        edge_kind: EdgeKind,
+    },
+    /// The user deleted an edge (any origin — edges always hard-delete).
+    EdgeDeleted {
+        from: NodeId,
+        to: NodeId,
+        edge_kind: EdgeKind,
+    },
 }
 
 /// Entry in the UI activity feed.
@@ -561,6 +623,7 @@ mod tests {
             choices: vec![],
             notes: vec![],
             position: None,
+            origin: Origin::Agent,
         }
     }
 
@@ -571,6 +634,7 @@ mod tests {
             kind: EdgeKind::DependsOn,
             label: None,
             status: ElementStatus::Proposed,
+            origin: Origin::Agent,
         }
     }
 
@@ -596,6 +660,115 @@ mod tests {
         let json = serde_json::to_string_pretty(&doc).unwrap();
         let back: SessionDoc = serde_json::from_str(&json).unwrap();
         assert_eq!(doc, back);
+    }
+
+    #[test]
+    fn origin_defaults_to_agent_and_is_skipped_in_json() {
+        // Agent-facing JSON is unchanged: origin absent parses as Agent and
+        // agent origin never serializes.
+        let n: Node = serde_json::from_str(r#"{"id":"a","label":"A"}"#).unwrap();
+        assert_eq!(n.origin, Origin::Agent);
+        let out = serde_json::to_string(&n).unwrap();
+        assert!(
+            !out.contains("origin"),
+            "agent origin must not serialize: {out}"
+        );
+
+        let mut user = n.clone();
+        user.origin = Origin::User;
+        let out = serde_json::to_string(&user).unwrap();
+        assert!(
+            out.contains(r#""origin":"user""#),
+            "user origin must persist: {out}"
+        );
+        let back: Node = serde_json::from_str(&out).unwrap();
+        assert_eq!(back.origin, Origin::User);
+    }
+
+    #[test]
+    fn editing_event_wire_tags() {
+        let at = Utc::now();
+        let events = vec![
+            DecisionEvent {
+                seq: 1,
+                at,
+                kind: DecisionKind::NodeAdded {
+                    node_id: "rate-limiter".into(),
+                    label: "Rate Limiter".into(),
+                    node_kind: NodeKind::Component,
+                },
+            },
+            DecisionEvent {
+                seq: 2,
+                at,
+                kind: DecisionKind::NodeEdited {
+                    node_id: "rate-limiter".into(),
+                    label: "Rate Limiter v2".into(),
+                    node_kind: NodeKind::Service,
+                    description: "throttles".into(),
+                },
+            },
+            DecisionEvent {
+                seq: 3,
+                at,
+                kind: DecisionKind::NodeDeleted {
+                    node_id: "rate-limiter".into(),
+                },
+            },
+            DecisionEvent {
+                seq: 4,
+                at,
+                kind: DecisionKind::RemovalRequested {
+                    node_id: "api".into(),
+                },
+            },
+            DecisionEvent {
+                seq: 5,
+                at,
+                kind: DecisionKind::EdgeAdded {
+                    from: "a".into(),
+                    to: "b".into(),
+                    edge_kind: EdgeKind::DataFlow,
+                },
+            },
+            DecisionEvent {
+                seq: 6,
+                at,
+                kind: DecisionKind::EdgeDeleted {
+                    from: "a".into(),
+                    to: "b".into(),
+                    edge_kind: EdgeKind::DataFlow,
+                },
+            },
+        ];
+        let json = serde_json::to_string(&events).unwrap();
+        for tag in [
+            r#""kind":"node_added""#,
+            r#""kind":"node_edited""#,
+            r#""kind":"node_deleted""#,
+            r#""kind":"removal_requested""#,
+            r#""kind":"edge_added""#,
+            r#""kind":"edge_deleted""#,
+        ] {
+            assert!(json.contains(tag), "missing {tag} in: {json}");
+        }
+        let back: Vec<DecisionEvent> = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, events, "round-trip");
+    }
+
+    #[test]
+    fn edge_origin_defaults_and_round_trips() {
+        let e: Edge = serde_json::from_str(r#"{"from":"a","to":"b"}"#).unwrap();
+        assert_eq!(e.origin, Origin::Agent);
+        let out = serde_json::to_string(&e).unwrap();
+        assert!(!out.contains("origin"), "in: {out}");
+
+        let mut user = e.clone();
+        user.origin = Origin::User;
+        let out = serde_json::to_string(&user).unwrap();
+        assert!(out.contains(r#""origin":"user""#), "in: {out}");
+        let back: Edge = serde_json::from_str(&out).unwrap();
+        assert_eq!(back.origin, Origin::User);
     }
 
     #[test]

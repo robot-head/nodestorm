@@ -1,7 +1,6 @@
 use anyhow::Context;
 use clap::Parser;
 use nodestorm::cli::Cli;
-use nodestorm::store::Store;
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -12,15 +11,18 @@ fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let session_path = cli.session_path()?;
-    let store = if cli.demo {
-        Store::with_doc(nodestorm::demo::demo_doc())
-    } else {
-        match nodestorm::persist::load(&session_path) {
-            Some(state) => Store::new(state),
-            None => Store::with_doc(Default::default()),
-        }
-    };
+    let sessions = nodestorm::sessions::Sessions::open_from_cli(&cli)?;
+    if cli.demo {
+        sessions
+            .active_store()
+            .apply_propose(nodestorm::demo::demo_doc())
+            .context("loading the demo graph")?;
+    } else if let Some(n) = cli.demo_big {
+        sessions
+            .active_store()
+            .apply_propose(nodestorm::demo::big_doc(n))
+            .context("loading the big demo graph")?;
+    }
 
     // The MCP server gets its own runtime on a dedicated thread; the UI
     // (Dioxus/tao) owns the main thread. Bind before launching the window so
@@ -34,18 +36,15 @@ fn main() -> anyhow::Result<()> {
     let listener = runtime.block_on(nodestorm::server::bind(cli.port))?;
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
-    runtime.spawn(nodestorm::persist::autosave_task(
-        store.clone(),
-        session_path.clone(),
-    ));
+    sessions.spawn_autosaves(runtime.handle());
 
     let server_thread = std::thread::Builder::new()
         .name("mcp-server".into())
         .spawn({
-            let store = store.clone();
+            let sessions = sessions.clone();
             move || {
                 if let Err(err) =
-                    runtime.block_on(nodestorm::server::serve(listener, store, shutdown_rx))
+                    runtime.block_on(nodestorm::server::serve(listener, sessions, shutdown_rx))
                 {
                     tracing::error!(error = ?err, "mcp server exited");
                 }
@@ -54,7 +53,7 @@ fn main() -> anyhow::Result<()> {
 
     tracing::info!(
         port = cli.port,
-        session = %session_path.display(),
+        active = %sessions.active_name(),
         "nodestorm up — agents connect via http://127.0.0.1:{}/mcp",
         cli.port
     );
@@ -67,13 +66,12 @@ fn main() -> anyhow::Result<()> {
             .context("waiting for ctrl-c")?;
         tracing::info!("ctrl-c — shutting down");
     } else {
-        nodestorm::ui::launch(store.clone(), cli);
+        nodestorm::ui::launch(sessions.clone(), cli);
     }
 
-    // Final save (the debounced autosave may not have caught the last change).
-    if let Err(err) = nodestorm::persist::save(&session_path, &store.snapshot_state()) {
-        tracing::warn!(%err, "final save failed");
-    }
+    // Final saves (the debounced autosaves may not have caught the last
+    // change in every session).
+    sessions.save_all();
     let _ = shutdown_tx.send(true);
     let _ = server_thread.join();
     Ok(())

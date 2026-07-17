@@ -423,6 +423,348 @@ body {
   border-color: var(--accent);
 }
 
+/* ---------- editing controls (panel) ---------- */
+
+.edit-form {
+  margin: 10px 0 12px;
+}
+
+.edit-form summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 6px;
+}
+
+.edit-form input,
+.edit-form select,
+.edit-form textarea {
+  display: block;
+  width: 100%;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+}
+
+.edit-form input:focus,
+.edit-form select:focus,
+.edit-form textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.edit-form textarea {
+  min-height: 48px;
+  resize: vertical;
+}
+
+.panel-actions {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.btn-danger {
+  border-color: var(--status-removed);
+  color: var(--status-removed);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--status-removed) 15%, transparent);
+}
+
+.btn-armed {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.connections {
+  margin: 0 0 12px;
+}
+
+.connections h3 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  margin: 0 0 6px;
+}
+
+.conn-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.canvas-viewport.connecting {
+  cursor: crosshair;
+}
+
+.search-box {
+  width: 190px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 6px 10px;
+  margin-left: 12px;
+}
+
+.search-box:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.node-card.search-hit {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.node-card.search-dim {
+  opacity: 0.35;
+}
+
+.export-menu {
+  position: relative;
+}
+
+.export-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 41;
+  min-width: 190px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.export-dropdown button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 7px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.export-dropdown button:hover {
+  background: var(--bg-card-hover);
+}
+
+.sessions-dropdown {
+  min-width: 230px;
+  /* The sessions menu sits near the window's LEFT edge; right-anchoring
+     (the Export menu's default) would push it off-window for short session
+     names. */
+  left: 0;
+  right: auto;
+}
+
+.session-row {
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.session-row.active .sess-name {
+  color: var(--accent);
+}
+
+.sess-badges {
+  display: flex;
+  gap: 4px;
+}
+
+.session-create {
+  display: flex;
+  gap: 4px;
+  padding: 4px 6px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+
+.session-name-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 5px 8px;
+}
+
+.session-name-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.session-archive {
+  color: var(--status-removed) !important;
+}
+
+/* ---------- clusters & bundles ---------- */
+
+.cluster-card {
+  border-style: dashed;
+  cursor: default;
+}
+
+.cluster-expand {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.node-group {
+  cursor: pointer;
+}
+
+.node-group:hover {
+  color: var(--accent);
+}
+
+/* ---------- timeline panel ---------- */
+
+.timeline-row {
+  display: flex;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+
+.timeline-time {
+  color: var(--text-dim);
+  min-width: 38px;
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline-text {
+  flex: 1;
+}
+
+/* ---------- minimap ---------- */
+
+.minimap {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  opacity: 0.92;
+  z-index: 15;
+  cursor: pointer;
+}
+
+.mini-node {
+  stroke: none;
+}
+
+.mini-existing { fill: var(--status-existing); }
+.mini-proposed { fill: var(--status-proposed); }
+.mini-modified { fill: var(--status-modified); }
+.mini-affected { fill: var(--status-affected); }
+.mini-removed { fill: var(--status-removed); }
+
+.mini-viewport {
+  fill: rgba(255, 255, 255, 0.07);
+  stroke: var(--accent);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.connect-handle {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--bg-panel);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-size: 10px;
+  cursor: crosshair;
+  opacity: 0;
+  transition: opacity 120ms;
+  z-index: 3;
+}
+
+.node-card:hover .connect-handle,
+.node-card.selected .connect-handle {
+  opacity: 1;
+}
+
+.ghost-edge {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 4;
+  pointer-events: none;
+}
+
+.menu-catcher {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 41;
+  min-width: 160px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.context-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 7px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.context-menu button:hover {
+  background: var(--bg-card-hover);
+}
+
 /* ---------- activity feed ---------- */
 
 .activity {

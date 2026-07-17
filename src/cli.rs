@@ -16,12 +16,22 @@ pub struct Cli {
     pub port: u16,
 
     /// Session file to load and autosave (defaults to the XDG data dir).
+    /// Pins that exact file as a session named after the file stem.
     #[arg(long)]
     pub session: Option<PathBuf>,
+
+    /// Directory holding the named sessions (default: `sessions/` next to
+    /// the legacy session file in the platform data dir).
+    #[arg(long)]
+    pub sessions_dir: Option<PathBuf>,
 
     /// Load the built-in demo graph instead of restoring the last session.
     #[arg(long)]
     pub demo: bool,
+
+    /// Load a deterministic N-component graph (scaling checks).
+    #[arg(long, value_name = "N")]
+    pub demo_big: Option<usize>,
 
     /// Run the MCP server without opening a window (for CI and agent-only use).
     #[arg(long)]
@@ -35,11 +45,25 @@ impl Cli {
     }
 
     /// The session file to load and autosave: the `--session` override, or
-    /// the platform default.
+    /// the platform default. With named sessions this is the *pinned*
+    /// session's path (used by the UI to derive export paths).
     pub fn session_path(&self) -> anyhow::Result<PathBuf> {
         match &self.session {
             Some(path) => Ok(path.clone()),
             None => crate::persist::default_session_path(),
+        }
+    }
+
+    /// Where named sessions live: the `--sessions-dir` override, or
+    /// `sessions/` next to the platform-default session file.
+    pub fn sessions_dir(&self) -> anyhow::Result<PathBuf> {
+        match &self.sessions_dir {
+            Some(dir) => Ok(dir.clone()),
+            None => {
+                let legacy = crate::persist::default_session_path()?;
+                let parent = legacy.parent().unwrap_or_else(|| std::path::Path::new("."));
+                Ok(parent.join("sessions"))
+            }
         }
     }
 }

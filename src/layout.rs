@@ -10,9 +10,9 @@
 //! excluded from packing, and auto-placed nodes are nudged off them. Every
 //! tie-break uses document order, so identical inputs give identical output.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
-use crate::model::{EdgeKind, ElementStatus, Node, NodeId, Point, SessionDoc};
+use crate::model::{Edge, EdgeKind, ElementStatus, Node, NodeId, Origin, Point, SessionDoc};
 
 pub const CARD_WIDTH: f64 = 260.0;
 pub const RANK_GUTTER: f64 = 120.0;
@@ -52,14 +52,79 @@ pub struct EdgePath {
     /// SVG `d` attribute (cubic bezier).
     pub path: String,
     pub label_pos: Point,
+    /// How many document edges this path aggregates (>1 only between
+    /// collapsed clusters and their neighbors; rendered thicker with `×N`).
+    pub bundle_count: usize,
+}
+
+/// A collapsed group rendered as one card.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClusterRect {
+    pub group: String,
+    pub rect: Rect,
+    pub member_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Layout {
     pub rects: HashMap<NodeId, Rect>,
     pub edges: Vec<EdgePath>,
+    /// Collapsed groups, one synthetic card each (`group:<name>` ids inside
+    /// `edges`; never leaked into the doc).
+    pub clusters: Vec<ClusterRect>,
     /// Union of all card rects, padded — used for zoom-to-fit.
     pub bounds: Rect,
+}
+
+/// What survives viewport culling at the current transform: node ids and
+/// `layout.edges`/`layout.clusters` indices whose rects intersect the view
+/// expanded by one screen of margin in every direction.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct VisibleSet {
+    pub nodes: std::collections::BTreeSet<NodeId>,
+    pub edges: Vec<usize>,
+    pub clusters: Vec<usize>,
+}
+
+/// Pure culling math (`tx`/`ty`/`scale` are the canvas transform).
+pub fn visible_set(
+    layout: &Layout,
+    tx: f64,
+    ty: f64,
+    scale: f64,
+    view_w: f64,
+    view_h: f64,
+) -> VisibleSet {
+    let view = Rect {
+        x: -tx / scale - view_w / scale,
+        y: -ty / scale - view_h / scale,
+        w: 3.0 * view_w / scale,
+        h: 3.0 * view_h / scale,
+    };
+    let mut out = VisibleSet::default();
+    for (id, rect) in &layout.rects {
+        if rect.intersects(&view) {
+            out.nodes.insert(id.clone());
+        }
+    }
+    for (i, cluster) in layout.clusters.iter().enumerate() {
+        if cluster.rect.intersects(&view) {
+            out.clusters.push(i);
+        }
+    }
+    let visible_cluster_ids: std::collections::BTreeSet<String> = out
+        .clusters
+        .iter()
+        .map(|&i| format!("group:{}", layout.clusters[i].group))
+        .collect();
+    for (i, e) in layout.edges.iter().enumerate() {
+        let end_visible =
+            |id: &NodeId| out.nodes.contains(id) || visible_cluster_ids.contains(id.as_str());
+        if end_visible(&e.from) || end_visible(&e.to) {
+            out.edges.push(i);
+        }
+    }
+    out
 }
 
 /// Estimated card height in px. Must stay consistent with `assets/main.css`
@@ -108,6 +173,123 @@ fn wrap_lines(text: &str, per_line: usize) -> usize {
 }
 
 pub fn compute(doc: &SessionDoc) -> Layout {
+    compute_collapsed(doc, &BTreeSet::new())
+}
+
+/// Layout with the named groups collapsed: each becomes one synthetic
+/// `group:<name>` node, member cards disappear, and edges re-route to the
+/// cluster (parallel edges onto one cluster merge into a `bundle_count`ed
+/// path labeled `×N`). Group-internal edges vanish.
+pub fn compute_collapsed(doc: &SessionDoc, collapsed: &BTreeSet<String>) -> Layout {
+    if collapsed.is_empty() {
+        return compute_inner(doc, &[]);
+    }
+
+    // Which groups actually have members, in first-appearance order.
+    let mut group_order: Vec<&str> = Vec::new();
+    let mut member_count: HashMap<&str, usize> = HashMap::new();
+    for node in &doc.nodes {
+        if let Some(g) = node.group.as_deref()
+            && collapsed.contains(g)
+        {
+            if !group_order.contains(&g) {
+                group_order.push(g);
+            }
+            *member_count.entry(g).or_default() += 1;
+        }
+    }
+
+    let synthetic_id = |g: &str| NodeId::new(format!("group:{g}"));
+    let map_end = |id: &NodeId| -> NodeId {
+        doc.node(id)
+            .and_then(|n| n.group.as_deref())
+            .filter(|g| collapsed.contains(*g))
+            .map_or_else(|| id.clone(), synthetic_id)
+    };
+
+    let mut nodes: Vec<Node> = Vec::new();
+    let mut emitted_groups: HashSet<&str> = HashSet::new();
+    for node in &doc.nodes {
+        match node.group.as_deref().filter(|g| collapsed.contains(*g)) {
+            None => nodes.push(node.clone()),
+            Some(g) => {
+                // The first member pulls the whole group in as one card.
+                if emitted_groups.insert(g) {
+                    nodes.push(Node {
+                        id: synthetic_id(g),
+                        label: g.to_owned(),
+                        kind: crate::model::NodeKind::Module,
+                        description: String::new(),
+                        status: ElementStatus::Existing,
+                        group: None,
+                        choices: vec![],
+                        notes: vec![],
+                        position: None,
+                        origin: Origin::Agent,
+                    });
+                }
+            }
+        }
+    }
+
+    // Re-map + bundle edges (insertion order = document order).
+    let mut syn_edges: Vec<Edge> = Vec::new();
+    let mut counts: Vec<usize> = Vec::new();
+    let mut slot: HashMap<(NodeId, NodeId, EdgeKind), usize> = HashMap::new();
+    for e in &doc.edges {
+        let from = map_end(&e.from);
+        let to = map_end(&e.to);
+        if from == to {
+            continue; // group-internal (or degenerate) — nothing to draw
+        }
+        match slot.entry((from.clone(), to.clone(), e.kind)) {
+            std::collections::hash_map::Entry::Occupied(o) => counts[*o.get()] += 1,
+            std::collections::hash_map::Entry::Vacant(v) => {
+                v.insert(syn_edges.len());
+                syn_edges.push(Edge {
+                    from,
+                    to,
+                    kind: e.kind,
+                    label: e.label.clone(),
+                    status: e.status,
+                    origin: e.origin,
+                });
+                counts.push(1);
+            }
+        }
+    }
+    for (i, &c) in counts.iter().enumerate() {
+        if c > 1 {
+            syn_edges[i].label = Some(format!("×{c}"));
+        }
+    }
+
+    let syn_doc = SessionDoc {
+        version: doc.version,
+        title: doc.title.clone(),
+        revision: doc.revision,
+        focus: None,
+        nodes,
+        edges: syn_edges,
+    };
+    let mut layout = compute_inner(&syn_doc, &counts);
+
+    let mut clusters = Vec::new();
+    for g in group_order {
+        if let Some(rect) = layout.rects.remove(&synthetic_id(g)) {
+            clusters.push(ClusterRect {
+                group: g.to_owned(),
+                rect,
+                member_count: member_count[g],
+            });
+        }
+    }
+    layout.clusters = clusters;
+    layout
+}
+
+/// `counts[i]` is the bundle size of `doc.edges[i]` (empty slice → all 1).
+fn compute_inner(doc: &SessionDoc, counts: &[usize]) -> Layout {
     let index: HashMap<&NodeId, usize> = doc
         .nodes
         .iter()
@@ -138,12 +320,13 @@ pub fn compute(doc: &SessionDoc) -> Layout {
     let ranks = longest_path_ranks(&dag);
     let order = barycenter_order(&dag, &ranks);
     let rects = place(doc, &ranks, &order);
-    let edges = route_edges(doc, &rects);
+    let edges = route_edges(doc, &rects, counts);
     let bounds = compute_bounds(&rects);
 
     Layout {
         rects,
         edges,
+        clusters: Vec::new(),
         bounds,
     }
 }
@@ -331,7 +514,8 @@ fn place(doc: &SessionDoc, ranks: &[usize], order: &[Vec<usize>]) -> HashMap<Nod
 
 /// Cubic bezier from the right edge of `from` to the left edge of `to`, with
 /// per-port vertical fan-out when several edges share a card side.
-fn route_edges(doc: &SessionDoc, rects: &HashMap<NodeId, Rect>) -> Vec<EdgePath> {
+/// `counts[i]` is the bundle size of `doc.edges[i]` (missing → 1).
+fn route_edges(doc: &SessionDoc, rects: &HashMap<NodeId, Rect>, counts: &[usize]) -> Vec<EdgePath> {
     // Count edges per (node, side) so anchors can spread.
     let mut out_total: HashMap<&NodeId, usize> = HashMap::new();
     let mut in_total: HashMap<&NodeId, usize> = HashMap::new();
@@ -348,7 +532,8 @@ fn route_edges(doc: &SessionDoc, rects: &HashMap<NodeId, Rect>) -> Vec<EdgePath>
 
     doc.edges
         .iter()
-        .filter_map(|e| {
+        .enumerate()
+        .filter_map(|(i, e)| {
             let a = rects.get(&e.from)?;
             let b = rects.get(&e.to)?;
             let so = {
@@ -393,6 +578,7 @@ fn route_edges(doc: &SessionDoc, rects: &HashMap<NodeId, Rect>) -> Vec<EdgePath>
                     x: (x1 + x2) / 2.0,
                     y: (y1 + y2) / 2.0 - 8.0,
                 },
+                bundle_count: counts.get(i).copied().unwrap_or(1),
             })
         })
         .collect()
@@ -424,7 +610,7 @@ fn compute_bounds(rects: &HashMap<NodeId, Rect>) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Edge, ElementStatus, Node, NodeKind};
+    use crate::model::{Edge, ElementStatus, Node, NodeKind, Origin};
 
     fn node(id: &str) -> Node {
         Node {
@@ -437,6 +623,7 @@ mod tests {
             choices: vec![],
             notes: vec![],
             position: None,
+            origin: Origin::Agent,
         }
     }
 
@@ -447,6 +634,7 @@ mod tests {
             kind: EdgeKind::DependsOn,
             label: None,
             status: ElementStatus::Proposed,
+            origin: Origin::Agent,
         }
     }
 
@@ -463,6 +651,110 @@ mod tests {
         let l = compute(&SessionDoc::default());
         assert!(l.rects.is_empty());
         assert!(l.edges.is_empty());
+    }
+
+    fn grouped_doc() -> SessionDoc {
+        let mut d = doc(
+            &["outside", "m1", "m2", "m3", "other"],
+            &[
+                ("outside", "m1"),
+                ("outside", "m2"),
+                ("outside", "m3"),
+                ("m3", "other"),
+            ],
+        );
+        for id in ["m1", "m2", "m3"] {
+            d.node_mut(&NodeId::from(id)).unwrap().group = Some("Platform".into());
+        }
+        d
+    }
+
+    #[test]
+    fn collapsed_group_becomes_cluster() {
+        let d = grouped_doc();
+        let collapsed: std::collections::BTreeSet<String> =
+            std::iter::once("Platform".to_owned()).collect();
+        let l = compute_collapsed(&d, &collapsed);
+        assert_eq!(l.clusters.len(), 1, "one cluster rect");
+        assert_eq!(l.clusters[0].group, "Platform");
+        assert_eq!(l.clusters[0].member_count, 3);
+        for id in ["m1", "m2", "m3"] {
+            assert!(
+                !l.rects.contains_key(&NodeId::from(id)),
+                "member {id} hidden"
+            );
+        }
+        assert!(l.rects.contains_key(&NodeId::from("outside")));
+        assert!(l.rects.contains_key(&NodeId::from("other")));
+        // Cluster rect doesn't overlap visible cards.
+        for r in l.rects.values() {
+            assert!(!l.clusters[0].rect.intersects(r), "cluster overlaps a card");
+        }
+    }
+
+    #[test]
+    fn cluster_edges_reroute_and_bundle() {
+        let d = grouped_doc();
+        let collapsed: std::collections::BTreeSet<String> =
+            std::iter::once("Platform".to_owned()).collect();
+        let l = compute_collapsed(&d, &collapsed);
+        // outside→{m1,m2,m3} become ONE bundled edge to the cluster.
+        let to_cluster: Vec<_> = l
+            .edges
+            .iter()
+            .filter(|e| e.from.as_str() == "outside")
+            .collect();
+        assert_eq!(to_cluster.len(), 1, "bundled: {:?}", l.edges);
+        assert_eq!(to_cluster[0].bundle_count, 3);
+        assert_eq!(to_cluster[0].label.as_deref(), Some("×3"));
+        // m3→other leaves the cluster as a single count-1 edge.
+        let from_cluster: Vec<_> = l
+            .edges
+            .iter()
+            .filter(|e| e.to.as_str() == "other")
+            .collect();
+        assert_eq!(from_cluster.len(), 1);
+        assert_eq!(from_cluster[0].bundle_count, 1);
+        // Determinism.
+        let again = compute_collapsed(&d, &collapsed);
+        assert_eq!(l, again);
+    }
+
+    #[test]
+    fn expanded_has_no_clusters_and_unit_bundles() {
+        let l = compute_collapsed(&grouped_doc(), &std::collections::BTreeSet::new());
+        assert!(l.clusters.is_empty());
+        assert!(l.edges.iter().all(|e| e.bundle_count == 1));
+        assert_eq!(l, compute(&grouped_doc()), "compute() is the empty set");
+    }
+
+    #[test]
+    fn visible_set_culls() {
+        let d = crate::demo::big_doc(200);
+        let l = compute(&d);
+        // A view genuinely covering the whole bounds sees everything.
+        // (Built by hand: `ViewTransform::fit` deliberately clamps at a
+        // readability floor and would show only a subset of 200 nodes.)
+        let scale = (1280.0 / l.bounds.w).min(780.0 / l.bounds.h).min(1.0);
+        let tx = -l.bounds.x * scale + (1280.0 - l.bounds.w * scale) / 2.0;
+        let ty = -l.bounds.y * scale + (780.0 - l.bounds.h * scale) / 2.0;
+        let all = visible_set(&l, tx, ty, scale, 1280.0, 780.0);
+        assert_eq!(all.nodes.len(), 200);
+        assert_eq!(all.edges.len(), l.edges.len());
+        // A tight corner view sees strictly fewer.
+        let corner = visible_set(&l, 0.0, 0.0, 1.0, 1280.0, 780.0);
+        assert!(corner.nodes.len() < 200, "culled: {}", corner.nodes.len());
+        // Every visible edge touches at least one visible-ish rect.
+        for &i in &corner.edges {
+            let e = &l.edges[i];
+            assert!(
+                corner.nodes.contains(&e.from)
+                    || corner.nodes.contains(&e.to)
+                    || e.from.as_str().starts_with("group:")
+                    || e.to.as_str().starts_with("group:"),
+                "edge {i} has no visible endpoint"
+            );
+        }
     }
 
     #[test]

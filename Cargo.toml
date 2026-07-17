@@ -1,6 +1,6 @@
 [package]
 name = "nodestorm"
-version = "0.2.0"
+version = "0.4.0"
 edition = "2024"
 description = "Visual brainstorming canvas for agentic AI planning — architecture graphs with human-in-the-loop decisions over MCP"
 license = "MIT OR Apache-2.0"
@@ -23,6 +23,7 @@ directories = "6"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 tokio-util = "0.7"
+rfd = "0.17.2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }

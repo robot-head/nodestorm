@@ -31,7 +31,7 @@ fn kind_label(kind: NodeKind) -> &'static str {
     }
 }
 
-fn status_class(status: ElementStatus) -> &'static str {
+pub(crate) fn status_class(status: ElementStatus) -> &'static str {
     match status {
         ElementStatus::Existing => "existing",
         ElementStatus::Proposed => "proposed",
@@ -49,6 +49,13 @@ pub fn NodeCard(
     highlighted: bool,
     on_select: EventHandler<MouseEvent>,
     on_drag_start: EventHandler<MouseEvent>,
+    search_hit: bool,
+    search_dim: bool,
+    on_connect_start: EventHandler<MouseEvent>,
+    on_connect_drop: EventHandler<MouseEvent>,
+    on_context: EventHandler<MouseEvent>,
+    on_zoom: EventHandler<MouseEvent>,
+    on_toggle_group: EventHandler<MouseEvent>,
 ) -> Element {
     let open = node.open_choice_count();
     let decided = node.choices.len() - open;
@@ -56,10 +63,12 @@ pub fn NodeCard(
     let status = status_class(node.status);
     let sel = if selected { " selected" } else { "" };
     let hl = if highlighted { " ripple" } else { "" };
+    let hit = if search_hit { " search-hit" } else { "" };
+    let dim = if search_dim { " search-dim" } else { "" };
 
     rsx! {
         div {
-            class: "node-card status-{status}{sel}{hl}",
+            class: "node-card status-{status}{sel}{hl}{hit}{dim}",
             style: "left: {rect.x}px; top: {rect.y}px; width: {rect.w}px;",
             onclick: move |ev| {
                 ev.stop_propagation();
@@ -69,6 +78,27 @@ pub fn NodeCard(
                 ev.stop_propagation();
                 on_drag_start.call(ev);
             },
+            // No stop_propagation: a node drag also ends here and the
+            // viewport's mouseup must still clear the gesture.
+            onmouseup: move |ev| on_connect_drop.call(ev),
+            ondoubleclick: move |ev| {
+                ev.stop_propagation();
+                on_zoom.call(ev);
+            },
+            oncontextmenu: move |ev| {
+                ev.prevent_default();
+                ev.stop_propagation();
+                on_context.call(ev);
+            },
+            span {
+                class: "connect-handle",
+                title: "Drag onto another card to connect",
+                onmousedown: move |ev| {
+                    ev.stop_propagation();
+                    on_connect_start.call(ev);
+                },
+                "◉"
+            }
             div { class: "node-head",
                 span { class: "node-glyph", "{kind_glyph(node.kind)}" }
                 span { class: "node-label", "{node.label}" }
@@ -79,7 +109,15 @@ pub fn NodeCard(
                     span { class: "node-status-tag tag-{status}", "{status}" }
                 }
                 if let Some(group) = &node.group {
-                    span { class: "node-group", "{group}" }
+                    span {
+                        class: "node-group",
+                        title: "Collapse this group into one card",
+                        onclick: move |ev| {
+                            ev.stop_propagation();
+                            on_toggle_group.call(ev);
+                        },
+                        "{group}"
+                    }
                 }
             }
             if !node.description.is_empty() {

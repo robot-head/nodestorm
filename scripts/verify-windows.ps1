@@ -34,6 +34,9 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 if (-not $OutDir) { $OutDir = Join-Path $RepoRoot 'target\verify' }
 $SessionFile = Join-Path $env:TEMP "nodestorm-verify-session-$Port.json"
 $ExportFile = $SessionFile -replace '\.json$', '.export.md'
+# Isolated named-sessions dir: without this, created sessions land in the
+# user's real data dir and dedup renames break re-runs.
+$SessionsDir = Join-Path $env:TEMP "nodestorm-verify-sessions-$Port"
 
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName UIAutomationClient
@@ -65,13 +68,17 @@ function Fail([string]$msg) {
 $script:AppWindow = $null   # cached UIA element for the app's top-level window
 
 function Get-AppWindow([int]$ProcessId, [int]$TimeoutSec = 30) {
+    # The process owns two top-level windows: the real one ("nodestorm") and
+    # tao's hidden "Tao Thread Event Target". Enumeration order is not
+    # guaranteed, so pick by name instead of taking the first match.
     $root = [System.Windows.Automation.AutomationElement]::RootElement
     $cond = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $ProcessId)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
-        $win = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond)
-        if ($win) { return $win }
+        foreach ($win in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)) {
+            if ($win.Current.Name -eq 'nodestorm') { return $win }
+        }
         Start-Sleep -Milliseconds 300
     }
     return $null
@@ -147,6 +154,44 @@ function Click-Element([IntPtr]$TopHwnd, [string]$Name) {
     Log "clicked '$Name' (client $cx,$cy)"
 }
 
+function Click-Point([IntPtr]$TopHwnd, [double]$ScreenX, [double]$ScreenY) {
+    # Click at absolute screen coordinates (for elements UIA can't name,
+    # e.g. text inputs) — same window-targeted WM_LBUTTON* posting.
+    $rw = Get-RenderWidget $TopHwnd
+    if ($rw -eq [IntPtr]::Zero) { Fail 'WebView2 render widget window not found' }
+    $rwRect = New-Object NodestormVerify.Native+RECT
+    [void][NodestormVerify.Native]::GetWindowRect($rw, [ref]$rwRect)
+    $cx = [int]$ScreenX - $rwRect.Left
+    $cy = [int]$ScreenY - $rwRect.Top
+    $lp = [IntPtr](($cy -shl 16) -bor ($cx -band 0xFFFF))
+    [void][NodestormVerify.Native]::PostMessageW($rw, 0x0200, [IntPtr]::Zero, $lp)
+    Start-Sleep -Milliseconds 50
+    [void][NodestormVerify.Native]::PostMessageW($rw, 0x0201, [IntPtr]1, $lp)
+    Start-Sleep -Milliseconds 50
+    [void][NodestormVerify.Native]::PostMessageW($rw, 0x0202, [IntPtr]::Zero, $lp)
+    Log "clicked point (client $cx,$cy)"
+}
+
+function Send-Key([IntPtr]$TopHwnd, [int]$VirtualKey) {
+    # WM_KEYDOWN/WM_KEYUP posted to the render widget — never the real
+    # keyboard, so a human typing elsewhere is unaffected.
+    $rw = Get-RenderWidget $TopHwnd
+    [void][NodestormVerify.Native]::PostMessageW($rw, 0x0100, [IntPtr]$VirtualKey, [IntPtr]::Zero)
+    Start-Sleep -Milliseconds 30
+    [void][NodestormVerify.Native]::PostMessageW($rw, 0x0101, [IntPtr]$VirtualKey, [IntPtr]::Zero)
+    Start-Sleep -Milliseconds 30
+}
+
+function Type-Text([IntPtr]$TopHwnd, [string]$Text) {
+    # One WM_CHAR per character to the focused element in the render widget.
+    $rw = Get-RenderWidget $TopHwnd
+    foreach ($ch in $Text.ToCharArray()) {
+        [void][NodestormVerify.Native]::PostMessageW($rw, 0x0102, [IntPtr][int]$ch, [IntPtr]::Zero)
+        Start-Sleep -Milliseconds 15
+    }
+    Log "typed '$Text'"
+}
+
 function Save-WindowPng([IntPtr]$TopHwnd, [string]$Path) {
     $r = New-Object NodestormVerify.Native+RECT
     [void][NodestormVerify.Native]::GetWindowRect($TopHwnd, [ref]$r)
@@ -208,6 +253,7 @@ function Wait-Tcp([int]$TcpPort, [int]$TimeoutSec = 60) {
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 Remove-Item $SessionFile -Force -ErrorAction SilentlyContinue
 Remove-Item $ExportFile -Force -ErrorAction SilentlyContinue
+Remove-Item $SessionsDir -Recurse -Force -ErrorAction SilentlyContinue
 
 if (-not $NoBuild) {
     Log 'cargo build (nodestorm + drive example)...'
@@ -225,7 +271,7 @@ $driveExe = Join-Path $RepoRoot 'target\debug\examples\drive.exe'
 if (-not (Test-Path $exe)) { Fail "$exe not built" }
 if (-not $DemoShot -and -not (Test-Path $driveExe)) { Fail "$driveExe not built" }
 
-$appArgs = @('--port', $Port, '--session', $SessionFile)
+$appArgs = @('--port', $Port, '--session', $SessionFile, '--sessions-dir', $SessionsDir)
 if ($DemoShot) { $appArgs += '--demo' }
 $appLog = Join-Path $OutDir 'nodestorm.log'
 Log "launching nodestorm on port $Port..."
@@ -300,18 +346,92 @@ try {
     }
     Log 'drive received both decisions (at-least-once, postgres)'
 
-    # Export: the topbar button writes the Markdown decision record next to
-    # the session file (topbar is never covered by the choice panel).
+    # ---- v0.3 user editing through the real controls ----
+
+    # Add a user component; the panel opens on it.
+    Click-Element $hwnd '+ Component'
+    if (-not (Wait-Element 'New component' 10)) { Fail 'user component did not appear' }
+
+    # Rename it via the panel's Edit form: open the form, focus the label
+    # input (just below the actions row — inputs have no reliable UIA name),
+    # clear, type, save.
+    if (-not (Wait-Element 'Edit' 10)) { Fail 'panel did not open with an Edit button' }
+    Click-Element $hwnd 'Edit'
+    Start-Sleep -Milliseconds 300
+    $editEl = Find-Element 'Edit'
+    if (-not $editEl) { Fail 'Edit button vanished after opening the form' }
+    $er = $editEl.Current.BoundingRectangle
+    Click-Point $hwnd ($er.X + $er.Width / 2) ($er.Y + $er.Height + 18)
+    Send-Key $hwnd 0x23   # VK_END
+    for ($i = 0; $i -lt 20; $i++) { Send-Key $hwnd 0x08 }   # Backspace × 20
+    Type-Text $hwnd 'Rate Limiter'
+    Click-Element $hwnd 'Save'
+    if (-not (Wait-Element 'Rate Limiter' 10)) { Fail 'rename did not land on the card' }
+    Log 'user component added and renamed'
+
+    # Connect it to an agent node via the panel's Connect flow.
+    if (-not (Wait-Element ('Connect ' + [char]0x2192) 5)) { Fail 'Connect button missing' }
+    Click-Element $hwnd ('Connect ' + [char]0x2192)
+    Click-Element $hwnd 'Webhook Dispatcher'
+    $connRow = 'Rate Limiter ' + [char]0x2014 + 'depends on' + [char]0x2192 + ' Webhook Dispatcher'
+    if (-not (Wait-Element $connRow 10)) { Fail "connection row missing: '$connRow'" }
+    Log 'user edge drawn via Connect flow'
+
+    # Soft-delete an agent-authored node: card gets status "removed".
+    Click-Element $hwnd ([string][char]0x2715)   # close the open panel first
+    Start-Sleep -Milliseconds 300
+    Click-Element $hwnd 'Delivery Store'
+    if (-not (Wait-Element 'Delete' 10)) { Fail 'panel Delete button missing' }
+    Click-Element $hwnd 'Delete'
+    # The status tag renders lowercase but CSS text-transform: uppercase
+    # changes the UIA-exposed name.
+    if (-not (Wait-Element 'REMOVED' 10)) { Fail 'agent node was not marked removed' }
+    Log 'agent node soft-removed (removal_requested queued)'
+    Save-WindowPng $hwnd (Join-Path $OutDir '03-edited.png')
+
+    # ---- v0.4 sessions + timeline through the real controls ----
+
+    # Create a second session, land in its empty state, switch back, and the
+    # original graph must return intact.
+    $SessionStem = [IO.Path]::GetFileNameWithoutExtension($SessionFile)
+    Click-Element $hwnd ($SessionStem + ' ' + [char]0x25BE)
+    if (-not (Wait-Element 'Create' 5)) { Fail 'sessions menu did not open' }
+    Click-Element $hwnd ('new session' + [char]0x2026)
+    Type-Text $hwnd 'scratch'
+    Click-Element $hwnd 'Create'
+    if (-not (Wait-Element 'Waiting for an agent to connect.' 10)) {
+        Fail 'created session did not become the active empty canvas'
+    }
+    Log 'created and switched to session "scratch"'
+    if (-not (Wait-Element ('scratch ' + [char]0x25BE) 10)) {
+        Fail 'switcher label did not update to the new active session'
+    }
+    Click-Element $hwnd ('scratch ' + [char]0x25BE)
+    if (-not (Wait-Element $SessionStem 5)) { Fail 'original session missing from the list' }
+    Click-Element $hwnd $SessionStem
+    if (-not (Wait-Element 'Webhook Dispatcher' 10)) { Fail 'original graph did not return after switching back' }
+    Log 'sessions: create/switch round-trip OK'
+
+    # Timeline: the session-log panel opens and is captured.
+    Click-Element $hwnd 'Timeline'
+    if (-not (Wait-Element 'Session timeline' 5)) { Fail 'timeline panel did not open' }
+    Save-WindowPng $hwnd (Join-Path $OutDir '04-sessions-timeline.png')
+    Click-Element $hwnd 'Timeline'
+
+    # Export via the menu: the record must include the user edits.
+    Click-Element $hwnd ('Export ' + [char]0x25BE)
+    if (-not (Wait-Element 'Copy Markdown' 5)) { Fail 'export menu did not open' }
     Click-Element $hwnd 'Export'
     $deadline = (Get-Date).AddSeconds(10)
     while ((Get-Date) -lt $deadline -and -not (Test-Path $ExportFile)) { Start-Sleep -Milliseconds 250 }
     if (-not (Test-Path $ExportFile)) { Fail "export file did not appear: $ExportFile" }
     $record = Get-Content $ExportFile -Raw
-    foreach ($needle in @('```mermaid', '# Add a webhook subsystem', 'At-least-once with retries')) {
+    foreach ($needle in @('```mermaid', '# Add a webhook subsystem', 'At-least-once with retries',
+            'Rate Limiter', 'Delivery Store', '## Session log')) {
         if ($record -notlike "*$needle*") { Fail "export record missing '$needle':`n$record" }
     }
-    Log "Export button wrote the decision record ($ExportFile)"
-    Write-Host 'PASS: full decision round-trip verified through the real GUI' -ForegroundColor Green
+    Log "Export menu wrote the decision record ($ExportFile)"
+    Write-Host 'PASS: decisions + user editing verified through the real GUI' -ForegroundColor Green
     Write-Host "artifacts: $OutDir"
     exit 0
 } finally {
@@ -319,4 +439,5 @@ try {
     if (-not $KeepOpen -and -not $app.HasExited) { Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue }
     Remove-Item $SessionFile -Force -ErrorAction SilentlyContinue
     Remove-Item $ExportFile -Force -ErrorAction SilentlyContinue
+    Remove-Item $SessionsDir -Recurse -Force -ErrorAction SilentlyContinue
 }

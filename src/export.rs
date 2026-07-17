@@ -103,9 +103,89 @@ pub fn render_markdown(
                 }
             }
         }
+        out.push('\n');
+    }
+
+    if !log.is_empty() {
+        out.push_str("## Session log\n\n");
+        for event in log {
+            let _ = writeln!(
+                out,
+                "- {} — {}",
+                event.at.format("%Y-%m-%d %H:%M"),
+                describe_event(doc, event)
+            );
+        }
     }
 
     out
+}
+
+/// One human-readable line for a decision event — shared by the exported
+/// `## Session log` section and the Timeline panel. Labels resolve through
+/// the doc best-effort (raw ids when an element has since vanished).
+pub(crate) fn describe_event(doc: &SessionDoc, event: &DecisionEvent) -> String {
+    match &event.kind {
+        DecisionKind::OptionSelected {
+            node_id,
+            choice_id,
+            option_id,
+            ..
+        } => {
+            let opt = doc
+                .node(node_id)
+                .and_then(|n| n.choice(choice_id))
+                .and_then(|c| c.options.iter().find(|o| &o.id == option_id))
+                .map_or_else(|| option_id.to_string(), |o| o.label.clone());
+            format!("picked “{opt}” for {}", node_label(doc, node_id))
+        }
+        DecisionKind::ChoiceDismissed {
+            node_id,
+            choice_id,
+            reason,
+        } => {
+            let prompt = doc
+                .node(node_id)
+                .and_then(|n| n.choice(choice_id))
+                .map_or_else(|| choice_id.to_string(), |c| c.prompt.clone());
+            match reason {
+                Some(r) => format!("dismissed “{prompt}” (reason: {r})"),
+                None => format!("dismissed “{prompt}”"),
+            }
+        }
+        DecisionKind::NoteAdded { node_id, text } => {
+            format!("note on {}: {text}", node_label(doc, node_id))
+        }
+        DecisionKind::FlushRequested { comment } => match comment {
+            Some(c) => format!("comment: “{c}”"),
+            None => "sent decisions to the agent".into(),
+        },
+        DecisionKind::NodeAdded { label, .. } => format!("added component “{label}”"),
+        DecisionKind::NodeEdited { label, .. } => format!("edited “{label}”"),
+        DecisionKind::NodeDeleted { node_id } => format!("deleted component {node_id}"),
+        DecisionKind::RemovalRequested { node_id } => {
+            format!("asked to remove “{}”", node_label(doc, node_id))
+        }
+        DecisionKind::EdgeAdded { from, to, .. } => {
+            format!(
+                "connected {} → {}",
+                node_label(doc, from),
+                node_label(doc, to)
+            )
+        }
+        DecisionKind::EdgeDeleted { from, to, .. } => {
+            format!(
+                "removed the edge {} → {}",
+                node_label(doc, from),
+                node_label(doc, to)
+            )
+        }
+    }
+}
+
+fn node_label(doc: &SessionDoc, id: &NodeId) -> String {
+    doc.node(id)
+        .map_or_else(|| id.to_string(), |n| n.label.clone())
 }
 
 /// `### Components`, grouped under `####` sub-headers when any node carries a
@@ -582,7 +662,7 @@ fn escape_edge_label(label: &str) -> String {
 mod tests {
     use super::*;
     use crate::demo::demo_doc;
-    use crate::model::{Edge, EdgeKind, ElementStatus, Node, NodeId, NodeKind, SessionDoc};
+    use crate::model::{Edge, EdgeKind, ElementStatus, Node, NodeId, NodeKind, Origin, SessionDoc};
 
     fn tnode(id: &str, label: &str) -> Node {
         Node {
@@ -595,6 +675,7 @@ mod tests {
             choices: vec![],
             notes: vec![],
             position: None,
+            origin: Origin::Agent,
         }
     }
 
@@ -605,6 +686,7 @@ mod tests {
             kind,
             label: None,
             status,
+            origin: Origin::Agent,
         }
     }
 
@@ -1024,6 +1106,54 @@ mod tests {
             md.contains("  - note (2026-07-17): Must keep working offline"),
             "in: {md}"
         );
+    }
+
+    #[test]
+    fn markdown_session_log_section() {
+        let (doc, mut log) = decided_demo();
+        log.push(DecisionEvent {
+            seq: 3,
+            at: ts(),
+            kind: DecisionKind::FlushRequested {
+                comment: Some("looks good, proceed".into()),
+            },
+        });
+        log.push(DecisionEvent {
+            seq: 4,
+            at: ts(),
+            kind: DecisionKind::NodeAdded {
+                node_id: "rate-limiter".into(),
+                label: "Rate Limiter".into(),
+                node_kind: NodeKind::Component,
+            },
+        });
+        let md = render_markdown(&doc, &log, ts());
+        let log_at = md.find("## Session log").expect("session log section");
+        let tail = &md[log_at..];
+        for (i, line) in [
+            "- 2026-07-17 12:30 — picked “CRDTs” for Sync Engine",
+            "- 2026-07-17 12:30 — dismissed “Where should websocket connections terminate?” (reason: out of scope for v1)",
+            "- 2026-07-17 12:30 — comment: “looks good, proceed”",
+            "- 2026-07-17 12:30 — added component “Rate Limiter”",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let pos = tail.find(line);
+            assert!(pos.is_some(), "line {i} missing: {line}\nin: {tail}");
+        }
+        // Chronological (seq) order within the section.
+        let picked = tail.find("picked").unwrap();
+        let dismissed = tail.find("dismissed").unwrap();
+        let comment = tail.find("comment:").unwrap();
+        let added = tail.find("added component").unwrap();
+        assert!(picked < dismissed && dismissed < comment && comment < added);
+    }
+
+    #[test]
+    fn markdown_no_log_no_session_log_section() {
+        let md = render_markdown(&demo_doc(), &[], ts());
+        assert!(!md.contains("## Session log"), "in: {md}");
     }
 
     #[test]
