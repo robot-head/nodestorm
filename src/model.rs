@@ -530,6 +530,42 @@ pub enum DecisionKind {
         #[serde(default)]
         comment: Option<String>,
     },
+    /// The user created a node on the canvas. Enriching it via upsert adopts
+    /// it — from then on the agent carries it forward like its own nodes.
+    /// (Field is `node_kind`, not `kind`: the envelope's tag owns that name.)
+    NodeAdded {
+        node_id: NodeId,
+        label: String,
+        node_kind: NodeKind,
+    },
+    /// The user edited a card. Treat the new content as canonical.
+    NodeEdited {
+        node_id: NodeId,
+        label: String,
+        node_kind: NodeKind,
+        description: String,
+    },
+    /// The user hard-deleted a node they created (its edges went with it).
+    NodeDeleted {
+        node_id: NodeId,
+    },
+    /// The user marked an agent-authored node `removed`. Apply the real
+    /// removal via `update_graph` (or push back with reasons).
+    RemovalRequested {
+        node_id: NodeId,
+    },
+    /// The user drew an edge.
+    EdgeAdded {
+        from: NodeId,
+        to: NodeId,
+        edge_kind: EdgeKind,
+    },
+    /// The user deleted an edge (any origin — edges always hard-delete).
+    EdgeDeleted {
+        from: NodeId,
+        to: NodeId,
+        edge_kind: EdgeKind,
+    },
 }
 
 /// Entry in the UI activity feed.
@@ -647,6 +683,77 @@ mod tests {
         );
         let back: Node = serde_json::from_str(&out).unwrap();
         assert_eq!(back.origin, Origin::User);
+    }
+
+    #[test]
+    fn editing_event_wire_tags() {
+        let at = Utc::now();
+        let events = vec![
+            DecisionEvent {
+                seq: 1,
+                at,
+                kind: DecisionKind::NodeAdded {
+                    node_id: "rate-limiter".into(),
+                    label: "Rate Limiter".into(),
+                    node_kind: NodeKind::Component,
+                },
+            },
+            DecisionEvent {
+                seq: 2,
+                at,
+                kind: DecisionKind::NodeEdited {
+                    node_id: "rate-limiter".into(),
+                    label: "Rate Limiter v2".into(),
+                    node_kind: NodeKind::Service,
+                    description: "throttles".into(),
+                },
+            },
+            DecisionEvent {
+                seq: 3,
+                at,
+                kind: DecisionKind::NodeDeleted {
+                    node_id: "rate-limiter".into(),
+                },
+            },
+            DecisionEvent {
+                seq: 4,
+                at,
+                kind: DecisionKind::RemovalRequested {
+                    node_id: "api".into(),
+                },
+            },
+            DecisionEvent {
+                seq: 5,
+                at,
+                kind: DecisionKind::EdgeAdded {
+                    from: "a".into(),
+                    to: "b".into(),
+                    edge_kind: EdgeKind::DataFlow,
+                },
+            },
+            DecisionEvent {
+                seq: 6,
+                at,
+                kind: DecisionKind::EdgeDeleted {
+                    from: "a".into(),
+                    to: "b".into(),
+                    edge_kind: EdgeKind::DataFlow,
+                },
+            },
+        ];
+        let json = serde_json::to_string(&events).unwrap();
+        for tag in [
+            r#""kind":"node_added""#,
+            r#""kind":"node_edited""#,
+            r#""kind":"node_deleted""#,
+            r#""kind":"removal_requested""#,
+            r#""kind":"edge_added""#,
+            r#""kind":"edge_deleted""#,
+        ] {
+            assert!(json.contains(tag), "missing {tag} in: {json}");
+        }
+        let back: Vec<DecisionEvent> = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, events, "round-trip");
     }
 
     #[test]
