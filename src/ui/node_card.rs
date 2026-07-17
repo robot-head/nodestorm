@@ -49,6 +49,8 @@ pub fn NodeCard(
     highlighted: bool,
     on_select: EventHandler<MouseEvent>,
     on_drag_start: EventHandler<MouseEvent>,
+    search_hit: bool,
+    search_dim: bool,
     on_connect_start: EventHandler<MouseEvent>,
     on_connect_drop: EventHandler<MouseEvent>,
     on_context: EventHandler<MouseEvent>,
@@ -60,10 +62,12 @@ pub fn NodeCard(
     let status = status_class(node.status);
     let sel = if selected { " selected" } else { "" };
     let hl = if highlighted { " ripple" } else { "" };
+    let hit = if search_hit { " search-hit" } else { "" };
+    let dim = if search_dim { " search-dim" } else { "" };
 
     rsx! {
         div {
-            class: "node-card status-{status}{sel}{hl}",
+            class: "node-card status-{status}{sel}{hl}{hit}{dim}",
             style: "left: {rect.x}px; top: {rect.y}px; width: {rect.w}px;",
             onclick: move |ev| {
                 ev.stop_propagation();

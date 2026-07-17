@@ -55,7 +55,9 @@ pub fn Canvas(
     let store = use_store();
     let mut transform = use_signal(|| ViewTransform::fit(&layout.read().bounds, VIEW_W, VIEW_H));
     let mut gesture: Signal<GestureState> = use_signal(GestureState::default);
-    let mut connect_from = use_context::<Signal<Option<NodeId>>>();
+    let mut connect_from = use_context::<super::ConnectFrom>().0;
+    let mut zoom_target = use_context::<super::ZoomTarget>().0;
+    let search = use_context::<super::SearchQuery>().0;
     // Cursor position (plane coords) while a connect drag is live.
     let mut ghost_to: Signal<Option<(f64, f64)>> = use_signal(|| None);
     // Open right-click menu: (client_x, client_y, target).
@@ -74,6 +76,16 @@ pub fn Canvas(
             t.ty = VIEW_H / 2.0 - (rect.y + rect.h / 2.0) * t.scale;
         });
     };
+    // One-shot zoom requests (search Enter-cycling).
+    use_effect(move || {
+        if let Some(id) = zoom_target() {
+            let rect = layout.read().rects.get(&id).copied();
+            if let Some(rect) = rect {
+                zoom_to(rect);
+            }
+            zoom_target.set(None);
+        }
+    });
 
     // When the agent moves the focus, pan so that node is centered.
     let mut last_focus = use_signal(|| doc.read().focus.clone());
@@ -236,6 +248,9 @@ pub fn Canvas(
                             rect: *rect,
                             selected: selected() == Some(node.id.clone()),
                             highlighted: hovered_affects.read().contains(&node.id),
+                            search_hit: super::node_matches(node, &search.read()),
+                            search_dim: !search.read().trim().is_empty()
+                                && !super::node_matches(node, &search.read()),
                             on_select: {
                                 let id = node.id.clone();
                                 let store = store.clone();

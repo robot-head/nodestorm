@@ -30,10 +30,44 @@ pub fn TopBar(
     };
     let can_send = m.undelivered > 0 || m.waiting_agents > 0;
 
+    let mut search = use_context::<super::SearchQuery>().0;
+    let mut zoom_target = use_context::<super::ZoomTarget>().0;
+    let mut search_cursor = use_signal(|| 0usize);
+
     rsx! {
         header { class: "topbar",
             span { class: "topbar-brand", "nodestorm" }
             span { class: "topbar-title", "{title}" }
+            input {
+                class: "search-box",
+                placeholder: "search components…",
+                value: "{search}",
+                oninput: move |ev| {
+                    search.set(ev.value());
+                    search_cursor.set(0);
+                },
+                onkeydown: move |ev| {
+                    if ev.key() == Key::Enter {
+                        // Cycle through matches in document order, zooming to
+                        // each.
+                        let matches: Vec<_> = doc
+                            .read()
+                            .nodes
+                            .iter()
+                            .filter(|n| crate::ui::node_matches(n, &search.read()))
+                            .map(|n| n.id.clone())
+                            .collect();
+                        if !matches.is_empty() {
+                            let i = search_cursor() % matches.len();
+                            zoom_target.set(Some(matches[i].clone()));
+                            search_cursor.set(i + 1);
+                        }
+                    } else if ev.key() == Key::Escape {
+                        search.set(String::new());
+                        search_cursor.set(0);
+                    }
+                },
+            }
             span { class: "topbar-spacer" }
             if m.waiting_agents > 0 {
                 span { class: "pill pill-waiting", "● agent is waiting for your decisions" }
