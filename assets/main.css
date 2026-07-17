@@ -622,6 +622,26 @@ body {
   color: var(--status-removed) !important;
 }
 
+/* ---------- timeline panel ---------- */
+
+.timeline-row {
+  display: flex;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+
+.timeline-time {
+  color: var(--text-dim);
+  min-width: 38px;
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline-text {
+  flex: 1;
+}
+
 /* ---------- minimap ---------- */
 
 .minimap {

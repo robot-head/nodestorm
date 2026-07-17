@@ -8,6 +8,7 @@ mod context_menu;
 mod edge_layer;
 mod minimap;
 mod node_card;
+mod timeline;
 mod topbar;
 
 /// Nominal viewport for zoom math (the topbar is 48px tall).

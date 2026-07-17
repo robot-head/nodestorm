@@ -45,6 +45,7 @@ pub fn TopBar(
     meta: Signal<UiMeta>,
     selected: Signal<Option<NodeId>>,
     session_name: Signal<String>,
+    timeline_open: Signal<bool>,
 ) -> Element {
     let store = use_store();
     let cli = use_context::<Cli>();
@@ -205,6 +206,19 @@ pub fn TopBar(
             }
             if m.undelivered > 0 {
                 span { class: "pill pill-undelivered", "{m.undelivered} to send" }
+            }
+            button {
+                class: if timeline_open() { "btn btn-armed" } else { "btn" },
+                title: "Show the session log: every decision, note, and edit in order",
+                onclick: {
+                    let mut selected = selected;
+                    let mut timeline_open = timeline_open;
+                    move |_| {
+                        selected.set(None);
+                        timeline_open.toggle();
+                    }
+                },
+                "Timeline"
             }
             button {
                 class: "btn",
