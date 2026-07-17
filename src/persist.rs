@@ -70,6 +70,11 @@ pub fn export_path(session_path: &Path) -> PathBuf {
     session_path.with_extension("export.md")
 }
 
+/// Where a mermaid-only export lands: `session.json` → `session.mermaid.md`.
+pub fn mermaid_export_path(session_path: &Path) -> PathBuf {
+    session_path.with_extension("mermaid.md")
+}
+
 /// Atomically write an exported Markdown record; overwriting an earlier
 /// export is intentional and idempotent.
 pub fn save_export(path: &Path, markdown: &str) -> anyhow::Result<()> {
@@ -131,6 +136,14 @@ mod tests {
     #[test]
     fn missing_file_is_none() {
         assert!(load(Path::new("/definitely/not/here.json")).is_none());
+    }
+
+    #[test]
+    fn mermaid_export_path_maps() {
+        assert_eq!(
+            mermaid_export_path(Path::new("/data/session.json")),
+            PathBuf::from("/data/session.mermaid.md")
+        );
     }
 
     #[test]
