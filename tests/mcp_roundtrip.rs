@@ -83,6 +83,7 @@ async fn full_decision_roundtrip() {
         "get_state",
         "clear_session",
         "export_markdown",
+        "list_sessions",
     ] {
         assert!(
             names.contains(&expected),
@@ -368,6 +369,165 @@ async fn invalid_propose_returns_actionable_error() {
         msg.contains("unknown node `ghost`"),
         "error should name the bad edge target: {msg}"
     );
+
+    client.cancel().await.expect("client shutdown");
+}
+
+#[tokio::test]
+async fn sessions_route_and_await_concurrently() {
+    let store = Store::new(SessionState::default());
+    let (port, _shutdown, sessions) = start_server(store.clone()).await;
+
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(format!("http://127.0.0.1:{port}/mcp")),
+    );
+    let client = ClientInfo::default()
+        .serve(transport)
+        .await
+        .expect("mcp handshake");
+
+    // propose_graph with a session name auto-creates that session.
+    let mut alpha_args = propose_args();
+    alpha_args["session"] = json!("alpha");
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("propose_graph")
+                .with_arguments(alpha_args.as_object().cloned().unwrap_or_default()),
+        )
+        .await
+        .expect("propose alpha");
+    let summary = tool_json(&result);
+    assert_eq!(summary["session"], "alpha", "{summary:#}");
+
+    let mut beta_args = propose_args();
+    beta_args["title"] = json!("beta graph");
+    beta_args["session"] = json!("beta");
+    client
+        .call_tool(
+            CallToolRequestParams::new("propose_graph")
+                .with_arguments(beta_args.as_object().cloned().unwrap_or_default()),
+        )
+        .await
+        .expect("propose beta");
+
+    // list_sessions sees all three, with per-session summaries.
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("list_sessions")
+                .with_arguments(json!({}).as_object().cloned().unwrap_or_default()),
+        )
+        .await
+        .expect("list_sessions");
+    let listing = tool_json(&result);
+    let names: Vec<&str> = listing["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"default"), "{listing:#}");
+    assert!(names.contains(&"alpha"), "{listing:#}");
+    assert!(names.contains(&"beta"), "{listing:#}");
+    let alpha_info = listing["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "alpha")
+        .unwrap();
+    assert_eq!(alpha_info["node_count"], 2);
+    assert_eq!(listing["active"], "default");
+
+    // Two agents block on two different sessions at once; each delivery
+    // stays inside its own session.
+    tokio::spawn({
+        let sessions = sessions.clone();
+        async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            sessions
+                .get("alpha")
+                .unwrap()
+                .select_option(
+                    &NodeId::from("cache"),
+                    &ChoiceId::from("engine"),
+                    &OptionId::from("redis"),
+                    vec![OptionId::from("memcached"), OptionId::from("redis")],
+                )
+                .expect("alpha select");
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            sessions
+                .get("beta")
+                .unwrap()
+                .select_option(
+                    &NodeId::from("cache"),
+                    &ChoiceId::from("engine"),
+                    &OptionId::from("redis"),
+                    vec![OptionId::from("redis")],
+                )
+                .expect("beta select");
+        }
+    });
+
+    let alpha_await = client.call_tool(
+        CallToolRequestParams::new("await_decisions").with_arguments(
+            json!({"timeout_seconds": 10, "session": "alpha"})
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+        ),
+    );
+    let beta_await = client.call_tool(
+        CallToolRequestParams::new("await_decisions").with_arguments(
+            json!({"timeout_seconds": 10, "session": "beta"})
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+        ),
+    );
+    let (alpha_out, beta_out) = tokio::join!(alpha_await, beta_await);
+    let alpha_out = tool_json(&alpha_out.expect("alpha await"));
+    let beta_out = tool_json(&beta_out.expect("beta await"));
+    assert_eq!(alpha_out["status"], "delivered", "{alpha_out:#}");
+    assert_eq!(beta_out["status"], "delivered", "{beta_out:#}");
+    let alpha_decisions = alpha_out["decisions"].as_array().unwrap();
+    let beta_decisions = beta_out["decisions"].as_array().unwrap();
+    assert_eq!(alpha_decisions.len(), 1, "no cross-session leakage");
+    assert_eq!(beta_decisions.len(), 1, "no cross-session leakage");
+    assert_eq!(
+        alpha_decisions[0]["considered"],
+        json!(["memcached", "redis"])
+    );
+    assert_eq!(beta_decisions[0]["considered"], json!(["redis"]));
+
+    // get_state is per-session and names the session it describes.
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("get_state").with_arguments(
+                json!({"session": "beta"})
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
+        )
+        .await
+        .expect("get_state beta");
+    let state = tool_json(&result);
+    assert_eq!(state["session"], "beta");
+    assert_eq!(state["doc"]["title"], "beta graph");
+
+    // Unknown sessions error and name what exists.
+    let err = client
+        .call_tool(
+            CallToolRequestParams::new("update_graph").with_arguments(
+                json!({"ops": [], "session": "ghost"})
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
+        )
+        .await;
+    let msg = format!("{err:?}");
+    assert!(msg.contains("unknown session"), "{msg}");
+    assert!(msg.contains("available"), "{msg}");
 
     client.cancel().await.expect("client shutdown");
 }

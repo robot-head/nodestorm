@@ -201,18 +201,26 @@ impl Sessions {
     /// `None` → the active session; `Some(name)` → that session (slugified
     /// lookup), or an error naming the available sessions.
     pub fn resolve(&self, name: Option<&str>) -> Result<Arc<Store>, String> {
+        self.resolve_named(name).map(|(_, store)| store)
+    }
+
+    /// Like [`Sessions::resolve`], but also returns the canonical slug of
+    /// the session that was resolved (for tool results).
+    pub fn resolve_named(&self, name: Option<&str>) -> Result<(String, Arc<Store>), String> {
+        let inner = self.lock();
         match name {
-            None => Ok(self.active_store()),
-            Some(n) => self.get(n).ok_or_else(|| {
-                let available = self
-                    .lock()
+            None => Ok((inner.active.clone(), inner.map[&inner.active].store.clone())),
+            Some(n) => {
+                let slug = slugify(n);
+                inner
                     .map
-                    .keys()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("unknown session `{n}`; available: {available}")
-            }),
+                    .get(&slug)
+                    .map(|e| (slug, e.store.clone()))
+                    .ok_or_else(|| {
+                        let available = inner.map.keys().cloned().collect::<Vec<_>>().join(", ");
+                        format!("unknown session `{n}`; available: {available}")
+                    })
+            }
         }
     }
 
