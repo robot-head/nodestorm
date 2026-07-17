@@ -575,6 +575,11 @@ body {
 
 .sessions-dropdown {
   min-width: 230px;
+  /* The sessions menu sits near the window's LEFT edge; right-anchoring
+     (the Export menu's default) would push it off-window for short session
+     names. */
+  left: 0;
+  right: auto;
 }
 
 .session-row {

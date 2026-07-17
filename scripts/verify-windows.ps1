@@ -34,6 +34,9 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 if (-not $OutDir) { $OutDir = Join-Path $RepoRoot 'target\verify' }
 $SessionFile = Join-Path $env:TEMP "nodestorm-verify-session-$Port.json"
 $ExportFile = $SessionFile -replace '\.json$', '.export.md'
+# Isolated named-sessions dir: without this, created sessions land in the
+# user's real data dir and dedup renames break re-runs.
+$SessionsDir = Join-Path $env:TEMP "nodestorm-verify-sessions-$Port"
 
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName UIAutomationClient
@@ -250,6 +253,7 @@ function Wait-Tcp([int]$TcpPort, [int]$TimeoutSec = 60) {
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 Remove-Item $SessionFile -Force -ErrorAction SilentlyContinue
 Remove-Item $ExportFile -Force -ErrorAction SilentlyContinue
+Remove-Item $SessionsDir -Recurse -Force -ErrorAction SilentlyContinue
 
 if (-not $NoBuild) {
     Log 'cargo build (nodestorm + drive example)...'
@@ -267,7 +271,7 @@ $driveExe = Join-Path $RepoRoot 'target\debug\examples\drive.exe'
 if (-not (Test-Path $exe)) { Fail "$exe not built" }
 if (-not $DemoShot -and -not (Test-Path $driveExe)) { Fail "$driveExe not built" }
 
-$appArgs = @('--port', $Port, '--session', $SessionFile)
+$appArgs = @('--port', $Port, '--session', $SessionFile, '--sessions-dir', $SessionsDir)
 if ($DemoShot) { $appArgs += '--demo' }
 $appLog = Join-Path $OutDir 'nodestorm.log'
 Log "launching nodestorm on port $Port..."
@@ -399,6 +403,9 @@ try {
         Fail 'created session did not become the active empty canvas'
     }
     Log 'created and switched to session "scratch"'
+    if (-not (Wait-Element ('scratch ' + [char]0x25BE) 10)) {
+        Fail 'switcher label did not update to the new active session'
+    }
     Click-Element $hwnd ('scratch ' + [char]0x25BE)
     if (-not (Wait-Element $SessionStem 5)) { Fail 'original session missing from the list' }
     Click-Element $hwnd $SessionStem
@@ -432,4 +439,5 @@ try {
     if (-not $KeepOpen -and -not $app.HasExited) { Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue }
     Remove-Item $SessionFile -Force -ErrorAction SilentlyContinue
     Remove-Item $ExportFile -Force -ErrorAction SilentlyContinue
+    Remove-Item $SessionsDir -Recurse -Force -ErrorAction SilentlyContinue
 }
