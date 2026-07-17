@@ -14,8 +14,9 @@ use chrono::Utc;
 use tokio::sync::watch;
 
 use crate::model::{
-    ActivityEntry, ActivityOrigin, ChoiceId, ChoiceStatus, DecisionEvent, DecisionKind, GraphOp,
-    Node, NodeId, Note, NoteId, OptionId, Origin, Point, SessionDoc,
+    ActivityEntry, ActivityOrigin, ChoiceId, ChoiceStatus, DecisionEvent, DecisionKind, Edge,
+    EdgeKind, ElementStatus, GraphOp, Node, NodeId, NodeKind, Note, NoteId, OptionId, Origin,
+    Point, SessionDoc,
 };
 
 const ACTIVITY_CAP: usize = 200;
@@ -34,6 +35,12 @@ pub enum StoreError {
     },
     #[error("document rejected: {}", errors.join("; "))]
     Invalid { errors: Vec<String> },
+    #[error("edge {0} -> {1} of that kind already exists")]
+    DuplicateEdge(NodeId, NodeId),
+    #[error("an edge cannot connect a node to itself")]
+    SelfLoop,
+    #[error("no edge {0} -> {1} of that kind")]
+    UnknownEdge(NodeId, NodeId),
 }
 
 /// Full session state guarded by the store mutex.
@@ -276,6 +283,222 @@ impl Store {
     /// Post an agent-authored message to the activity feed.
     pub fn announce(&self, message: String) {
         self.mutate(|s| push_activity(s, ActivityOrigin::Agent, message));
+    }
+
+    // ---------- user graph editing (called from the UI) ----------
+    //
+    // Each mutation records a decision event that rides along with the next
+    // Send/flush — editing never autoflushes (unlike deciding the last open
+    // choice), so the user batches edits with their decisions.
+
+    /// Create a user-authored node. The id is a slug of the label, suffixed
+    /// `-2`, `-3`… on collision. `position: None` lets auto-layout place it.
+    pub fn add_user_node(
+        &self,
+        label: String,
+        kind: NodeKind,
+        position: Option<Point>,
+    ) -> Result<NodeId, StoreError> {
+        self.mutate(|s| {
+            let base = slugify(&label);
+            let mut candidate = base.clone();
+            let mut n = 2;
+            while s.doc.node(&NodeId::new(candidate.clone())).is_some() {
+                candidate = format!("{base}-{n}");
+                n += 1;
+            }
+            let id = NodeId::new(candidate);
+            s.doc.nodes.push(Node {
+                id: id.clone(),
+                label: label.clone(),
+                kind,
+                description: String::new(),
+                status: ElementStatus::Proposed,
+                group: None,
+                choices: vec![],
+                notes: vec![],
+                position,
+                origin: Origin::User,
+            });
+            push_event(
+                s,
+                DecisionKind::NodeAdded {
+                    node_id: id.clone(),
+                    label: label.clone(),
+                    node_kind: kind,
+                },
+            );
+            push_activity(
+                s,
+                ActivityOrigin::User,
+                format!("added component \u{201c}{label}\u{201d}"),
+            );
+            Ok(id)
+        })
+    }
+
+    /// Edit a card's content. Allowed on any node; on agent-authored nodes
+    /// the `node_edited` event tells the agent to treat the new content as
+    /// canonical (its next upsert should carry it forward).
+    pub fn edit_node(
+        &self,
+        id: &NodeId,
+        label: String,
+        kind: NodeKind,
+        description: String,
+    ) -> Result<(), StoreError> {
+        self.mutate(|s| {
+            let n = s
+                .doc
+                .node_mut(id)
+                .ok_or_else(|| StoreError::UnknownNode(id.clone()))?;
+            n.label = label.clone();
+            n.kind = kind;
+            n.description = description.clone();
+            push_event(
+                s,
+                DecisionKind::NodeEdited {
+                    node_id: id.clone(),
+                    label: label.clone(),
+                    node_kind: kind,
+                    description,
+                },
+            );
+            push_activity(
+                s,
+                ActivityOrigin::User,
+                format!("edited \u{201c}{label}\u{201d}"),
+            );
+            Ok(())
+        })
+    }
+
+    /// Delete a node. User-authored nodes hard-delete (with their incident
+    /// edges) and emit `node_deleted`; agent-authored nodes are only marked
+    /// `removed` and emit `removal_requested` — the agent applies the real
+    /// removal via `update_graph` (or pushes back). Idempotent on
+    /// already-marked agent nodes.
+    pub fn delete_node(&self, id: &NodeId) -> Result<(), StoreError> {
+        self.mutate(|s| {
+            let node = s
+                .doc
+                .node(id)
+                .ok_or_else(|| StoreError::UnknownNode(id.clone()))?;
+            let label = node.label.clone();
+            match node.origin {
+                Origin::User => {
+                    s.doc.nodes.retain(|n| &n.id != id);
+                    s.doc.edges.retain(|e| &e.from != id && &e.to != id);
+                    push_event(
+                        s,
+                        DecisionKind::NodeDeleted {
+                            node_id: id.clone(),
+                        },
+                    );
+                    push_activity(
+                        s,
+                        ActivityOrigin::User,
+                        format!("deleted \u{201c}{label}\u{201d}"),
+                    );
+                }
+                Origin::Agent => {
+                    let n = s.doc.node_mut(id).expect("existence checked above");
+                    if n.status == ElementStatus::Removed {
+                        return Ok(());
+                    }
+                    n.status = ElementStatus::Removed;
+                    push_event(
+                        s,
+                        DecisionKind::RemovalRequested {
+                            node_id: id.clone(),
+                        },
+                    );
+                    push_activity(
+                        s,
+                        ActivityOrigin::User,
+                        format!("asked the agent to remove \u{201c}{label}\u{201d}"),
+                    );
+                }
+            }
+            Ok(())
+        })
+    }
+
+    /// Draw a user edge. Rejects self-loops, dangling endpoints, and
+    /// duplicate `(from, to, kind)` keys.
+    pub fn add_user_edge(
+        &self,
+        from: &NodeId,
+        to: &NodeId,
+        kind: EdgeKind,
+    ) -> Result<(), StoreError> {
+        self.mutate(|s| {
+            if from == to {
+                return Err(StoreError::SelfLoop);
+            }
+            if s.doc.node(from).is_none() {
+                return Err(StoreError::UnknownNode(from.clone()));
+            }
+            if s.doc.node(to).is_none() {
+                return Err(StoreError::UnknownNode(to.clone()));
+            }
+            if s.doc.edges.iter().any(|e| e.key() == (from, to, kind)) {
+                return Err(StoreError::DuplicateEdge(from.clone(), to.clone()));
+            }
+            s.doc.edges.push(Edge {
+                from: from.clone(),
+                to: to.clone(),
+                kind,
+                label: None,
+                status: ElementStatus::Proposed,
+                origin: Origin::User,
+            });
+            push_event(
+                s,
+                DecisionKind::EdgeAdded {
+                    from: from.clone(),
+                    to: to.clone(),
+                    edge_kind: kind,
+                },
+            );
+            push_activity(
+                s,
+                ActivityOrigin::User,
+                format!("connected {from} \u{2192} {to}"),
+            );
+            Ok(())
+        })
+    }
+
+    /// Delete an edge of any origin — edges always hard-delete (they carry
+    /// no choices or notes; the agent re-adds if it disagrees).
+    pub fn delete_edge(
+        &self,
+        from: &NodeId,
+        to: &NodeId,
+        kind: EdgeKind,
+    ) -> Result<(), StoreError> {
+        self.mutate(|s| {
+            let before = s.doc.edges.len();
+            s.doc.edges.retain(|e| e.key() != (from, to, kind));
+            if s.doc.edges.len() == before {
+                return Err(StoreError::UnknownEdge(from.clone(), to.clone()));
+            }
+            push_event(
+                s,
+                DecisionKind::EdgeDeleted {
+                    from: from.clone(),
+                    to: to.clone(),
+                    edge_kind: kind,
+                },
+            );
+            push_activity(
+                s,
+                ActivityOrigin::User,
+                format!("removed the edge {from} \u{2192} {to}"),
+            );
+            Ok(())
+        })
     }
 
     /// Record a completed UI export in the activity feed — the feed entry is
@@ -546,6 +769,29 @@ fn summary(s: &SessionState, warnings: Vec<String>) -> UpdateSummary {
     }
 }
 
+/// Slug for a user-created node id: lowercase ASCII alphanumeric runs
+/// joined by `-`; anything else separates. Empty input → `"component"`.
+fn slugify(label: &str) -> String {
+    let mut out = String::new();
+    let mut pending_sep = false;
+    for c in label.to_lowercase().chars() {
+        if c.is_ascii_alphanumeric() {
+            if pending_sep && !out.is_empty() {
+                out.push('-');
+            }
+            pending_sep = false;
+            out.push(c);
+        } else {
+            pending_sep = true;
+        }
+    }
+    if out.is_empty() {
+        "component".into()
+    } else {
+        out
+    }
+}
+
 fn placeholder_node() -> Node {
     Node {
         id: NodeId::new(""),
@@ -758,6 +1004,248 @@ mod tests {
             summary.warnings.iter().any(|w| w.contains("user edge")),
             "warnings: {:?}",
             summary.warnings
+        );
+    }
+
+    #[test]
+    fn slugify_cases() {
+        assert_eq!(slugify("My Cache!"), "my-cache");
+        assert_eq!(slugify("  "), "component");
+        assert_eq!(slugify("Ünïcode Näme"), "n-code-n-me");
+        assert_eq!(slugify("API Gateway 2"), "api-gateway-2");
+    }
+
+    #[test]
+    fn add_user_node_slugs_and_dedups() {
+        use crate::model::{ElementStatus, NodeKind, Origin, Point};
+        let store = demo_store();
+        let flush_before = store.read(|s| s.flush_seq);
+
+        let id = store
+            .add_user_node(
+                "My Cache".into(),
+                NodeKind::DataStore,
+                Some(Point { x: 10.0, y: 20.0 }),
+            )
+            .unwrap();
+        assert_eq!(id.as_str(), "my-cache");
+        let id2 = store
+            .add_user_node("My Cache".into(), NodeKind::DataStore, None)
+            .unwrap();
+        assert_eq!(id2.as_str(), "my-cache-2", "id collision suffixed");
+
+        let doc = store.snapshot_doc();
+        let n = doc.node(&id).unwrap();
+        assert_eq!(n.origin, Origin::User);
+        assert_eq!(n.status, ElementStatus::Proposed);
+        assert_eq!(n.kind, NodeKind::DataStore);
+        assert_eq!(n.label, "My Cache");
+        assert_eq!(n.position, Some(Point { x: 10.0, y: 20.0 }));
+
+        let log = store.read(|s| s.decision_log.clone());
+        assert!(
+            matches!(
+                &log.last().unwrap().kind,
+                DecisionKind::NodeAdded { node_id, label, node_kind }
+                    if node_id == &id2 && label == "My Cache" && *node_kind == NodeKind::DataStore
+            ),
+            "last event: {:?}",
+            log.last()
+        );
+        assert_eq!(
+            store.read(|s| s.flush_seq),
+            flush_before,
+            "editing never autoflushes"
+        );
+        assert!(
+            store
+                .snapshot_meta()
+                .activity
+                .last()
+                .unwrap()
+                .text
+                .contains("My Cache"),
+            "activity entry present"
+        );
+    }
+
+    #[test]
+    fn edit_node_updates_and_events() {
+        use crate::model::NodeKind;
+        let store = demo_store();
+        store
+            .edit_node(
+                &NodeId::from("redis"),
+                "Redis Cluster".into(),
+                NodeKind::DataStore,
+                "now clustered".into(),
+            )
+            .unwrap();
+        let doc = store.snapshot_doc();
+        let n = doc.node(&NodeId::from("redis")).unwrap();
+        assert_eq!(n.label, "Redis Cluster");
+        assert_eq!(n.description, "now clustered");
+
+        let log = store.read(|s| s.decision_log.clone());
+        assert!(matches!(
+            &log.last().unwrap().kind,
+            DecisionKind::NodeEdited { node_id, label, description, .. }
+                if node_id.as_str() == "redis" && label == "Redis Cluster" && description == "now clustered"
+        ));
+        assert!(
+            store
+                .edit_node(
+                    &NodeId::from("ghost"),
+                    "x".into(),
+                    NodeKind::Component,
+                    String::new()
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn delete_node_matrix() {
+        use crate::model::ElementStatus;
+        let mut doc = demo_doc();
+        doc.nodes.push(user_node("mine"));
+        doc.edges.push(user_edge("mine", "postgres"));
+        let store = Store::with_doc(doc);
+
+        // User-origin: hard delete, incident edges included.
+        store.delete_node(&NodeId::from("mine")).unwrap();
+        let doc = store.snapshot_doc();
+        assert!(doc.node(&NodeId::from("mine")).is_none());
+        assert!(
+            !doc.edges
+                .iter()
+                .any(|e| e.from.as_str() == "mine" || e.to.as_str() == "mine")
+        );
+        let log = store.read(|s| s.decision_log.clone());
+        assert!(matches!(
+            &log.last().unwrap().kind,
+            DecisionKind::NodeDeleted { node_id } if node_id.as_str() == "mine"
+        ));
+
+        // Agent-origin: soft — marked removed, node stays.
+        store.delete_node(&NodeId::from("redis")).unwrap();
+        let doc = store.snapshot_doc();
+        assert_eq!(
+            doc.node(&NodeId::from("redis")).unwrap().status,
+            ElementStatus::Removed
+        );
+        let log = store.read(|s| s.decision_log.clone());
+        assert!(matches!(
+            &log.last().unwrap().kind,
+            DecisionKind::RemovalRequested { node_id } if node_id.as_str() == "redis"
+        ));
+
+        // Idempotent: a second delete of an already-Removed agent node is a no-op.
+        let log_len = store.read(|s| s.decision_log.len());
+        store.delete_node(&NodeId::from("redis")).unwrap();
+        assert_eq!(store.read(|s| s.decision_log.len()), log_len);
+
+        assert!(store.delete_node(&NodeId::from("ghost")).is_err());
+    }
+
+    #[test]
+    fn add_user_edge_validates() {
+        use crate::model::{EdgeKind, ElementStatus, Origin};
+        let store = demo_store();
+        store
+            .add_user_edge(
+                &NodeId::from("web-ui"),
+                &NodeId::from("postgres"),
+                EdgeKind::DataFlow,
+            )
+            .unwrap();
+        let doc = store.snapshot_doc();
+        let e = doc
+            .edges
+            .iter()
+            .find(|e| e.from.as_str() == "web-ui" && e.to.as_str() == "postgres")
+            .unwrap();
+        assert_eq!(e.origin, Origin::User);
+        assert_eq!(e.status, ElementStatus::Proposed);
+        let log = store.read(|s| s.decision_log.clone());
+        assert!(matches!(
+            &log.last().unwrap().kind,
+            DecisionKind::EdgeAdded { from, to, edge_kind }
+                if from.as_str() == "web-ui" && to.as_str() == "postgres"
+                    && *edge_kind == EdgeKind::DataFlow
+        ));
+
+        // Duplicate of the edge we just added, and of a demo edge.
+        assert!(
+            store
+                .add_user_edge(
+                    &NodeId::from("web-ui"),
+                    &NodeId::from("postgres"),
+                    EdgeKind::DataFlow
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .add_user_edge(
+                    &NodeId::from("web-ui"),
+                    &NodeId::from("api-gateway"),
+                    EdgeKind::DataFlow
+                )
+                .is_err()
+        );
+        // Self-loop and dangling endpoint.
+        assert!(
+            store
+                .add_user_edge(
+                    &NodeId::from("web-ui"),
+                    &NodeId::from("web-ui"),
+                    EdgeKind::DependsOn
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .add_user_edge(
+                    &NodeId::from("web-ui"),
+                    &NodeId::from("ghost"),
+                    EdgeKind::DependsOn
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn delete_edge_events() {
+        use crate::model::EdgeKind;
+        let store = demo_store();
+        store
+            .delete_edge(
+                &NodeId::from("web-ui"),
+                &NodeId::from("api-gateway"),
+                EdgeKind::DataFlow,
+            )
+            .unwrap();
+        let doc = store.snapshot_doc();
+        assert!(
+            !doc.edges
+                .iter()
+                .any(|e| e.from.as_str() == "web-ui" && e.to.as_str() == "api-gateway")
+        );
+        let log = store.read(|s| s.decision_log.clone());
+        assert!(matches!(
+            &log.last().unwrap().kind,
+            DecisionKind::EdgeDeleted { from, .. } if from.as_str() == "web-ui"
+        ));
+        assert!(
+            store
+                .delete_edge(
+                    &NodeId::from("web-ui"),
+                    &NodeId::from("api-gateway"),
+                    EdgeKind::DataFlow
+                )
+                .is_err(),
+            "already gone"
         );
     }
 
