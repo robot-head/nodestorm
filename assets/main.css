@@ -20,6 +20,13 @@
   --badge-open: #f0b34e;
   --badge-decided: #5ec98a;
   --badge-notes: #9aa1b5;
+
+  /* on-color text, shadows, and canvas furniture */
+  --on-accent: #0e1118;
+  --on-badge: #10131c;
+  --shadow: #000000;
+  --dot-grid: #1b1f2c;
+  --mini-viewport-fill: color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 * {
@@ -46,6 +53,11 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  /* Re-anchor the themed tokens here: html/body resolve var(--bg)/var(--text)
+     against the un-themed :root fallback, and `color` inherits as a computed
+     value — the [data-theme]/[data-mode] attributes live on this element. */
+  background: var(--bg);
+  color: var(--text);
 }
 
 /* ---------- top bar ---------- */
@@ -150,7 +162,7 @@ body {
 .btn-send {
   background: var(--accent);
   border-color: var(--accent);
-  color: #0e1118;
+  color: var(--on-accent);
   font-weight: 700;
 }
 
@@ -552,7 +564,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 4px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--shadow) 45%, transparent);
 }
 
 .export-dropdown button {
@@ -736,7 +748,7 @@ body {
 .mini-removed { fill: var(--status-removed); }
 
 .mini-viewport {
-  fill: rgba(255, 255, 255, 0.07);
+  fill: var(--mini-viewport-fill);
   stroke: var(--accent);
   stroke-width: 2;
   vector-effect: non-scaling-stroke;
@@ -788,7 +800,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 4px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--shadow) 45%, transparent);
 }
 
 .context-menu button {
@@ -882,7 +894,7 @@ body {
   flex: 1;
   overflow: hidden;
   background:
-    radial-gradient(circle at 1px 1px, #1b1f2c 1px, transparent 0) 0 0 / 28px 28px,
+    radial-gradient(circle at 1px 1px, var(--dot-grid) 1px, transparent 0) 0 0 / 28px 28px,
     var(--bg);
   cursor: grab;
 }
@@ -989,7 +1001,7 @@ body {
   padding: 8px 12px 10px;
   cursor: pointer;
   transition: box-shadow 120ms ease, border-color 120ms ease, background 120ms ease;
-  box-shadow: 0 2px 10px rgb(0 0 0 / 35%);
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--shadow) 35%, transparent);
 }
 
 .node-card:hover {
@@ -1110,7 +1122,7 @@ body {
 }
 
 .badge-open {
-  color: #10131c;
+  color: var(--on-badge);
   background: var(--badge-open);
   border-color: var(--badge-open);
   font-weight: 700;
