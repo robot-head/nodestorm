@@ -81,6 +81,23 @@ fn default_await_secs() -> u64 {
 #[serde(deny_unknown_fields)]
 pub struct EmptyParams {}
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExportParams {
+    /// What to return: the full Markdown decision record (default), or just
+    /// the Mermaid `flowchart` block body.
+    #[serde(default)]
+    pub format: ExportFormat,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportFormat {
+    #[default]
+    Markdown,
+    Mermaid,
+}
+
 // ---------- results ----------
 
 #[derive(Debug, Serialize)]
@@ -286,16 +303,20 @@ impl NodestormServer {
                        embedded Mermaid architecture diagram: decisions with pros/cons and the \
                        user's considered trail, dismissed choices, open questions, notes, and a \
                        component inventory. Returns plain Markdown — write it into the user's \
-                       repo (e.g. docs/decisions/)."
+                       repo (e.g. docs/decisions/). Pass format: \"mermaid\" for just the \
+                       diagram block."
     )]
     async fn export_markdown(
         &self,
-        Parameters(_): Parameters<EmptyParams>,
+        Parameters(p): Parameters<ExportParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let markdown = self
-            .store
-            .read(|s| crate::export::render_markdown(&s.doc, &s.decision_log, chrono::Utc::now()));
-        Ok(CallToolResult::success(vec![ContentBlock::text(markdown)]))
+        let text = self.store.read(|s| match p.format {
+            ExportFormat::Markdown => {
+                crate::export::render_markdown(&s.doc, &s.decision_log, chrono::Utc::now())
+            }
+            ExportFormat::Mermaid => crate::export::render_mermaid(&s.doc),
+        });
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 }
 
