@@ -90,6 +90,7 @@ pub struct UpdateSummary {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug)]
 pub struct Store {
     state: Mutex<SessionState>,
     revision_tx: watch::Sender<u64>,
