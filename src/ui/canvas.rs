@@ -16,12 +16,11 @@ use super::ViewTransform;
 use super::app::use_store;
 use super::context_menu::{ContextMenu, MenuAction, MenuTarget};
 use super::edge_layer::EdgeLayer;
+use super::minimap::Minimap;
 use super::node_card::NodeCard;
 
-/// Nominal viewport for initial zoom-to-fit (the topbar is 48px).
-const VIEW_W: f64 = 1280.0;
-const VIEW_H: f64 = 780.0;
-const TOPBAR_H: f64 = 48.0;
+use super::{TOPBAR_H, VIEW_H, VIEW_W};
+
 const MIN_SCALE: f64 = 0.15;
 const MAX_SCALE: f64 = 2.5;
 
@@ -386,6 +385,7 @@ pub fn Canvas(
                     "⤢ fit"
                 }
             }
+            Minimap { doc, layout, transform }
         }
     }
 }

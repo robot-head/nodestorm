@@ -31,7 +31,7 @@ fn kind_label(kind: NodeKind) -> &'static str {
     }
 }
 
-fn status_class(status: ElementStatus) -> &'static str {
+pub(crate) fn status_class(status: ElementStatus) -> &'static str {
     match status {
         ElementStatus::Existing => "existing",
         ElementStatus::Proposed => "proposed",
