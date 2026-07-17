@@ -24,6 +24,8 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
             patchelf
 
       - name: Install Rust toolchain
