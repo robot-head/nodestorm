@@ -56,7 +56,7 @@ pub fn Canvas(
     let mut gesture: Signal<GestureState> = use_signal(GestureState::default);
     let mut connect_from = use_context::<super::ConnectFrom>().0;
     let mut zoom_target = use_context::<super::ZoomTarget>().0;
-    let search = use_context::<super::SearchQuery>().0;
+    let mut search = use_context::<super::SearchQuery>().0;
     // Cursor position (plane coords) while a connect drag is live.
     let mut ghost_to: Signal<Option<(f64, f64)>> = use_signal(|| None);
     // Open right-click menu: (client_x, client_y, target).
@@ -85,6 +85,67 @@ pub fn Canvas(
             zoom_target.set(None);
         }
     });
+    // Zoom about the viewport center (keyboard +/-).
+    let mut zoom_step = move |factor: f64| {
+        transform.with_mut(|t| {
+            let (cx, cy) = (VIEW_W / 2.0, VIEW_H / 2.0);
+            let new_scale = (t.scale * factor).clamp(MIN_SCALE, MAX_SCALE);
+            let real = new_scale / t.scale;
+            t.tx = cx - (cx - t.tx) * real;
+            t.ty = cy - (cy - t.ty) * real;
+            t.scale = new_scale;
+        });
+    };
+    // Arrow-key selection: nearest node inside a cone in that direction.
+    let mut move_selection = move |dir: (f64, f64)| {
+        let l = layout.read();
+        let d = doc.read();
+        let Some(cur) = selected() else {
+            if let Some(first) = d.nodes.first() {
+                selected.set(Some(first.id.clone()));
+            }
+            return;
+        };
+        let Some(cr) = l.rects.get(&cur) else { return };
+        let (cx, cy) = (cr.x + cr.w / 2.0, cr.y + cr.h / 2.0);
+        let mut best: Option<(f64, NodeId)> = None;
+        for n in &d.nodes {
+            if n.id == cur {
+                continue;
+            }
+            let Some(r) = l.rects.get(&n.id) else {
+                continue;
+            };
+            let (dx, dy) = (r.x + r.w / 2.0 - cx, r.y + r.h / 2.0 - cy);
+            let along = dx * dir.0 + dy * dir.1;
+            if along <= 0.0 {
+                continue;
+            }
+            let ortho = (dx * dir.1 - dy * dir.0).abs();
+            if ortho > along * 1.6 {
+                continue;
+            }
+            let score = along + ortho * 0.8;
+            if best.as_ref().is_none_or(|(s, _)| score < *s) {
+                best = Some((score, n.id.clone()));
+            }
+        }
+        if let Some((_, id)) = best {
+            selected.set(Some(id));
+        }
+    };
+    // Tab cycling in document order.
+    let mut cycle_selection = move |step: isize| {
+        let d = doc.read();
+        if d.nodes.is_empty() {
+            return;
+        }
+        let len = d.nodes.len() as isize;
+        let cur = selected()
+            .and_then(|id| d.nodes.iter().position(|n| n.id == id))
+            .map_or(0, |i| (i as isize + step).rem_euclid(len));
+        selected.set(Some(d.nodes[cur as usize].id.clone()));
+    };
 
     // When the agent moves the focus, pan so that node is centered.
     let mut last_focus = use_signal(|| doc.read().focus.clone());
@@ -116,6 +177,88 @@ pub fn Canvas(
     rsx! {
         div {
             class: "{viewport_class}",
+            tabindex: "0",
+            onkeydown: {
+                let store = store.clone();
+                move |ev: KeyboardEvent| {
+                    match ev.key() {
+                        Key::Delete | Key::Backspace => {
+                            if let Some(id) = selected() {
+                                if let Err(err) = store.delete_node(&id) {
+                                    tracing::warn!(%err, "delete_node failed");
+                                }
+                                selected.set(None);
+                            }
+                        }
+                        Key::Escape => {
+                            // First non-empty wins: connect → menu → search
+                            // → selection.
+                            if connect_from().is_some() {
+                                connect_from.set(None);
+                                ghost_to.set(None);
+                            } else if menu().is_some() {
+                                menu.set(None);
+                            } else if !search.read().is_empty() {
+                                search.set(String::new());
+                            } else {
+                                selected.set(None);
+                            }
+                        }
+                        Key::ArrowRight => move_selection((1.0, 0.0)),
+                        Key::ArrowLeft => move_selection((-1.0, 0.0)),
+                        Key::ArrowDown => move_selection((0.0, 1.0)),
+                        Key::ArrowUp => move_selection((0.0, -1.0)),
+                        Key::Tab => {
+                            ev.prevent_default();
+                            cycle_selection(if ev.modifiers().shift() { -1 } else { 1 });
+                        }
+                        Key::Enter => {
+                            if selected().is_none() {
+                                let d = doc.read();
+                                let id = d.focus.clone().or_else(|| {
+                                    d.nodes.first().map(|n| n.id.clone())
+                                });
+                                if let Some(id) = id {
+                                    selected.set(Some(id));
+                                }
+                            }
+                        }
+                        Key::Character(c) => match c.as_str() {
+                            "+" | "=" => zoom_step(1.25),
+                            "-" => zoom_step(0.8),
+                            "0" => transform.set(ViewTransform::fit(
+                                &layout.read().bounds,
+                                VIEW_W,
+                                VIEW_H,
+                            )),
+                            "n" => {
+                                let t = transform();
+                                let px = (VIEW_W / 2.0 - t.tx) / t.scale;
+                                let py = (VIEW_H / 2.0 - t.ty) / t.scale;
+                                match store.add_user_node(
+                                    "New component".into(),
+                                    NodeKind::Component,
+                                    Some(Point { x: px, y: py }),
+                                ) {
+                                    Ok(id) => selected.set(Some(id)),
+                                    Err(err) => {
+                                        tracing::warn!(%err, "add component failed");
+                                    }
+                                }
+                            }
+                            "/" => {
+                                ev.prevent_default();
+                                document::eval(
+                                    "const b = document.querySelector('.search-box'); \
+                                     if (b) b.focus();",
+                                );
+                            }
+                            _ => {}
+                        },
+                        _ => {}
+                    }
+                }
+            },
             onmousedown: move |ev| {
                 let c = ev.client_coordinates();
                 let t = transform();
