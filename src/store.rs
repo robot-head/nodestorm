@@ -15,7 +15,7 @@ use tokio::sync::watch;
 
 use crate::model::{
     ActivityEntry, ActivityOrigin, ChoiceId, ChoiceStatus, DecisionEvent, DecisionKind, GraphOp,
-    Node, NodeId, Note, NoteId, OptionId, Point, SessionDoc,
+    Node, NodeId, Note, NoteId, OptionId, Origin, Point, SessionDoc,
 };
 
 const ACTIVITY_CAP: usize = 200;
@@ -319,13 +319,21 @@ impl Store {
     // ---------- agent-facing mutations (called from MCP tools) ----------
 
     /// Replace the document, preserving user-owned state (positions, notes,
-    /// decided choices) for nodes whose ids survive.
-    pub fn apply_propose(&self, incoming: SessionDoc) -> Result<UpdateSummary, StoreError> {
+    /// decided choices) for nodes whose ids survive, and preserving whole
+    /// user-authored nodes/edges the proposal did not mention.
+    pub fn apply_propose(&self, mut incoming: SessionDoc) -> Result<UpdateSummary, StoreError> {
         let validation = incoming.validate();
         if !validation.is_ok() {
             return Err(StoreError::Invalid {
                 errors: validation.errors,
             });
+        }
+        // Everything arriving over MCP is agent-authored, whatever it claims.
+        for node in &mut incoming.nodes {
+            node.origin = Origin::Agent;
+        }
+        for edge in &mut incoming.edges {
+            edge.origin = Origin::Agent;
         }
         Ok(self.mutate(|s| {
             let old_revision = s.doc.revision;
@@ -340,13 +348,35 @@ impl Store {
                     *node = merged;
                 }
             }
+            // Preserve user-authored elements the proposal did not mention.
+            // (A user node whose id IS mentioned was adopted by the merge
+            // above.) User edges only survive while both endpoints exist.
+            let mut warnings = validation.warnings.clone();
+            for prev in &previous.nodes {
+                if prev.origin == Origin::User && s.doc.node(&prev.id).is_none() {
+                    s.doc.nodes.push(prev.clone());
+                }
+            }
+            for prev in &previous.edges {
+                if prev.origin == Origin::User && !s.doc.edges.iter().any(|e| e.key() == prev.key())
+                {
+                    if s.doc.node(&prev.from).is_some() && s.doc.node(&prev.to).is_some() {
+                        s.doc.edges.push(prev.clone());
+                    } else {
+                        warnings.push(format!(
+                            "user edge {} -> {} dropped: endpoint no longer exists",
+                            prev.from, prev.to
+                        ));
+                    }
+                }
+            }
             let title = if s.doc.title.is_empty() {
                 "a graph".to_owned()
             } else {
                 format!("\u{201c}{}\u{201d}", s.doc.title)
             };
             push_activity(s, ActivityOrigin::Agent, format!("proposed {title}"));
-            summary(s, validation.warnings.clone())
+            summary(s, warnings)
         }))
     }
 
@@ -538,6 +568,9 @@ fn apply_op(
 ) -> Result<(), StoreError> {
     match op {
         GraphOp::UpsertNode { mut node } => {
+            // Agent-supplied content is agent-authored; upserting a user
+            // node's id adopts it (user-owned fields survive via the merge).
+            node.origin = Origin::Agent;
             if let Some(existing) = doc.node_mut(&node.id) {
                 existing.merge_from_agent(node);
             } else {
@@ -558,7 +591,8 @@ fn apply_op(
                 doc.focus = None;
             }
         }
-        GraphOp::UpsertEdge { edge } => {
+        GraphOp::UpsertEdge { mut edge } => {
+            edge.origin = Origin::Agent;
             if let Some(existing) = doc.edges.iter_mut().find(|e| e.key() == edge.key()) {
                 *existing = edge;
             } else {
@@ -640,6 +674,119 @@ mod tests {
 
     fn demo_store() -> Arc<Store> {
         Store::with_doc(demo_doc())
+    }
+
+    fn user_node(id: &str) -> Node {
+        Node {
+            id: NodeId::from(id),
+            label: id.to_owned(),
+            kind: crate::model::NodeKind::Component,
+            description: String::new(),
+            status: crate::model::ElementStatus::Proposed,
+            group: None,
+            choices: vec![],
+            notes: vec![],
+            position: None,
+            origin: crate::model::Origin::User,
+        }
+    }
+
+    fn user_edge(from: &str, to: &str) -> crate::model::Edge {
+        crate::model::Edge {
+            from: NodeId::from(from),
+            to: NodeId::from(to),
+            kind: crate::model::EdgeKind::DependsOn,
+            label: None,
+            status: crate::model::ElementStatus::Proposed,
+            origin: crate::model::Origin::User,
+        }
+    }
+
+    #[test]
+    fn propose_preserves_unmentioned_user_elements() {
+        use crate::model::Origin;
+        let mut doc = demo_doc();
+        doc.nodes.push(user_node("my-cache"));
+        doc.edges.push(user_edge("my-cache", "postgres"));
+        let store = Store::with_doc(doc);
+
+        let mut incoming = demo_doc();
+        incoming.title = "second round".into();
+        // An agent claiming user origin must be normalized to agent.
+        incoming.nodes[0].origin = Origin::User;
+        store.apply_propose(incoming).unwrap();
+
+        let doc = store.snapshot_doc();
+        let cache = doc
+            .node(&NodeId::from("my-cache"))
+            .expect("user node survives a propose that omits it");
+        assert_eq!(cache.origin, Origin::User);
+        assert!(
+            doc.edges
+                .iter()
+                .any(|e| e.from.as_str() == "my-cache" && e.origin == Origin::User),
+            "user edge survives"
+        );
+        assert_eq!(
+            doc.node(&NodeId::from("web-ui")).unwrap().origin,
+            Origin::Agent,
+            "claimed user origin is normalized"
+        );
+    }
+
+    #[test]
+    fn propose_drops_user_edge_with_dead_endpoint_and_warns() {
+        let mut doc = demo_doc();
+        doc.nodes.push(user_node("widget"));
+        doc.edges.push(user_edge("widget", "job-queue"));
+        let store = Store::with_doc(doc);
+
+        let mut incoming = demo_doc();
+        incoming.nodes.retain(|n| n.id.as_str() != "job-queue");
+        incoming
+            .edges
+            .retain(|e| e.from.as_str() != "job-queue" && e.to.as_str() != "job-queue");
+        let summary = store.apply_propose(incoming).unwrap();
+
+        let doc = store.snapshot_doc();
+        assert!(doc.node(&NodeId::from("widget")).is_some(), "node survives");
+        assert!(
+            !doc.edges.iter().any(|e| e.from.as_str() == "widget"),
+            "user edge with vanished endpoint is dropped"
+        );
+        assert!(
+            summary.warnings.iter().any(|w| w.contains("user edge")),
+            "warnings: {:?}",
+            summary.warnings
+        );
+    }
+
+    #[test]
+    fn agent_upsert_adopts_user_node() {
+        use crate::model::{Origin, Point};
+        let mut doc = demo_doc();
+        let mut mine = user_node("adoptee");
+        mine.notes.push(Note {
+            id: NoteId::from("n1"),
+            text: "keep me".into(),
+            created_at: Utc::now(),
+        });
+        mine.position = Some(Point { x: 5.0, y: 6.0 });
+        doc.nodes.push(mine);
+        let store = Store::with_doc(doc);
+
+        let mut incoming = user_node("adoptee"); // claims User — normalized away
+        incoming.label = "Adoptee (enriched)".into();
+        store
+            .apply_update(vec![GraphOp::UpsertNode { node: incoming }])
+            .unwrap();
+
+        let doc = store.snapshot_doc();
+        let n = doc.node(&NodeId::from("adoptee")).unwrap();
+        assert_eq!(n.origin, Origin::Agent, "agent upsert adopts the node");
+        assert_eq!(n.label, "Adoptee (enriched)");
+        assert_eq!(n.notes.len(), 1, "user note survives adoption");
+        assert_eq!(n.position, Some(Point { x: 5.0, y: 6.0 }));
     }
 
     #[test]
