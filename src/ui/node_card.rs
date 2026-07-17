@@ -49,6 +49,10 @@ pub fn NodeCard(
     highlighted: bool,
     on_select: EventHandler<MouseEvent>,
     on_drag_start: EventHandler<MouseEvent>,
+    on_connect_start: EventHandler<MouseEvent>,
+    on_connect_drop: EventHandler<MouseEvent>,
+    on_context: EventHandler<MouseEvent>,
+    on_zoom: EventHandler<MouseEvent>,
 ) -> Element {
     let open = node.open_choice_count();
     let decided = node.choices.len() - open;
@@ -69,6 +73,27 @@ pub fn NodeCard(
                 ev.stop_propagation();
                 on_drag_start.call(ev);
             },
+            // No stop_propagation: a node drag also ends here and the
+            // viewport's mouseup must still clear the gesture.
+            onmouseup: move |ev| on_connect_drop.call(ev),
+            ondoubleclick: move |ev| {
+                ev.stop_propagation();
+                on_zoom.call(ev);
+            },
+            oncontextmenu: move |ev| {
+                ev.prevent_default();
+                ev.stop_propagation();
+                on_context.call(ev);
+            },
+            span {
+                class: "connect-handle",
+                title: "Drag onto another card to connect",
+                onmousedown: move |ev| {
+                    ev.stop_propagation();
+                    on_connect_start.call(ev);
+                },
+                "◉"
+            }
             div { class: "node-head",
                 span { class: "node-glyph", "{kind_glyph(node.kind)}" }
                 span { class: "node-label", "{node.label}" }

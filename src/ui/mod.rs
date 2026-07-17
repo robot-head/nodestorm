@@ -4,6 +4,7 @@ mod activity;
 mod app;
 mod canvas;
 mod choice_panel;
+mod context_menu;
 mod edge_layer;
 mod node_card;
 mod topbar;
