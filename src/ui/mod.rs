@@ -16,6 +16,10 @@ mod topbar;
 pub(crate) const VIEW_W: f64 = 1280.0;
 pub(crate) const VIEW_H: f64 = 780.0;
 pub(crate) const TOPBAR_H: f64 = 48.0;
+/// Zoom-to-fit never goes below this: past ~100 nodes a full fit would make
+/// cards invisible, so show a readable centered subset instead (culling
+/// keeps the off-screen rest out of the DOM).
+pub(crate) const MIN_FIT_SCALE: f64 = 0.15;
 
 use std::sync::Arc;
 
@@ -73,17 +77,53 @@ impl Default for ViewTransform {
 }
 
 impl ViewTransform {
-    /// Fit `bounds` into a viewport of the given size (never zooming past 1:1).
+    /// Fit `bounds` into a viewport of the given size — never zooming past
+    /// 1:1, and never below [`MIN_FIT_SCALE`] (huge graphs get a readable,
+    /// centered subset instead of microscopic cards).
     pub fn fit(bounds: &crate::layout::Rect, view_w: f64, view_h: f64) -> Self {
         if bounds.w <= 0.0 || bounds.h <= 0.0 {
             return Self::default();
         }
-        let scale = (view_w / bounds.w).min(view_h / bounds.h).min(1.0);
+        let scale = (view_w / bounds.w)
+            .min(view_h / bounds.h)
+            .clamp(MIN_FIT_SCALE, 1.0);
         Self {
             tx: -bounds.x * scale + (view_w - bounds.w * scale) / 2.0,
             ty: -bounds.y * scale + (view_h - bounds.h * scale) / 2.0,
             scale,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fit_never_zooms_below_floor() {
+        // A 300-node graph must not fit down to invisible cards: clamp at
+        // the floor and center on the bounds' center instead.
+        let huge = crate::layout::Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 100_000.0,
+            h: 60_000.0,
+        };
+        let t = ViewTransform::fit(&huge, 1280.0, 780.0);
+        assert!(t.scale >= MIN_FIT_SCALE, "scale: {}", t.scale);
+        let center_x = (1280.0 / 2.0 - t.tx) / t.scale;
+        let center_y = (780.0 / 2.0 - t.ty) / t.scale;
+        assert!((center_x - 50_000.0).abs() < 1.0, "center x: {center_x}");
+        assert!((center_y - 30_000.0).abs() < 1.0, "center y: {center_y}");
+
+        // Small graphs keep the old behavior (never zoom past 1:1).
+        let small = crate::layout::Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 500.0,
+            h: 300.0,
+        };
+        assert_eq!(ViewTransform::fit(&small, 1280.0, 780.0).scale, 1.0);
     }
 }
 
