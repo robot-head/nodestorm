@@ -10,10 +10,11 @@
 use dioxus::prelude::*;
 
 use crate::layout::Layout;
-use crate::model::{EdgeKind, NodeId, Point, SessionDoc};
+use crate::model::{EdgeKind, NodeId, NodeKind, Point, SessionDoc};
 
 use super::ViewTransform;
 use super::app::use_store;
+use super::context_menu::{ContextMenu, MenuAction, MenuTarget};
 use super::edge_layer::EdgeLayer;
 use super::node_card::NodeCard;
 
@@ -55,6 +56,24 @@ pub fn Canvas(
     let mut transform = use_signal(|| ViewTransform::fit(&layout.read().bounds, VIEW_W, VIEW_H));
     let mut gesture: Signal<GestureState> = use_signal(GestureState::default);
     let mut connect_from = use_context::<Signal<Option<NodeId>>>();
+    // Cursor position (plane coords) while a connect drag is live.
+    let mut ghost_to: Signal<Option<(f64, f64)>> = use_signal(|| None);
+    // Open right-click menu: (client_x, client_y, target).
+    let mut menu: Signal<Option<(f64, f64, MenuTarget)>> = use_signal(|| None);
+
+    // Client → plane coordinates (the canvas sits below the 48px topbar).
+    let to_plane = move |cx: f64, cy: f64| {
+        let t = transform();
+        ((cx - t.tx) / t.scale, (cy - TOPBAR_H - t.ty) / t.scale)
+    };
+    // Center the view on a node and zoom in a step (double-click a card).
+    let mut zoom_to = move |rect: crate::layout::Rect| {
+        transform.with_mut(|t| {
+            t.scale = t.scale.max(1.2).clamp(MIN_SCALE, MAX_SCALE);
+            t.tx = VIEW_W / 2.0 - (rect.x + rect.w / 2.0) * t.scale;
+            t.ty = VIEW_H / 2.0 - (rect.y + rect.h / 2.0) * t.scale;
+        });
+    };
 
     // When the agent moves the focus, pan so that node is centered.
     let mut last_focus = use_signal(|| doc.read().focus.clone());
@@ -98,6 +117,9 @@ pub fn Canvas(
                 let store = store.clone();
                 move |ev| {
                     let c = ev.client_coordinates();
+                    if connect_from().is_some() {
+                        ghost_to.set(Some(to_plane(c.x, c.y)));
+                    }
                     let state = gesture();
                     match state.gesture {
                         Some(Gesture::Pan { start, orig }) => {
@@ -138,10 +160,45 @@ pub fn Canvas(
                             selected.set(None);
                         }
                     }
+                } else if state.gesture.is_none() && connect_from().is_some() {
+                    // A connect drag released over the background: cancel.
+                    connect_from.set(None);
                 }
+                ghost_to.set(None);
                 gesture.set(GestureState::default());
             },
-            onmouseleave: move |_| gesture.set(GestureState::default()),
+            onmouseleave: move |_| {
+                ghost_to.set(None);
+                gesture.set(GestureState::default());
+            },
+            ondoubleclick: {
+                let store = store.clone();
+                move |ev: MouseEvent| {
+                    let c = ev.client_coordinates();
+                    let (px, py) = to_plane(c.x, c.y);
+                    match store.add_user_node(
+                        "New component".into(),
+                        NodeKind::Component,
+                        Some(Point { x: px, y: py }),
+                    ) {
+                        Ok(id) => selected.set(Some(id)),
+                        Err(err) => tracing::warn!(%err, "add component failed"),
+                    }
+                }
+            },
+            oncontextmenu: move |ev: MouseEvent| {
+                ev.prevent_default();
+                let c = ev.client_coordinates();
+                let (px, py) = to_plane(c.x, c.y);
+                menu.set(Some((
+                    c.x,
+                    c.y,
+                    MenuTarget::Background {
+                        plane_x: px,
+                        plane_y: py,
+                    },
+                )));
+            },
             onwheel: move |ev| {
                 ev.prevent_default();
                 let delta = ev.delta().strip_units().y;
@@ -159,7 +216,18 @@ pub fn Canvas(
             div {
                 class: "canvas-plane",
                 style: "transform: translate({t.tx}px, {t.ty}px) scale({t.scale});",
-                EdgeLayer { layout }
+                EdgeLayer {
+                    layout,
+                    ghost: connect_from().and_then(|from| {
+                        let l = layout.read();
+                        let r = l.rects.get(&from)?;
+                        let to = ghost_to()?;
+                        Some(((r.x + r.w / 2.0, r.y + r.h / 2.0), to))
+                    }),
+                    on_edge_context: move |(from, to, kind, cx, cy)| {
+                        menu.set(Some((cx, cy, MenuTarget::Edge(from, to, kind))));
+                    },
+                }
                 for node in d.nodes.iter() {
                     if let Some(rect) = l.rects.get(&node.id) {
                         NodeCard {
@@ -205,8 +273,92 @@ pub fn Canvas(
                                     });
                                 }
                             },
+                            on_connect_start: {
+                                let id = node.id.clone();
+                                move |_| {
+                                    connect_from.set(Some(id.clone()));
+                                    ghost_to.set(None);
+                                }
+                            },
+                            on_connect_drop: {
+                                let id = node.id.clone();
+                                let store = store.clone();
+                                move |_| {
+                                    // End of a handle drag over this card.
+                                    if let Some(from) = connect_from() {
+                                        if from != id
+                                            && let Err(err) = store.add_user_edge(
+                                                &from,
+                                                &id,
+                                                EdgeKind::DependsOn,
+                                            )
+                                        {
+                                            tracing::warn!(%err, "connect failed");
+                                        }
+                                        connect_from.set(None);
+                                        ghost_to.set(None);
+                                    }
+                                }
+                            },
+                            on_context: {
+                                let id = node.id.clone();
+                                move |ev: MouseEvent| {
+                                    let c = ev.client_coordinates();
+                                    menu.set(Some((c.x, c.y, MenuTarget::Node(id.clone()))));
+                                }
+                            },
+                            on_zoom: {
+                                let rect = *rect;
+                                move |_| zoom_to(rect)
+                            },
                         }
                     }
+                }
+            }
+            if let Some((mx, my, target)) = menu() {
+                ContextMenu {
+                    x: mx,
+                    y: my,
+                    target,
+                    on_action: {
+                        let store = store.clone();
+                        move |action: MenuAction| {
+                            match action {
+                                MenuAction::SelectNode(id) => selected.set(Some(id)),
+                                MenuAction::Connect(id) => connect_from.set(Some(id)),
+                                MenuAction::DeleteNode(id) => {
+                                    if let Err(err) = store.delete_node(&id) {
+                                        tracing::warn!(%err, "delete_node failed");
+                                    }
+                                    if selected() == Some(id) {
+                                        selected.set(None);
+                                    }
+                                }
+                                MenuAction::DeleteEdge(from, to, kind) => {
+                                    if let Err(err) = store.delete_edge(&from, &to, kind) {
+                                        tracing::warn!(%err, "delete_edge failed");
+                                    }
+                                }
+                                MenuAction::AddHere { plane_x, plane_y } => {
+                                    match store.add_user_node(
+                                        "New component".into(),
+                                        NodeKind::Component,
+                                        Some(Point {
+                                            x: plane_x,
+                                            y: plane_y,
+                                        }),
+                                    ) {
+                                        Ok(id) => selected.set(Some(id)),
+                                        Err(err) => {
+                                            tracing::warn!(%err, "add component failed");
+                                        }
+                                    }
+                                }
+                            }
+                            menu.set(None);
+                        }
+                    },
+                    on_close: move |()| menu.set(None),
                 }
             }
             div { class: "canvas-controls",

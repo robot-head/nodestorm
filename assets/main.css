@@ -512,6 +512,73 @@ body {
   cursor: crosshair;
 }
 
+.connect-handle {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--bg-panel);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-size: 10px;
+  cursor: crosshair;
+  opacity: 0;
+  transition: opacity 120ms;
+  z-index: 3;
+}
+
+.node-card:hover .connect-handle,
+.node-card.selected .connect-handle {
+  opacity: 1;
+}
+
+.ghost-edge {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 4;
+  pointer-events: none;
+}
+
+.menu-catcher {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 41;
+  min-width: 160px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.context-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 7px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.context-menu button:hover {
+  background: var(--bg-card-hover);
+}
+
 /* ---------- activity feed ---------- */
 
 .activity {

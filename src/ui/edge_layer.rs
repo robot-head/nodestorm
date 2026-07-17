@@ -25,7 +25,20 @@ fn kind_class(kind: EdgeKind) -> &'static str {
 }
 
 #[component]
-pub fn EdgeLayer(layout: Memo<Layout>) -> Element {
+pub fn EdgeLayer(
+    layout: Memo<Layout>,
+    /// Rubber-band line while a connect drag is live: (from-center, cursor),
+    /// both in plane coordinates.
+    ghost: Option<((f64, f64), (f64, f64))>,
+    /// Right-click on an edge path: `(from, to, kind, client_x, client_y)`.
+    on_edge_context: EventHandler<(
+        crate::model::NodeId,
+        crate::model::NodeId,
+        EdgeKind,
+        f64,
+        f64,
+    )>,
+) -> Element {
     let l = layout.read();
     rsx! {
         svg { class: "edge-layer", width: "1", height: "1",
@@ -50,6 +63,17 @@ pub fn EdgeLayer(layout: Memo<Layout>) -> Element {
                     class: "edge edge-{status_class(e.status)} edge-kind-{kind_class(e.kind)}",
                     d: "{e.path}",
                     marker_end: "url(#arrow-{status_class(e.status)})",
+                    oncontextmenu: {
+                        let from = e.from.clone();
+                        let to = e.to.clone();
+                        let kind = e.kind;
+                        move |ev: MouseEvent| {
+                            ev.prevent_default();
+                            ev.stop_propagation();
+                            let c = ev.client_coordinates();
+                            on_edge_context.call((from.clone(), to.clone(), kind, c.x, c.y));
+                        }
+                    },
                 }
                 if let Some(label) = &e.label {
                     text {
@@ -60,6 +84,15 @@ pub fn EdgeLayer(layout: Memo<Layout>) -> Element {
                         text_anchor: "middle",
                         "{label}"
                     }
+                }
+            }
+            if let Some(((x1, y1), (x2, y2))) = ghost {
+                line {
+                    class: "ghost-edge",
+                    x1: "{x1}",
+                    y1: "{y1}",
+                    x2: "{x2}",
+                    y2: "{y2}",
                 }
             }
         }
