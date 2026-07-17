@@ -295,6 +295,30 @@ pub fn TopBar(
                 span { class: "pill pill-undelivered", "{m.undelivered} to send" }
             }
             button {
+                class: "btn",
+                disabled: !m.undo_available,
+                title: "Undo your last edit or undelivered decision (Ctrl+Z)",
+                onclick: {
+                    let store = store.clone();
+                    move |_| {
+                        store.undo();
+                    }
+                },
+                "↶ Undo"
+            }
+            button {
+                class: "btn",
+                disabled: !m.redo_available,
+                title: "Redo (Ctrl+Y)",
+                onclick: {
+                    let store = store.clone();
+                    move |_| {
+                        store.redo();
+                    }
+                },
+                "↷ Redo"
+            }
+            button {
                 class: if timeline_open() { "btn btn-armed" } else { "btn" },
                 title: "Show the session log: every decision, note, and edit in order",
                 onclick: {
