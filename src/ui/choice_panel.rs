@@ -66,7 +66,7 @@ pub fn ChoicePanel(
     let mut kind_draft = use_signal(|| kind_value(node.kind).to_owned());
     let mut desc_draft = use_signal(|| node.description.clone());
     let store = use_store();
-    let mut connect_from = use_context::<Signal<Option<NodeId>>>();
+    let mut connect_from = use_context::<super::ConnectFrom>().0;
     let node_id = node.id.clone();
     let connecting = connect_from() == Some(node.id.clone());
     let delete_title = if node.origin == Origin::User {

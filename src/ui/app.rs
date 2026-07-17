@@ -44,10 +44,11 @@ pub fn App() -> Element {
     let layout: Memo<Layout> = use_memo(move || layout::compute(&doc.read()));
     let selected: Signal<Option<NodeId>> = use_signal(|| None);
     let hovered_affects: Signal<Vec<NodeId>> = use_signal(Vec::new);
-    // Connect mode: Some(source) while the user is picking a target card.
-    // Context (not a prop) because topbar, panel, and canvas all touch it.
-    let _connect_from: Signal<Option<NodeId>> =
-        use_context_provider(|| Signal::new(Option::<NodeId>::None));
+    // Cross-component signals (topbar, panel, and canvas all touch them),
+    // wrapped in newtypes because context is type-keyed.
+    use_context_provider(|| super::ConnectFrom(Signal::new(None)));
+    use_context_provider(|| super::ZoomTarget(Signal::new(None)));
+    use_context_provider(|| super::SearchQuery(Signal::new(String::new())));
     let mcp_url = cli.mcp_url();
     let has_nodes = !doc.read().nodes.is_empty();
     let selected_node = selected

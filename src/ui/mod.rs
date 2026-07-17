@@ -12,9 +12,40 @@ mod topbar;
 use std::sync::Arc;
 
 use dioxus::desktop::{Config, WindowBuilder};
+use dioxus::prelude::*;
 
 use crate::cli::Cli;
+use crate::model::{Node, NodeId};
 use crate::store::Store;
+
+// Context wrappers: distinct types so same-shaped signals can coexist in
+// Dioxus's type-keyed context.
+
+/// Connect mode: `Some(source)` while the user is picking a target card.
+#[derive(Clone, Copy)]
+pub(crate) struct ConnectFrom(pub Signal<Option<NodeId>>);
+
+/// One-shot request for the canvas to center+zoom on a node (search hits).
+#[derive(Clone, Copy)]
+pub(crate) struct ZoomTarget(pub Signal<Option<NodeId>>);
+
+/// Live search query from the topbar box.
+#[derive(Clone, Copy)]
+pub(crate) struct SearchQuery(pub Signal<String>);
+
+/// Case-insensitive substring match over label, id, and group.
+pub(crate) fn node_matches(node: &Node, query: &str) -> bool {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return false;
+    }
+    node.label.to_lowercase().contains(&q)
+        || node.id.as_str().to_lowercase().contains(&q)
+        || node
+            .group
+            .as_deref()
+            .is_some_and(|g| g.to_lowercase().contains(&q))
+}
 
 /// Shared view-transform for the pan/zoom plane.
 #[derive(Debug, Clone, Copy, PartialEq)]
