@@ -40,6 +40,9 @@ System packages (Debian/Ubuntu):
 sudo apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev libxdo-dev
 ```
 
+On Windows nothing extra is needed — the UI uses the WebView2 runtime that
+ships with Windows 10/11.
+
 Build and run:
 
 ```sh
@@ -115,7 +118,7 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-Headless GUI verification (no display server needed):
+Headless GUI verification on Linux (no display server needed):
 
 ```sh
 Xvfb :77 -screen 0 1280x840x24 &
@@ -126,5 +129,24 @@ DISPLAY=:77 scrot /tmp/nodestorm.png
 
 (`dbus-run-session` matters: without a session bus, GTK's
 `g_application_register` hangs silently before the window appears.)
+
+Automated GUI verification on Windows:
+
+```powershell
+powershell -File scripts\verify-windows.ps1            # full E2E interaction
+powershell -File scripts\verify-windows.ps1 -DemoShot  # render check + screenshot
+```
+
+The script finds UI elements by name through Windows UI Automation (WebView2
+exposes the DOM as a UIA tree) and clicks them by posting `WM_LBUTTON*`
+messages directly to the WebView2 render widget, so it needs neither the
+cursor nor the foreground — it runs quietly in the background even while a
+human uses the desktop (the app window is pushed to the bottom of the
+z-order). Full mode runs `examples/drive.rs` as the agent, clicks through
+both proposed choices in the real UI, waits for the autoflush delivery, and
+fails unless the drive client actually receives the decisions over MCP.
+Screenshots and logs land in `target\verify\`. Note that clicks land at an
+element's *visual* position: close the choice panel (its `✕`) before
+selecting a card the panel overlaps, as the script does.
 
 Design cap: ~100 nodes per graph, one brainstorm session at a time.
