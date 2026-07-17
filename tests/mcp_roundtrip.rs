@@ -11,7 +11,7 @@ use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use serde_json::{Value, json};
 
-use nodestorm::model::{ChoiceId, NodeId, OptionId};
+use nodestorm::model::{ChoiceId, NodeId, NodeKind, OptionId};
 use nodestorm::store::{SessionState, Store};
 
 async fn start_server(store: Arc<Store>) -> (u16, tokio::sync::watch::Sender<bool>) {
@@ -94,12 +94,19 @@ async fn full_decision_roundtrip() {
     assert_eq!(summary["node_count"], 2);
     assert_eq!(summary["open_choice_count"], 1);
 
-    // Simulated user: after 300ms, pick Redis (autoflush fires — last open
-    // choice decided).
+    // Simulated user: after 300ms, add a component, ask to remove an
+    // agent-authored one, then pick Redis. The edits come first — deciding
+    // the last open choice autoflushes, delivering all three events at once.
     tokio::spawn({
         let store = store.clone();
         async move {
             tokio::time::sleep(Duration::from_millis(300)).await;
+            store
+                .add_user_node("Rate Limiter".into(), NodeKind::Component, None)
+                .expect("add user node");
+            store
+                .delete_node(&NodeId::from("api"))
+                .expect("soft-remove agent node");
             store
                 .select_option(
                     &NodeId::from("cache"),
@@ -126,11 +133,16 @@ async fn full_decision_roundtrip() {
     let outcome = tool_json(&result);
     assert_eq!(outcome["status"], "delivered", "{outcome:#}");
     let decisions = outcome["decisions"].as_array().expect("decisions array");
-    assert_eq!(decisions.len(), 1);
-    assert_eq!(decisions[0]["kind"], "option_selected");
-    assert_eq!(decisions[0]["option_id"], "redis");
+    assert_eq!(decisions.len(), 3, "edits ride along: {decisions:#?}");
+    assert_eq!(decisions[0]["kind"], "node_added");
+    assert_eq!(decisions[0]["node_id"], "rate-limiter");
+    assert_eq!(decisions[0]["label"], "Rate Limiter");
+    assert_eq!(decisions[1]["kind"], "removal_requested");
+    assert_eq!(decisions[1]["node_id"], "api");
+    assert_eq!(decisions[2]["kind"], "option_selected");
+    assert_eq!(decisions[2]["option_id"], "redis");
     assert_eq!(
-        decisions[0]["considered"],
+        decisions[2]["considered"],
         json!(["memcached", "redis"]),
         "exploration trail rides along"
     );
@@ -169,7 +181,12 @@ async fn full_decision_roundtrip() {
     let state = tool_json(&result);
     assert_eq!(state["doc"]["nodes"][0]["status"], "affected");
     assert_eq!(state["undelivered_decisions"].as_array().unwrap().len(), 0);
-    assert_eq!(state["decision_log_len"], 1);
+    assert_eq!(state["decision_log_len"], 3);
+    assert_eq!(
+        state["doc"]["nodes"][2]["origin"], "user",
+        "user node visible in state: {:#}",
+        state["doc"]["nodes"]
+    );
 
     // export_markdown returns the decision record as plain Markdown (not
     // JSON): the Redis decision with its exploration trail, and the follow-up
@@ -205,6 +222,26 @@ async fn full_decision_roundtrip() {
         record[open_at..].contains("Cache invalidation strategy?"),
         "in: {record}"
     );
+    assert!(
+        record.contains("Rate Limiter"),
+        "user node in the record, in: {record}"
+    );
+
+    // format: "mermaid" returns just the diagram block body.
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("export_markdown").with_arguments(
+                json!({"format": "mermaid"})
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
+        )
+        .await
+        .expect("export_markdown mermaid");
+    let mermaid = &result.content[0].as_text().expect("text").text;
+    assert!(mermaid.starts_with("flowchart LR\n"), "got: {mermaid}");
+    assert!(!mermaid.contains("# "), "no markdown headings: {mermaid}");
 
     client.cancel().await.expect("client shutdown");
 }
