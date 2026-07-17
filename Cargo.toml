@@ -1,0 +1,49 @@
+[package]
+name = "nodestorm"
+version = "0.1.0"
+edition = "2024"
+description = "Visual brainstorming canvas for agentic AI planning — architecture graphs with human-in-the-loop decisions over MCP"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/robot-head/nodestorm"
+
+[dependencies]
+dioxus = { version = "0.7.9", features = ["desktop"] }
+rmcp = { version = "2.2.0", features = ["transport-streamable-http-server"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
+axum = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = { version = "1", features = ["chrono04"] }
+thiserror = "2"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+directories = "6"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+tokio-util = "0.7"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
+rmcp = { version = "2.2.0", features = [
+    "client",
+    "transport-streamable-http-client-reqwest",
+    "reqwest",
+] }
+
+[lints.rust]
+unsafe_code = "deny"
+unexpected_cfgs = "warn"
+
+[lints.clippy]
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
