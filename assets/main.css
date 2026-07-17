@@ -1136,3 +1136,295 @@ body {
 .badge-notes {
   color: var(--badge-notes);
 }
+
+/* ---------- theming ---------- */
+
+/* Mode is pure `color-scheme`: in auto, the light-dark() values below track
+   the OS preference live; scrollbars and form controls follow too. */
+[data-mode="dark"]  { color-scheme: dark; }
+[data-mode="light"] { color-scheme: light; }
+[data-mode="auto"]  { color-scheme: light dark; }
+
+/* Palette families. Each block redefines the :root tokens once via
+   light-dark(light, dark); the guard drops them wholesale on engines
+   without light-dark() (WebKitGTK < 2.46), which then keep the intact dark
+   :root fallback above. Registered in src/theme.rs — its tests keep this
+   section and the registry in lock-step. Selectors are bare attributes (not
+   :root-scoped) so a picker row can re-scope a family locally for swatches. */
+@supports (color: light-dark(#000, #fff)) {
+  [data-theme="nodestorm"] { /* light side derived for v0.7 */
+    --bg: light-dark(#f2f4fa, #0f1117);
+    --bg-panel: light-dark(#fafbfe, #171a23);
+    --bg-card: light-dark(#ffffff, #1c2030);
+    --bg-card-hover: light-dark(#eef2fe, #222741);
+    --border: light-dark(#d8dce9, #2a2f42);
+    --text: light-dark(#23283a, #e6e9f2);
+    --text-dim: light-dark(#5f6880, #9aa1b5);
+    --accent: light-dark(#3d6fe0, #6c9ef8);
+    --status-existing: light-dark(#8b93a8, #566076);
+    --status-proposed: light-dark(#3d6fe0, #6c9ef8);
+    --status-modified: light-dark(#b97b12, #f0b34e);
+    --status-affected: light-dark(#8656d6, #b48af8);
+    --status-removed: light-dark(#d94f4f, #f06a6a);
+    --badge-open: light-dark(#b97b12, #f0b34e);
+    --badge-decided: light-dark(#1f9e63, #5ec98a);
+    --badge-notes: light-dark(#5f6880, #9aa1b5);
+    --on-accent: light-dark(#ffffff, #0e1118);
+    --on-badge: light-dark(#ffffff, #10131c);
+    --shadow: light-dark(#23283a59, #000000);
+    --dot-grid: light-dark(#dde1ee, #1b1f2c);
+  }
+
+  [data-theme="solarized"] { /* accents are single-valued by design */
+    --bg: light-dark(#eee8d5, #002b36);
+    --bg-panel: light-dark(#f5efdc, #04313c);
+    --bg-card: light-dark(#fdf6e3, #073642);
+    --bg-card-hover: light-dark(#f6eed6, #0a4552);
+    --border: light-dark(#d9d2bc, #17505f);
+    --text: light-dark(#586e75, #93a1a1);
+    --text-dim: light-dark(#93a1a1, #657b83);
+    --accent: #268bd2;
+    --status-existing: light-dark(#93a1a1, #586e75);
+    --status-proposed: #268bd2;
+    --status-modified: #b58900;
+    --status-affected: #6c71c4;
+    --status-removed: #dc322f;
+    --badge-open: #b58900;
+    --badge-decided: #859900;
+    --badge-notes: light-dark(#93a1a1, #657b83);
+    --on-accent: #fdf6e3;
+    --on-badge: light-dark(#fdf6e3, #002b36);
+    --shadow: light-dark(#586e7559, #000000);
+    --dot-grid: light-dark(#e0d9c3, #0b3944);
+  }
+
+  [data-theme="gruvbox"] {
+    --bg: light-dark(#f2e5bc, #282828);
+    --bg-panel: light-dark(#f9efc9, #32302f);
+    --bg-card: light-dark(#fbf1c7, #3c3836);
+    --bg-card-hover: light-dark(#f0e2ae, #46413d);
+    --border: light-dark(#d5c4a1, #504945);
+    --text: light-dark(#3c3836, #ebdbb2);
+    --text-dim: light-dark(#7c6f64, #a89984);
+    --accent: light-dark(#076678, #83a598);
+    --status-existing: #928374;
+    --status-proposed: light-dark(#076678, #83a598);
+    --status-modified: light-dark(#b57614, #fabd2f);
+    --status-affected: light-dark(#8f3f71, #d3869b);
+    --status-removed: light-dark(#9d0006, #fb4934);
+    --badge-open: light-dark(#b57614, #fabd2f);
+    --badge-decided: light-dark(#79740e, #b8bb26);
+    --badge-notes: light-dark(#7c6f64, #a89984);
+    --on-accent: light-dark(#fbf1c7, #282828);
+    --on-badge: light-dark(#fbf1c7, #282828);
+    --shadow: light-dark(#3c383659, #000000);
+    --dot-grid: light-dark(#e3d5a8, #333030);
+  }
+
+  [data-theme="catppuccin"] { /* Mocha / Latte */
+    --bg: light-dark(#e6e9ef, #1e1e2e);
+    --bg-panel: light-dark(#eff1f5, #181825);
+    --bg-card: light-dark(#eff1f5, #313244);
+    --bg-card-hover: light-dark(#dce0e8, #45475a);
+    --border: light-dark(#bcc0cc, #585b70);
+    --text: light-dark(#4c4f69, #cdd6f4);
+    --text-dim: light-dark(#6c6f85, #a6adc8);
+    --accent: light-dark(#1e66f5, #89b4fa);
+    --status-existing: light-dark(#8c8fa1, #6c7086);
+    --status-proposed: light-dark(#1e66f5, #89b4fa);
+    --status-modified: light-dark(#df8e1d, #f9e2af);
+    --status-affected: light-dark(#8839ef, #cba6f7);
+    --status-removed: light-dark(#d20f39, #f38ba8);
+    --badge-open: light-dark(#df8e1d, #f9e2af);
+    --badge-decided: light-dark(#40a02b, #a6e3a1);
+    --badge-notes: light-dark(#6c6f85, #a6adc8);
+    --on-accent: light-dark(#ffffff, #11111b);
+    --on-badge: light-dark(#ffffff, #11111b);
+    --shadow: light-dark(#4c4f6959, #000000);
+    --dot-grid: light-dark(#d4d8e2, #292a3d);
+  }
+
+  [data-theme="nord"] { /* light = Snow Storm; light aurora derived */
+    --bg: light-dark(#e5e9f0, #2e3440);
+    --bg-panel: light-dark(#eceff4, #353c4a);
+    --bg-card: light-dark(#f7f9fb, #3b4252);
+    --bg-card-hover: light-dark(#dfe4ec, #434c5e);
+    --border: light-dark(#c2cad8, #4c566a);
+    --text: light-dark(#2e3440, #e5e9f0);
+    --text-dim: light-dark(#4c566a, #9aa4bb);
+    --accent: light-dark(#5e81ac, #88c0d0);
+    --status-existing: light-dark(#7b88a1, #616e88);
+    --status-proposed: light-dark(#5e81ac, #88c0d0);
+    --status-modified: light-dark(#ac7d2a, #ebcb8b);
+    --status-affected: light-dark(#8d6a87, #b48ead);
+    --status-removed: light-dark(#a04d55, #bf616a);
+    --badge-open: light-dark(#ac7d2a, #ebcb8b);
+    --badge-decided: light-dark(#7d9665, #a3be8c);
+    --badge-notes: light-dark(#4c566a, #9aa4bb);
+    --on-accent: light-dark(#eceff4, #2e3440);
+    --on-badge: light-dark(#eceff4, #2e3440);
+    --shadow: light-dark(#2e344059, #000000);
+    --dot-grid: light-dark(#d8dee9, #353b48);
+  }
+
+  [data-theme="dracula"] { /* light = Alucard-inspired */
+    --bg: light-dark(#fffbeb, #282a36);
+    --bg-panel: light-dark(#f7f3e1, #21222c);
+    --bg-card: light-dark(#ffffff, #313342);
+    --bg-card-hover: light-dark(#f5f1de, #3b3e52);
+    --border: light-dark(#ddd8c0, #44475a);
+    --text: light-dark(#1f1f1f, #f8f8f2);
+    --text-dim: light-dark(#7970a9, #6272a4);
+    --accent: light-dark(#644ac9, #bd93f9);
+    --status-existing: light-dark(#8d87a5, #5a5f78);
+    --status-proposed: light-dark(#644ac9, #bd93f9);
+    --status-modified: light-dark(#a34d14, #ffb86c);
+    --status-affected: light-dark(#a3144d, #ff79c6);
+    --status-removed: light-dark(#cb3a2a, #ff5555);
+    --badge-open: light-dark(#a34d14, #ffb86c);
+    --badge-decided: light-dark(#14710a, #50fa7b);
+    --badge-notes: light-dark(#7970a9, #6272a4);
+    --on-accent: light-dark(#fffbeb, #282a36);
+    --on-badge: light-dark(#fffbeb, #282a36);
+    --shadow: light-dark(#1f1f1f59, #000000);
+    --dot-grid: light-dark(#eee9d2, #2f313f);
+  }
+
+  [data-theme="tokyo-night"] { /* Night / Day */
+    --bg: light-dark(#e1e2e7, #1a1b26);
+    --bg-panel: light-dark(#eaebf1, #16161e);
+    --bg-card: light-dark(#f2f3f8, #24283b);
+    --bg-card-hover: light-dark(#dcdfeb, #292e42);
+    --border: light-dark(#b4bad4, #3b4261);
+    --text: light-dark(#3760bf, #c0caf5);
+    --text-dim: light-dark(#6172b0, #737aa2);
+    --accent: light-dark(#2e7de9, #7aa2f7);
+    --status-existing: light-dark(#848cb5, #565f89);
+    --status-proposed: light-dark(#2e7de9, #7aa2f7);
+    --status-modified: light-dark(#8c6c3e, #e0af68);
+    --status-affected: light-dark(#9854f1, #bb9af7);
+    --status-removed: light-dark(#f52a65, #f7768e);
+    --badge-open: light-dark(#8c6c3e, #e0af68);
+    --badge-decided: light-dark(#587539, #9ece6a);
+    --badge-notes: light-dark(#6172b0, #737aa2);
+    --on-accent: light-dark(#e1e2e7, #16161e);
+    --on-badge: light-dark(#e1e2e7, #16161e);
+    --shadow: light-dark(#41486859, #000000);
+    --dot-grid: light-dark(#d3d5e0, #232435);
+  }
+
+  [data-theme="one"] { /* One Dark / One Light */
+    --bg: light-dark(#fafafa, #282c34);
+    --bg-panel: light-dark(#f0f0f1, #21252b);
+    --bg-card: light-dark(#ffffff, #2c313c);
+    --bg-card-hover: light-dark(#ececed, #333a48);
+    --border: light-dark(#d4d4d5, #3e4451);
+    --text: light-dark(#383a42, #abb2bf);
+    --text-dim: light-dark(#696c77, #828997);
+    --accent: light-dark(#4078f2, #61afef);
+    --status-existing: light-dark(#a0a1a7, #5c6370);
+    --status-proposed: light-dark(#4078f2, #61afef);
+    --status-modified: light-dark(#c18401, #e5c07b);
+    --status-affected: light-dark(#a626a4, #c678dd);
+    --status-removed: light-dark(#e45649, #e06c75);
+    --badge-open: light-dark(#c18401, #e5c07b);
+    --badge-decided: light-dark(#50a14f, #98c379);
+    --badge-notes: light-dark(#696c77, #828997);
+    --on-accent: light-dark(#ffffff, #282c34);
+    --on-badge: light-dark(#ffffff, #282c34);
+    --shadow: light-dark(#383a4259, #000000);
+    --dot-grid: light-dark(#e8e8e9, #2f343e);
+  }
+
+  [data-theme="github"] { /* Primer light / dark */
+    --bg: light-dark(#f6f8fa, #0d1117);
+    --bg-panel: light-dark(#fcfdfe, #161b22);
+    --bg-card: light-dark(#ffffff, #1c2128);
+    --bg-card-hover: light-dark(#eef2f6, #262c34);
+    --border: light-dark(#d0d7de, #30363d);
+    --text: light-dark(#24292f, #e6edf3);
+    --text-dim: light-dark(#57606a, #8b949e);
+    --accent: light-dark(#0969da, #58a6ff);
+    --status-existing: light-dark(#6e7781, #6e7681);
+    --status-proposed: light-dark(#0969da, #58a6ff);
+    --status-modified: light-dark(#9a6700, #d29922);
+    --status-affected: light-dark(#8250df, #a371f7);
+    --status-removed: light-dark(#cf222e, #f85149);
+    --badge-open: light-dark(#9a6700, #d29922);
+    --badge-decided: light-dark(#1a7f37, #3fb950);
+    --badge-notes: light-dark(#57606a, #8b949e);
+    --on-accent: light-dark(#ffffff, #0d1117);
+    --on-badge: light-dark(#ffffff, #0d1117);
+    --shadow: light-dark(#24292f59, #000000);
+    --dot-grid: light-dark(#e7ebf0, #161c24);
+  }
+
+  [data-theme="everforest"] { /* medium contrast */
+    --bg: light-dark(#f4f0d9, #2d353b);
+    --bg-panel: light-dark(#faf5e2, #232a2e);
+    --bg-card: light-dark(#fdf6e3, #343f44);
+    --bg-card-hover: light-dark(#efebd4, #3d484d);
+    --border: light-dark(#ddd8c0, #475258);
+    --text: light-dark(#5c6a72, #d3c6aa);
+    --text-dim: light-dark(#829181, #9da9a0);
+    --accent: light-dark(#3a94c5, #7fbbb3);
+    --status-existing: light-dark(#939f91, #859289);
+    --status-proposed: light-dark(#3a94c5, #7fbbb3);
+    --status-modified: light-dark(#dfa000, #dbbc7f);
+    --status-affected: light-dark(#df69ba, #d699b6);
+    --status-removed: light-dark(#f85552, #e67e80);
+    --badge-open: light-dark(#dfa000, #dbbc7f);
+    --badge-decided: light-dark(#8da101, #a7c080);
+    --badge-notes: light-dark(#829181, #9da9a0);
+    --on-accent: light-dark(#fdf6e3, #2d353b);
+    --on-badge: light-dark(#fdf6e3, #2d353b);
+    --shadow: light-dark(#5c6a7259, #000000);
+    --dot-grid: light-dark(#e6e2cc, #333c42);
+  }
+
+  [data-theme="rose-pine"] { /* Main / Dawn; dark decided borrows Moon pine */
+    --bg: light-dark(#f2e9e1, #191724);
+    --bg-panel: light-dark(#faf4ed, #1f1d2e);
+    --bg-card: light-dark(#fffaf3, #26233a);
+    --bg-card-hover: light-dark(#f3eadf, #403d52);
+    --border: light-dark(#cecacd, #524f67);
+    --text: light-dark(#575279, #e0def4);
+    --text-dim: light-dark(#797593, #908caa);
+    --accent: light-dark(#56949f, #9ccfd8);
+    --status-existing: light-dark(#9893a5, #6e6a86);
+    --status-proposed: light-dark(#56949f, #9ccfd8);
+    --status-modified: light-dark(#ea9d34, #f6c177);
+    --status-affected: light-dark(#907aa9, #c4a7e7);
+    --status-removed: light-dark(#b4637a, #eb6f92);
+    --badge-open: light-dark(#ea9d34, #f6c177);
+    --badge-decided: light-dark(#286983, #3e8fb0);
+    --badge-notes: light-dark(#797593, #908caa);
+    --on-accent: light-dark(#fffaf3, #191724);
+    --on-badge: light-dark(#fffaf3, #191724);
+    --shadow: light-dark(#57527959, #000000);
+    --dot-grid: light-dark(#e4dcd2, #211f31);
+  }
+
+  [data-theme="monokai"] { /* light derived */
+    --bg: light-dark(#fafaf4, #272822);
+    --bg-panel: light-dark(#f2f2ea, #1e1f1c);
+    --bg-card: light-dark(#ffffff, #31322a);
+    --bg-card-hover: light-dark(#f0f0e6, #3b3c33);
+    --border: light-dark(#d9d9cc, #49483e);
+    --text: light-dark(#2c2d24, #f8f8f2);
+    --text-dim: light-dark(#6a6b5f, #a59f85);
+    --accent: light-dark(#0089b3, #66d9ef);
+    --status-existing: light-dark(#8f9081, #75715e);
+    --status-proposed: light-dark(#0089b3, #66d9ef);
+    --status-modified: light-dark(#cc6f00, #fd971f);
+    --status-affected: light-dark(#7d4fd1, #ae81ff);
+    --status-removed: light-dark(#d0246e, #f92672);
+    --badge-open: light-dark(#cc6f00, #fd971f);
+    --badge-decided: light-dark(#679c00, #a6e22e);
+    --badge-notes: light-dark(#6a6b5f, #a59f85);
+    --on-accent: light-dark(#ffffff, #272822);
+    --on-badge: light-dark(#ffffff, #272822);
+    --shadow: light-dark(#2c2d2459, #000000);
+    --dot-grid: light-dark(#e6e6da, #2e2f28);
+  }
+}

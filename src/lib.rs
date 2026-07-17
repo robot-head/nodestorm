@@ -16,4 +16,5 @@ pub mod persist;
 pub mod server;
 pub mod sessions;
 pub mod store;
+pub mod theme;
 pub mod ui;
