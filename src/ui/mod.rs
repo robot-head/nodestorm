@@ -93,7 +93,6 @@ pub fn launch(sessions: Arc<crate::sessions::Sessions>, cli: Cli) {
     dioxus::LaunchBuilder::new()
         .with_cfg(Config::new().with_window(window).with_menu(None))
         .with_context(cli)
-        .with_context(sessions.active_store())
         .with_context(sessions)
         .launch(app::App);
 }

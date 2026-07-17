@@ -573,6 +573,55 @@ body {
   background: var(--bg-card-hover);
 }
 
+.sessions-dropdown {
+  min-width: 230px;
+}
+
+.session-row {
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.session-row.active .sess-name {
+  color: var(--accent);
+}
+
+.sess-badges {
+  display: flex;
+  gap: 4px;
+}
+
+.session-create {
+  display: flex;
+  gap: 4px;
+  padding: 4px 6px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+
+.session-name-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 5px 8px;
+}
+
+.session-name-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.session-archive {
+  color: var(--status-removed) !important;
+}
+
 /* ---------- minimap ---------- */
 
 .minimap {

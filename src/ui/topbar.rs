@@ -44,10 +44,14 @@ pub fn TopBar(
     doc: Signal<SessionDoc>,
     meta: Signal<UiMeta>,
     selected: Signal<Option<NodeId>>,
+    session_name: Signal<String>,
 ) -> Element {
     let store = use_store();
     let cli = use_context::<Cli>();
+    let sessions = use_context::<std::sync::Arc<crate::sessions::Sessions>>();
     let mut comment = use_signal(String::new);
+    let mut sessions_open = use_signal(|| false);
+    let mut new_session_draft = use_signal(String::new);
     let d = doc.read();
     let m = meta.read();
     let has_nodes = !d.nodes.is_empty();
@@ -76,6 +80,91 @@ pub fn TopBar(
     rsx! {
         header { class: "topbar",
             span { class: "topbar-brand", "nodestorm" }
+            div { class: "export-menu",
+                button {
+                    class: "btn",
+                    title: "Switch, create, or archive named sessions",
+                    onclick: move |_| sessions_open.toggle(),
+                    "{session_name} ▾"
+                }
+                if sessions_open() {
+                    div {
+                        class: "menu-catcher",
+                        onclick: move |_| sessions_open.set(false),
+                    }
+                    div { class: "export-dropdown sessions-dropdown",
+                        for info in sessions.list() {
+                            button {
+                                key: "{info.name}",
+                                class: if info.active { "session-row active" } else { "session-row" },
+                                onclick: {
+                                    let sessions = sessions.clone();
+                                    let name = info.name.clone();
+                                    move |_| {
+                                        if let Err(err) = sessions.switch(&name) {
+                                            tracing::warn!(%err, "switch failed");
+                                        }
+                                        sessions_open.set(false);
+                                    }
+                                },
+                                span { class: "sess-name", "{info.name}" }
+                                span { class: "sess-badges",
+                                    if info.open_choices > 0 {
+                                        span { class: "pill pill-open", "{info.open_choices}" }
+                                    }
+                                    if info.agent_waiting {
+                                        span { class: "pill pill-waiting", "●" }
+                                    }
+                                }
+                            }
+                        }
+                        div { class: "session-create",
+                            input {
+                                class: "session-name-input",
+                                placeholder: "new session…",
+                                value: "{new_session_draft}",
+                                oninput: move |ev| new_session_draft.set(ev.value()),
+                            }
+                            button {
+                                class: "btn",
+                                disabled: new_session_draft.read().trim().is_empty(),
+                                onclick: {
+                                    let sessions = sessions.clone();
+                                    move |_| {
+                                        let name = new_session_draft.read().trim().to_owned();
+                                        match sessions.create(&name) {
+                                            Ok(slug) => {
+                                                let _ = sessions.switch(&slug);
+                                                new_session_draft.set(String::new());
+                                            }
+                                            Err(err) => {
+                                                tracing::warn!(%err, "create session failed");
+                                            }
+                                        }
+                                        sessions_open.set(false);
+                                    }
+                                },
+                                "Create"
+                            }
+                        }
+                        button {
+                            class: "session-archive",
+                            title: "Save this session's file into sessions/archive/ and drop it from the list",
+                            onclick: {
+                                let sessions = sessions.clone();
+                                move |_| {
+                                    let name = sessions.active_name();
+                                    if let Err(err) = sessions.archive(&name) {
+                                        tracing::warn!(%err, "archive failed");
+                                    }
+                                    sessions_open.set(false);
+                                }
+                            },
+                            "Archive current"
+                        }
+                    }
+                }
+            }
             span { class: "topbar-title", "{title}" }
             input {
                 class: "search-box",

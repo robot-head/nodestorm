@@ -1,5 +1,10 @@
-//! Root component: bridges the shared [`Store`] into Dioxus signals and
-//! composes the screen.
+//! Root component: bridges the *active session's* [`Store`] into Dioxus
+//! signals and composes the screen.
+//!
+//! The bridge selects over two watch channels: the active store's revision
+//! (re-snapshot the doc) and the session manager's generation (the list or
+//! the active session changed — reset view state and re-subscribe to the
+//! new active store).
 
 use std::sync::Arc;
 
@@ -8,7 +13,7 @@ use dioxus::prelude::*;
 use crate::cli::Cli;
 use crate::layout::{self, Layout};
 use crate::model::NodeId;
-use crate::store::Store;
+use crate::sessions::Sessions;
 
 use super::activity::ActivityFeed;
 use super::canvas::Canvas;
@@ -18,37 +23,60 @@ use super::topbar::TopBar;
 #[component]
 pub fn App() -> Element {
     let cli = use_context::<Cli>();
-    let store = use_context::<Arc<Store>>();
-    let mut doc = use_signal(|| store.snapshot_doc());
-    let mut meta = use_signal(|| store.snapshot_meta());
+    let sessions = use_context::<Arc<Sessions>>();
+    let mut doc = use_signal(|| sessions.active_store().snapshot_doc());
+    let mut meta = use_signal(|| sessions.active_store().snapshot_meta());
+    let mut session_name = use_signal(|| sessions.active_name());
 
-    // Store → UI bridge: whenever any mutation bumps the revision, re-snapshot.
-    // `watch` is executor-agnostic, so awaiting it on the Dioxus runtime is fine.
+    // Cross-component signals (topbar, panel, and canvas all touch them),
+    // wrapped in newtypes because context is type-keyed.
+    let mut connect_from = use_context_provider(|| super::ConnectFrom(Signal::new(None))).0;
+    use_context_provider(|| super::ZoomTarget(Signal::new(None)));
+    let mut search = use_context_provider(|| super::SearchQuery(Signal::new(String::new()))).0;
+
+    let layout: Memo<Layout> = use_memo(move || layout::compute(&doc.read()));
+    let mut selected: Signal<Option<NodeId>> = use_signal(|| None);
+    let hovered_affects: Signal<Vec<NodeId>> = use_signal(Vec::new);
+
+    // Store → UI bridge: revision changes re-snapshot; generation changes
+    // re-subscribe to the new active store and reset per-session view state.
     use_future({
-        let store = store.clone();
+        let sessions = sessions.clone();
         move || {
-            let store = store.clone();
+            let sessions = sessions.clone();
             async move {
-                let mut rev = store.subscribe();
+                let mut generation = sessions.subscribe_generation();
                 loop {
-                    if rev.changed().await.is_err() {
-                        break;
-                    }
+                    let store = sessions.active_store();
                     doc.set(store.snapshot_doc());
                     meta.set(store.snapshot_meta());
+                    session_name.set(sessions.active_name());
+                    let mut rev = store.subscribe();
+                    loop {
+                        tokio::select! {
+                            changed = rev.changed() => {
+                                if changed.is_err() {
+                                    return;
+                                }
+                                doc.set(store.snapshot_doc());
+                                meta.set(store.snapshot_meta());
+                            }
+                            changed = generation.changed() => {
+                                if changed.is_err() {
+                                    return;
+                                }
+                                selected.set(None);
+                                connect_from.set(None);
+                                search.set(String::new());
+                                break;
+                            }
+                        }
+                    }
                 }
             }
         }
     });
 
-    let layout: Memo<Layout> = use_memo(move || layout::compute(&doc.read()));
-    let selected: Signal<Option<NodeId>> = use_signal(|| None);
-    let hovered_affects: Signal<Vec<NodeId>> = use_signal(Vec::new);
-    // Cross-component signals (topbar, panel, and canvas all touch them),
-    // wrapped in newtypes because context is type-keyed.
-    use_context_provider(|| super::ConnectFrom(Signal::new(None)));
-    use_context_provider(|| super::ZoomTarget(Signal::new(None)));
-    use_context_provider(|| super::SearchQuery(Signal::new(String::new())));
     let mcp_url = cli.mcp_url();
     let has_nodes = !doc.read().nodes.is_empty();
     let selected_node = selected
@@ -59,7 +87,7 @@ pub fn App() -> Element {
     rsx! {
         document::Style { {include_str!("../../assets/main.css")} }
         div { class: "app",
-            TopBar { doc, meta, selected }
+            TopBar { doc, meta, selected, session_name }
             div { class: "main",
                 if has_nodes {
                     Canvas { doc, layout, selected, hovered_affects }
@@ -81,7 +109,7 @@ pub fn App() -> Element {
     }
 }
 
-/// Convenience for child components: the store from context.
-pub fn use_store() -> Arc<Store> {
-    use_context::<Arc<Store>>()
+/// Convenience for child components: the ACTIVE session's store.
+pub fn use_store() -> Arc<crate::store::Store> {
+    use_context::<Arc<Sessions>>().active_store()
 }
