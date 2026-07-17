@@ -8,6 +8,7 @@
 
 pub mod cli;
 pub mod demo;
+pub mod diff;
 pub mod export;
 pub mod layout;
 pub mod model;

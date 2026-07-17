@@ -419,6 +419,15 @@ fn considered_labels(choice: &Choice, considered: &[OptionId], picked: &OptionId
     labels
 }
 
+/// Crate-visible aliases for the diff module.
+pub(crate) fn kind_name_pub(kind: NodeKind) -> &'static str {
+    kind_name(kind)
+}
+
+pub(crate) fn status_name_pub(status: ElementStatus) -> &'static str {
+    status_name(status)
+}
+
 fn kind_name(kind: NodeKind) -> &'static str {
     match kind {
         NodeKind::Service => "service",

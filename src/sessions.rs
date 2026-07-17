@@ -281,6 +281,137 @@ impl Sessions {
         Ok(())
     }
 
+    /// Rename a session: slugified and deduped like `create`. The backing
+    /// file is renamed and `active` follows. The `Arc<Store>` is unchanged,
+    /// so an in-flight `await_decisions` keeps working; only lookups by the
+    /// old name start failing (with the usual available-sessions error).
+    pub fn rename(&self, old: &str, new: &str) -> anyhow::Result<String> {
+        let (slug, old_path, new_path) = {
+            let mut inner = self.lock();
+            let old_slug = slugify(old);
+            if !inner.map.contains_key(&old_slug) {
+                anyhow::bail!("unknown session `{old}`");
+            }
+            let base = slugify(new);
+            if base.is_empty() {
+                anyhow::bail!("the new name is empty after slugifying");
+            }
+            let mut slug = base.clone();
+            let mut n = 2;
+            while slug != old_slug && inner.map.contains_key(&slug) {
+                slug = format!("{base}-{n}");
+                n += 1;
+            }
+            let mut entry = inner.map.remove(&old_slug).expect("checked above");
+            let old_path = entry.path.clone();
+            let new_path = self.dir.join(format!("{slug}.json"));
+            entry.path = new_path.clone();
+            crate::persist::save(&old_path, &entry.store.snapshot_state())?;
+            inner.map.insert(slug.clone(), entry);
+            if inner.active == old_slug {
+                inner.active = slug.clone();
+            }
+            (slug, old_path, new_path)
+        };
+        if old_path != new_path {
+            std::fs::rename(&old_path, &new_path)?;
+        }
+        self.bump();
+        Ok(slug)
+    }
+
+    /// Hard-delete a session: gone from the list AND from disk (archive is
+    /// the reversible sibling). Same guardrails as archive: never the last
+    /// session; deleting the active one switches to a survivor first.
+    pub fn delete(&self, name: &str) -> anyhow::Result<()> {
+        let entry = {
+            let mut inner = self.lock();
+            let slug = slugify(name);
+            if !inner.map.contains_key(&slug) {
+                anyhow::bail!("unknown session `{name}`");
+            }
+            if inner.map.len() == 1 {
+                anyhow::bail!("cannot delete the last session");
+            }
+            if inner.active == slug {
+                let survivor = inner
+                    .map
+                    .keys()
+                    .find(|k| **k != slug)
+                    .cloned()
+                    .expect("len > 1");
+                inner.active = survivor;
+            }
+            inner.map.remove(&slug).expect("checked above")
+        };
+        if entry.path.exists() {
+            std::fs::remove_file(&entry.path)?;
+        }
+        self.bump();
+        Ok(())
+    }
+
+    /// Sorted stems of `archive/*.json`.
+    pub fn list_archived(&self) -> Vec<String> {
+        let archive_dir = self.dir.join("archive");
+        let mut names: Vec<String> = std::fs::read_dir(&archive_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| {
+                let path = e.path();
+                if path.extension().is_some_and(|x| x == "json") {
+                    path.file_stem().and_then(|s| s.to_str()).map(str::to_owned)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Bring an archived session back to the live list (name deduped
+    /// against live sessions). Returns the canonical slug.
+    pub fn unarchive(&self, name: &str) -> anyhow::Result<String> {
+        let base = slugify(name);
+        let archived = self.dir.join("archive").join(format!("{base}.json"));
+        if !archived.exists() {
+            anyhow::bail!("no archived session `{name}`");
+        }
+        let slug = {
+            let inner = self.lock();
+            let mut slug = base.clone();
+            let mut n = 2;
+            while inner.map.contains_key(&slug) {
+                slug = format!("{base}-{n}");
+                n += 1;
+            }
+            slug
+        };
+        let path = self.dir.join(format!("{slug}.json"));
+        std::fs::rename(&archived, &path)?;
+        let store = match crate::persist::load(&path) {
+            Some(state) => Store::new(state),
+            None => Store::new(SessionState::default()),
+        };
+        {
+            let mut inner = self.lock();
+            inner.map.insert(
+                slug.clone(),
+                Entry {
+                    store: store.clone(),
+                    path: path.clone(),
+                },
+            );
+        }
+        if let Some(handle) = self.runtime.lock().expect("runtime lock").clone() {
+            handle.spawn(crate::persist::autosave_task(store, path));
+        }
+        self.bump();
+        Ok(slug)
+    }
+
     /// Save, then move the session's file into `<dir>/archive/` and drop it
     /// from the live list. The last session can't be archived; archiving
     /// the active one switches to a survivor first.
@@ -475,6 +606,97 @@ mod tests {
 
         // The last remaining session cannot be archived.
         assert!(sessions.archive("default").is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rename_rekeys_file_and_active() {
+        let root = tmp_root("rename");
+        let sessions = Sessions::open(root.join("sessions"), None).unwrap();
+        sessions.create("alpha").unwrap();
+        sessions.switch("alpha").unwrap();
+        let store_before = sessions.get("alpha").unwrap();
+        let mut generation = sessions.subscribe_generation();
+        let before = *generation.borrow_and_update();
+
+        let slug = sessions.rename("alpha", "Big Plan").unwrap();
+        assert_eq!(slug, "big-plan");
+        assert_eq!(sessions.active_name(), "big-plan", "active follows");
+        assert!(sessions.get("alpha").is_none());
+        let store_after = sessions.get("big-plan").unwrap();
+        assert!(
+            Arc::ptr_eq(&store_before, &store_after),
+            "same store, new name — in-flight awaits keep working"
+        );
+        assert!(root.join("sessions").join("big-plan.json").exists());
+        assert!(!root.join("sessions").join("alpha.json").exists());
+        assert!(*generation.borrow_and_update() > before);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rename_dedups_against_existing() {
+        let root = tmp_root("rename-dedup");
+        let sessions = Sessions::open(root.join("sessions"), None).unwrap();
+        sessions.create("alpha").unwrap();
+        sessions.create("beta").unwrap();
+        let slug = sessions.rename("beta", "alpha").unwrap();
+        assert_eq!(slug, "alpha-2", "collides with live alpha");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn delete_removes_file_and_never_last() {
+        let root = tmp_root("delete");
+        let sessions = Sessions::open(root.join("sessions"), None).unwrap();
+        sessions.create("alpha").unwrap();
+        sessions.switch("alpha").unwrap();
+
+        sessions.delete("alpha").unwrap();
+        assert_eq!(sessions.active_name(), "default", "active switched first");
+        assert!(sessions.get("alpha").is_none());
+        assert!(
+            !root.join("sessions").join("alpha.json").exists(),
+            "file deleted, not archived"
+        );
+        assert!(
+            !root
+                .join("sessions")
+                .join("archive")
+                .join("alpha.json")
+                .exists()
+        );
+        assert!(sessions.delete("default").is_err(), "never the last");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn unarchive_round_trip() {
+        let root = tmp_root("unarchive");
+        let sessions = Sessions::open(root.join("sessions"), None).unwrap();
+        sessions.create("alpha").unwrap();
+        sessions
+            .get("alpha")
+            .unwrap()
+            .apply_propose(demo_doc())
+            .unwrap();
+        sessions.archive("alpha").unwrap();
+        assert_eq!(sessions.list_archived(), vec!["alpha".to_owned()]);
+
+        let slug = sessions.unarchive("alpha").unwrap();
+        assert_eq!(slug, "alpha");
+        assert!(sessions.list_archived().is_empty());
+        let doc = sessions.get("alpha").unwrap().snapshot_doc();
+        assert!(
+            doc.node(&NodeId::from("sync-engine")).is_some(),
+            "content survived the round trip"
+        );
+
+        // Unarchiving over a live name collision dedups.
+        sessions.archive("alpha").unwrap();
+        sessions.create("alpha").unwrap();
+        let slug = sessions.unarchive("alpha").unwrap();
+        assert_eq!(slug, "alpha-2");
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -80,6 +80,9 @@ notes — handle each kind:
 - `node_deleted` / `edge_deleted` — done deals (user-owned node, or any
   edge). Never silently re-add one; if you disagree, say so first.
 - `edge_added` — the user drew a dependency. Factor it into your analysis.
+- The user can **undo** edits and decisions *until they are delivered to
+  you* — treat only what arrives through `await_decisions` as final, and
+  expect `decisions_so_far` previews to occasionally shrink.
 
 ## Named sessions
 
@@ -89,6 +92,9 @@ that session — use this for a parallel brainstorm ("I'll sketch the
 migration plan in a separate session called `db-migration`"). Etiquette:
 
 - Call `list_sessions` to orient before assuming what exists.
+- Before re-proposing into a brainstorm you have not touched recently,
+  `diff_sessions` against your working session shows what drifted — cite
+  the differences instead of overwriting them.
 - **The user only sees the active session.** You cannot switch it — always
   say which session you touched, and don't expect decisions from a session
   the user isn't looking at (they'll switch when ready; your

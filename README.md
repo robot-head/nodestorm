@@ -113,6 +113,10 @@ Every edit flows back as a decision event with your next Send.
   immediately (with their edges); agent components are only marked
   `removed` — the agent gets a `removal_requested` event and applies it (or
   pushes back). Edges always delete immediately.
+- **Undo/Redo** (topbar buttons or `Ctrl+Z`/`Ctrl+Y`) covers every edit
+  and every not-yet-sent decision. Honest boundaries: once decisions are
+  delivered to the agent, or the agent mutates the graph, the undo history
+  clears — you can't unsend facts or silently clobber agent work.
 
 Finding your way around big graphs: the **search box** highlights matches
 (Enter cycles + zooms, Esc clears, `/` focuses it) and the **minimap**
@@ -121,7 +125,9 @@ outside the viewport aren't rendered at all (always-on culling), and any
 `group` can be **collapsed into one cluster card** — click a card's group
 pill, or right-click → *Collapse group*. Edges into a collapsed cluster
 merge into one thick `×N` bundle; expand with the cluster's ⊞ button or a
-double-click. Try it: `nodestorm --demo-big 300`.
+double-click. Long edges (spanning several columns) route through shared
+horizontal channels, one lane per edge, instead of criss-crossing the
+gutters. Try it: `nodestorm --demo-big 300`.
 
 ## Sessions
 
@@ -135,6 +141,13 @@ you work in another**: every MCP tool takes an optional `session` name
 (omitted = the session on screen), `propose_graph` auto-creates missing
 names, and `list_sessions` shows what exists. Only you switch what's on
 screen.
+
+The menu's Manage block also **renames** the active session (the file
+follows; a waiting agent is unaffected), **deletes** it permanently, and
+**unarchives** anything in `sessions/archive/`. Every other session's row
+has a **Compare** button: a side panel shows how it differs from the
+active one — components added/removed/changed, edges, and decision drift —
+the same summary agents get from `diff_sessions`.
 
 ## Timeline
 
@@ -151,6 +164,7 @@ you typed into the Send box.
 | `Del` | delete the selection |
 | `+` / `-` / `0` | zoom in / out / fit |
 | `n` | new component at the view center |
+| `Ctrl+Z` / `Ctrl+Y` | undo / redo your edits and undelivered decisions |
 | `Esc` | cancel connect → close menu → clear search → deselect |
 | double-click card | zoom to it |
 | double-click background | new component there |
@@ -177,6 +191,7 @@ you typed into the Send box.
 | `clear_session` | wipe canvas and decision log |
 | `export_markdown` | the brainstorm as a Markdown decision record with an embedded Mermaid diagram (plain text — save it into the repo's docs); `format: "mermaid"` returns just the diagram |
 | `list_sessions` | the named sessions with per-session counts and agent-waiting flags |
+| `diff_sessions` | structural comparison of two sessions — components added/removed/changed, edges, decision drift — as plain Markdown |
 
 Every tool also takes an optional `session: "name"` (default: the session
 on screen); `propose_graph` creates missing sessions on the spot, and

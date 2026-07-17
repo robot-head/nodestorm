@@ -1,4 +1,4 @@
-//! The seven nodestorm MCP tools.
+//! The eight nodestorm MCP tools.
 //!
 //! All rmcp contact stays in this module (and `server::mod`): the store knows
 //! nothing about MCP, which keeps it unit-testable and shields the rest of
@@ -116,6 +116,15 @@ pub struct SessionOnlyParams {
     /// Named session. Omit for the active one.
     #[serde(default)]
     pub session: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DiffParams {
+    /// Baseline session name.
+    pub a: String,
+    /// Session compared against the baseline.
+    pub b: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -354,6 +363,25 @@ impl NodestormServer {
         let (name, store) = self.session_and_store(&p.session)?;
         let summary = store.clear_session();
         json_result(GraphSummary::new(name, summary))
+    }
+
+    #[tool(
+        description = "Compare two named sessions structurally — components added/removed/changed \
+                       (field-level), edges added/removed, and decision drift (newly decided, \
+                       decided differently, reopened, dismissed) — as plain Markdown. Useful \
+                       before re-proposing into an older brainstorm."
+    )]
+    async fn diff_sessions(
+        &self,
+        Parameters(p): Parameters<DiffParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let (a_name, a_store) = self.session_and_store(&Some(p.a))?;
+        let (b_name, b_store) = self.session_and_store(&Some(p.b))?;
+        let a_doc = a_store.snapshot_doc();
+        let b_doc = b_store.snapshot_doc();
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            crate::diff::diff_docs(&a_name, &a_doc, &b_name, &b_doc),
+        )]))
     }
 
     #[tool(

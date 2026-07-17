@@ -18,6 +18,7 @@ use crate::sessions::Sessions;
 use super::activity::ActivityFeed;
 use super::canvas::Canvas;
 use super::choice_panel::ChoicePanel;
+use super::diff_panel::DiffPanel;
 use super::timeline::Timeline;
 use super::topbar::TopBar;
 
@@ -34,6 +35,7 @@ pub fn App() -> Element {
     let mut connect_from = use_context_provider(|| super::ConnectFrom(Signal::new(None))).0;
     use_context_provider(|| super::ZoomTarget(Signal::new(None)));
     let mut search = use_context_provider(|| super::SearchQuery(Signal::new(String::new()))).0;
+    let mut compare_with = use_context_provider(|| super::CompareWith(Signal::new(None))).0;
 
     let layout: Memo<Layout> = use_memo(move || {
         let collapsed: std::collections::BTreeSet<String> =
@@ -74,6 +76,7 @@ pub fn App() -> Element {
                                 selected.set(None);
                                 connect_from.set(None);
                                 search.set(String::new());
+                                compare_with.set(None);
                                 break;
                             }
                         }
@@ -89,6 +92,16 @@ pub fn App() -> Element {
         .read()
         .as_ref()
         .and_then(|id| doc.read().node(id).cloned());
+    let compare_text = compare_with().and_then(|other| {
+        sessions.get(&other).map(|store| {
+            crate::diff::diff_docs(
+                &session_name.read(),
+                &doc.read(),
+                &other,
+                &store.snapshot_doc(),
+            )
+        })
+    });
 
     rsx! {
         document::Style { {include_str!("../../assets/main.css")} }
@@ -103,6 +116,8 @@ pub fn App() -> Element {
                         // edit-form drafts start from the new node's content.
                         // Selection takes the right-panel slot over Timeline.
                         ChoicePanel { key: "{node.id}", node, doc, selected, hovered_affects }
+                    } else if let Some(text) = compare_text {
+                        DiffPanel { text, on_close: move |()| compare_with.set(None) }
                     } else if timeline_open() {
                         Timeline { doc, meta, on_close: move |()| timeline_open.set(false) }
                     }

@@ -84,6 +84,7 @@ async fn full_decision_roundtrip() {
         "clear_session",
         "export_markdown",
         "list_sessions",
+        "diff_sessions",
     ] {
         assert!(
             names.contains(&expected),
@@ -528,6 +529,36 @@ async fn sessions_route_and_await_concurrently() {
     let msg = format!("{err:?}");
     assert!(msg.contains("unknown session"), "{msg}");
     assert!(msg.contains("available"), "{msg}");
+
+    // diff_sessions renders the structured comparison as plain Markdown.
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("diff_sessions").with_arguments(
+                json!({"a": "alpha", "b": "beta"})
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
+        )
+        .await
+        .expect("diff_sessions");
+    let text = &result.content[0].as_text().expect("plain text").text;
+    assert!(text.starts_with("# Diff: alpha → beta"), "got: {text}");
+    // alpha decided redis (delivered earlier); beta decided redis too, so
+    // the graphs differ only if titles/decisions drifted — assert the
+    // header and that unknown names still error.
+    let err = client
+        .call_tool(
+            CallToolRequestParams::new("diff_sessions").with_arguments(
+                json!({"a": "alpha", "b": "ghost"})
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
+        )
+        .await;
+    let msg = format!("{err:?}");
+    assert!(msg.contains("unknown session"), "{msg}");
 
     client.cancel().await.expect("client shutdown");
 }

@@ -387,6 +387,13 @@ try {
     # changes the UIA-exposed name.
     if (-not (Wait-Element 'REMOVED' 10)) { Fail 'agent node was not marked removed' }
     Log 'agent node soft-removed (removal_requested queued)'
+
+    # v0.6: undo restores the node's status; redo re-marks it.
+    Click-Element $hwnd ([string][char]0x21B6 + ' Undo')
+    if (-not (Wait-ElementGone 'REMOVED' 10)) { Fail 'undo did not clear the removal' }
+    Click-Element $hwnd ([string][char]0x21B7 + ' Redo')
+    if (-not (Wait-Element 'REMOVED' 10)) { Fail 'redo did not re-mark the removal' }
+    Log 'undo/redo round-trip on the soft-delete'
     Save-WindowPng $hwnd (Join-Path $OutDir '03-edited.png')
 
     # ---- v0.4 sessions + timeline through the real controls ----
@@ -411,6 +418,30 @@ try {
     Click-Element $hwnd $SessionStem
     if (-not (Wait-Element 'Webhook Dispatcher' 10)) { Fail 'original graph did not return after switching back' }
     Log 'sessions: create/switch round-trip OK'
+
+    # v0.5: rename the active session and back (label follows both ways).
+    Click-Element $hwnd ($SessionStem + ' ' + [char]0x25BE)
+    if (-not (Wait-Element 'Rename' 5)) { Fail 'manage section missing' }
+    Click-Element $hwnd ('rename to' + [char]0x2026)
+    Type-Text $hwnd 'renamed-e2e'
+    Click-Element $hwnd 'Rename'
+    if (-not (Wait-Element ('renamed-e2e ' + [char]0x25BE) 10)) { Fail 'rename did not update the switcher' }
+    Click-Element $hwnd ('renamed-e2e ' + [char]0x25BE)
+    if (-not (Wait-Element 'Rename' 5)) { Fail 'manage section missing after rename' }
+    Click-Element $hwnd ('rename to' + [char]0x2026)
+    Type-Text $hwnd $SessionStem
+    Click-Element $hwnd 'Rename'
+    if (-not (Wait-Element ($SessionStem + ' ' + [char]0x25BE) 10)) { Fail 'rename back failed' }
+    Log 'session renamed and renamed back'
+
+    # v0.5: Compare opens the diff panel against the scratch session.
+    Click-Element $hwnd ($SessionStem + ' ' + [char]0x25BE)
+    if (-not (Wait-Element 'Compare' 5)) { Fail 'Compare button missing' }
+    Click-Element $hwnd 'Compare'
+    if (-not (Wait-Element 'Session diff' 10)) { Fail 'diff panel did not open' }
+    Save-WindowPng $hwnd (Join-Path $OutDir '05-manage-diff.png')
+    Click-Element $hwnd ([string][char]0x2715)
+    Log 'session diff panel verified'
 
     # Timeline: the session-log panel opens and is captured.
     Click-Element $hwnd 'Timeline'

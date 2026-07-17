@@ -227,6 +227,15 @@ pub fn Canvas(
                                 }
                             }
                         }
+                        Key::Character(c) if ev.modifiers().ctrl() => match c.as_str() {
+                            "z" => {
+                                store.undo();
+                            }
+                            "y" => {
+                                store.redo();
+                            }
+                            _ => {}
+                        },
                         Key::Character(c) => match c.as_str() {
                             "+" | "=" => zoom_step(1.25),
                             "-" => zoom_step(0.8),
@@ -436,7 +445,10 @@ pub fn Canvas(
                             on_drag_start: {
                                 let id = node.id.clone();
                                 let rect = *rect;
+                                let store = store.clone();
                                 move |ev: MouseEvent| {
+                                    // One undo entry per drag, not per move.
+                                    store.checkpoint_position(&id);
                                     let c = ev.client_coordinates();
                                     gesture.set(GestureState {
                                         gesture: Some(Gesture::DragNode {

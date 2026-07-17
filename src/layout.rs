@@ -320,7 +320,13 @@ fn compute_inner(doc: &SessionDoc, counts: &[usize]) -> Layout {
     let ranks = longest_path_ranks(&dag);
     let order = barycenter_order(&dag, &ranks);
     let rects = place(doc, &ranks, &order);
-    let edges = route_edges(doc, &rects, counts);
+    let rank_of: HashMap<&NodeId, usize> = doc
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (&n.id, ranks[i]))
+        .collect();
+    let edges = route_edges(doc, &rects, counts, &rank_of);
     let bounds = compute_bounds(&rects);
 
     Layout {
@@ -512,10 +518,48 @@ fn place(doc: &SessionDoc, ranks: &[usize], order: &[Vec<usize>]) -> HashMap<Nod
     rects
 }
 
+/// Vertical spacing between channel lanes for rank-spanning edges.
+const LANE_GAP: f64 = 12.0;
+
 /// Cubic bezier from the right edge of `from` to the left edge of `to`, with
-/// per-port vertical fan-out when several edges share a card side.
+/// per-port vertical fan-out when several edges share a card side. Edges
+/// spanning more than one rank are channel-routed: each `(from_rank,
+/// to_rank)` group shares a horizontal corridor, one lane per edge (document
+/// order), so parallel long edges run together instead of criss-crossing.
 /// `counts[i]` is the bundle size of `doc.edges[i]` (missing → 1).
-fn route_edges(doc: &SessionDoc, rects: &HashMap<NodeId, Rect>, counts: &[usize]) -> Vec<EdgePath> {
+fn route_edges(
+    doc: &SessionDoc,
+    rects: &HashMap<NodeId, Rect>,
+    counts: &[usize],
+    rank_of: &HashMap<&NodeId, usize>,
+) -> Vec<EdgePath> {
+    // Channel groups: rank-spanning forward edges keyed by the rank pair.
+    let mut groups: std::collections::BTreeMap<(usize, usize), Vec<usize>> =
+        std::collections::BTreeMap::new();
+    for (i, e) in doc.edges.iter().enumerate() {
+        if let (Some(&ra), Some(&rb)) = (rank_of.get(&e.from), rank_of.get(&e.to))
+            && rb > ra + 1
+            && rects.contains_key(&e.from)
+            && rects.contains_key(&e.to)
+        {
+            groups.entry((ra, rb)).or_default().push(i);
+        }
+    }
+    // edge index → (lane, group size, group mean y).
+    let mut lanes: HashMap<usize, (usize, usize, f64)> = HashMap::new();
+    for idxs in groups.values() {
+        let mean: f64 = idxs
+            .iter()
+            .map(|&i| {
+                let e = &doc.edges[i];
+                (rects[&e.from].center_y() + rects[&e.to].center_y()) / 2.0
+            })
+            .sum::<f64>()
+            / idxs.len() as f64;
+        for (lane, &i) in idxs.iter().enumerate() {
+            lanes.insert(i, (lane, idxs.len(), mean));
+        }
+    }
     // Count edges per (node, side) so anchors can spread.
     let mut out_total: HashMap<&NodeId, usize> = HashMap::new();
     let mut in_total: HashMap<&NodeId, usize> = HashMap::new();
@@ -565,8 +609,37 @@ fn route_edges(doc: &SessionDoc, rects: &HashMap<NodeId, Rect>, counts: &[usize]
                 let dx = ((x2 - x1) / 2.0).abs().max(60.0);
                 (x1, x2, x1 + dx, x2 - dx)
             };
-            let path =
-                format!("M {x1:.1} {y1:.1} C {c1:.1} {y1:.1} {c2:.1} {y2:.1} {x2:.1} {y2:.1}");
+            let (path, label_pos) = match lanes.get(&i) {
+                Some(&(lane, n, mean)) if !backward => {
+                    // Channel routing: swing into the shared corridor lane,
+                    // run horizontally, swing out at the target.
+                    let lane_y = mean + (lane as f64 - (n as f64 - 1.0) / 2.0) * LANE_GAP;
+                    let gx1 = x1 + 60.0;
+                    let gx2 = x2 - 60.0;
+                    (
+                        format!(
+                            "M {x1:.1} {y1:.1} C {:.1} {y1:.1} {:.1} {lane_y:.1} {gx1:.1} {lane_y:.1} \
+                             L {gx2:.1} {lane_y:.1} \
+                             C {:.1} {lane_y:.1} {:.1} {y2:.1} {x2:.1} {y2:.1}",
+                            x1 + 30.0,
+                            gx1 - 30.0,
+                            gx2 + 30.0,
+                            x2 - 30.0,
+                        ),
+                        Point {
+                            x: (gx1 + gx2) / 2.0,
+                            y: lane_y - 8.0,
+                        },
+                    )
+                }
+                _ => (
+                    format!("M {x1:.1} {y1:.1} C {c1:.1} {y1:.1} {c2:.1} {y2:.1} {x2:.1} {y2:.1}"),
+                    Point {
+                        x: (x1 + x2) / 2.0,
+                        y: (y1 + y2) / 2.0 - 8.0,
+                    },
+                ),
+            };
             Some(EdgePath {
                 from: e.from.clone(),
                 to: e.to.clone(),
@@ -574,10 +647,7 @@ fn route_edges(doc: &SessionDoc, rects: &HashMap<NodeId, Rect>, counts: &[usize]
                 status: e.status,
                 label: e.label.clone(),
                 path,
-                label_pos: Point {
-                    x: (x1 + x2) / 2.0,
-                    y: (y1 + y2) / 2.0 - 8.0,
-                },
+                label_pos,
                 bundle_count: counts.get(i).copied().unwrap_or(1),
             })
         })
@@ -726,6 +796,58 @@ mod tests {
         assert!(l.clusters.is_empty());
         assert!(l.edges.iter().all(|e| e.bundle_count == 1));
         assert_eq!(l, compute(&grouped_doc()), "compute() is the empty set");
+    }
+
+    #[test]
+    fn long_edges_share_channel_lanes() {
+        // s1→t and s2→t span three ranks (via the s1→m1→m2→t chain);
+        // they must route through the shared channel (an `L` segment) in
+        // distinct lanes, while rank-adjacent edges keep the plain curve.
+        let d = doc(
+            &["s1", "s2", "m1", "m2", "t"],
+            &[
+                ("s1", "m1"),
+                ("m1", "m2"),
+                ("m2", "t"),
+                ("s1", "t"),
+                ("s2", "t"),
+            ],
+        );
+        let l = compute(&d);
+        let path_of = |from: &str, to: &str| {
+            l.edges
+                .iter()
+                .find(|e| e.from.as_str() == from && e.to.as_str() == to)
+                .map(|e| e.path.clone())
+                .expect("edge present")
+        };
+        let long_a = path_of("s1", "t");
+        let long_b = path_of("s2", "t");
+        assert!(long_a.contains(" L "), "channel segment: {long_a}");
+        assert!(long_b.contains(" L "), "channel segment: {long_b}");
+        assert_ne!(long_a, long_b, "distinct lanes");
+        for (from, to) in [("s1", "m1"), ("m1", "m2"), ("m2", "t")] {
+            let short = path_of(from, to);
+            assert!(
+                !short.contains(" L "),
+                "adjacent edges keep the plain curve: {short}"
+            );
+        }
+    }
+
+    #[test]
+    fn bundled_routing_is_deterministic() {
+        let d = doc(
+            &["s1", "s2", "m1", "m2", "t"],
+            &[
+                ("s1", "m1"),
+                ("m1", "m2"),
+                ("m2", "t"),
+                ("s1", "t"),
+                ("s2", "t"),
+            ],
+        );
+        assert_eq!(compute(&d), compute(&d));
     }
 
     #[test]

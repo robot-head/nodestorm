@@ -20,6 +20,20 @@ use crate::model::{
 };
 
 const ACTIVITY_CAP: usize = 200;
+/// Undo/redo depth. Snapshots are whole docs, but docs are small (≤ a few
+/// hundred nodes), so 50 is cheap.
+const UNDO_CAP: usize = 50;
+
+/// One undoable step: the doc as it was *before* a user mutation, plus the
+/// undelivered decision-log tail at that moment (redo has to put events
+/// back, so a length alone is not enough). Always the tail only — flushes
+/// clear the stacks, so `delivery_cursor` is stable across the window.
+#[derive(Debug, Clone)]
+pub struct Snapshot {
+    label: String,
+    doc: SessionDoc,
+    log_tail: Vec<DecisionEvent>,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -60,6 +74,12 @@ pub struct SessionState {
     /// session, never part of the doc, invisible to agents.
     #[serde(default)]
     pub collapsed_groups: Vec<String>,
+    /// Undo/redo stacks (transient; cleared by any flush or agent turn —
+    /// the undo window is "since the agent last spoke").
+    #[serde(skip)]
+    pub undo: Vec<Snapshot>,
+    #[serde(skip)]
+    pub redo: Vec<Snapshot>,
     /// Live `await_decisions` calls (transient; not persisted).
     #[serde(skip)]
     pub waiting_agents: usize,
@@ -73,6 +93,8 @@ pub struct UiMeta {
     pub open_choices: usize,
     pub activity: Vec<ActivityEntry>,
     pub collapsed_groups: Vec<String>,
+    pub undo_available: bool,
+    pub redo_available: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -157,7 +179,56 @@ impl Store {
             open_choices: s.doc.open_choice_count(),
             activity: s.activity.clone(),
             collapsed_groups: s.collapsed_groups.clone(),
+            undo_available: !s.undo.is_empty(),
+            redo_available: !s.redo.is_empty(),
         })
+    }
+
+    /// Undo the most recent user step (edits and undelivered decisions
+    /// only — flushes and agent turns clear the stacks). Returns whether
+    /// anything happened.
+    pub fn undo(&self) -> bool {
+        self.mutate(|s| {
+            let Some(snap) = s.undo.pop() else {
+                return false;
+            };
+            let current = Snapshot {
+                label: snap.label.clone(),
+                doc: s.doc.clone(),
+                log_tail: s.decision_log[s.delivery_cursor..].to_vec(),
+            };
+            s.redo.push(current);
+            restore(s, snap, "undid");
+            true
+        })
+    }
+
+    /// Redo the most recently undone step.
+    pub fn redo(&self) -> bool {
+        self.mutate(|s| {
+            let Some(snap) = s.redo.pop() else {
+                return false;
+            };
+            let current = Snapshot {
+                label: snap.label.clone(),
+                doc: s.doc.clone(),
+                log_tail: s.decision_log[s.delivery_cursor..].to_vec(),
+            };
+            s.undo.push(current);
+            restore(s, snap, "redid");
+            true
+        })
+    }
+
+    /// One undo entry per drag: called at drag START by the UI;
+    /// `set_position` itself never checkpoints.
+    pub fn checkpoint_position(&self, node: &NodeId) {
+        self.mutate(|s| {
+            if let Some(n) = s.doc.node(node) {
+                let label = format!("moved \u{201c}{}\u{201d}", n.label);
+                push_undo(s, &label);
+            }
+        });
     }
 
     // ---------- user-facing mutations (called from the UI) ----------
@@ -192,29 +263,38 @@ impl Store {
         considered: Vec<OptionId>,
     ) -> Result<(), StoreError> {
         self.mutate(|s| {
-            let n = s
+            // Validate + gather labels immutably so the undo checkpoint only
+            // lands once success is guaranteed.
+            let (label, opt_label) = {
+                let n = s
+                    .doc
+                    .node(node)
+                    .ok_or_else(|| StoreError::UnknownNode(node.clone()))?;
+                let c = n.choice(choice).ok_or_else(|| StoreError::UnknownChoice {
+                    node: node.clone(),
+                    choice: choice.clone(),
+                })?;
+                let o = c.options.iter().find(|o| &o.id == option).ok_or_else(|| {
+                    StoreError::UnknownOption {
+                        node: node.clone(),
+                        choice: choice.clone(),
+                        option: option.clone(),
+                    }
+                })?;
+                (n.label.clone(), o.label.clone())
+            };
+            push_undo(
+                s,
+                &format!("picked \u{201c}{opt_label}\u{201d} for {label}"),
+            );
+            let c = s
                 .doc
                 .node_mut(node)
-                .ok_or_else(|| StoreError::UnknownNode(node.clone()))?;
-            let label = n.label.clone();
-            let c = n
+                .expect("validated above")
                 .choices
                 .iter_mut()
                 .find(|c| &c.id == choice)
-                .ok_or_else(|| StoreError::UnknownChoice {
-                    node: node.clone(),
-                    choice: choice.clone(),
-                })?;
-            let opt_label = c
-                .options
-                .iter()
-                .find(|o| &o.id == option)
-                .map(|o| o.label.clone())
-                .ok_or_else(|| StoreError::UnknownOption {
-                    node: node.clone(),
-                    choice: choice.clone(),
-                    option: option.clone(),
-                })?;
+                .expect("validated above");
             c.selected = Some(option.clone());
             c.status = ChoiceStatus::Decided;
             push_event(
@@ -243,19 +323,26 @@ impl Store {
         reason: Option<String>,
     ) -> Result<(), StoreError> {
         self.mutate(|s| {
-            let n = s
-                .doc
-                .node_mut(node)
-                .ok_or_else(|| StoreError::UnknownNode(node.clone()))?;
-            let label = n.label.clone();
-            let c = n
-                .choices
-                .iter_mut()
-                .find(|c| &c.id == choice)
-                .ok_or_else(|| StoreError::UnknownChoice {
+            let label = {
+                let n = s
+                    .doc
+                    .node(node)
+                    .ok_or_else(|| StoreError::UnknownNode(node.clone()))?;
+                n.choice(choice).ok_or_else(|| StoreError::UnknownChoice {
                     node: node.clone(),
                     choice: choice.clone(),
                 })?;
+                n.label.clone()
+            };
+            push_undo(s, &format!("dismissed a choice on {label}"));
+            let c = s
+                .doc
+                .node_mut(node)
+                .expect("validated above")
+                .choices
+                .iter_mut()
+                .find(|c| &c.id == choice)
+                .expect("validated above");
             c.status = ChoiceStatus::Dismissed;
             push_event(
                 s,
@@ -277,11 +364,13 @@ impl Store {
 
     pub fn add_note(&self, node: &NodeId, text: String) -> Result<(), StoreError> {
         self.mutate(|s| {
-            let n = s
+            let label = s
                 .doc
-                .node_mut(node)
+                .node(node)
+                .map(|n| n.label.clone())
                 .ok_or_else(|| StoreError::UnknownNode(node.clone()))?;
-            let label = n.label.clone();
+            push_undo(s, &format!("added a note to {label}"));
+            let n = s.doc.node_mut(node).expect("validated above");
             n.notes.push(Note {
                 id: NoteId::new(uuid::Uuid::new_v4().to_string()),
                 text: text.clone(),
@@ -327,6 +416,7 @@ impl Store {
                 n += 1;
             }
             let id = NodeId::new(candidate);
+            push_undo(s, &format!("added component \u{201c}{label}\u{201d}"));
             s.doc.nodes.push(Node {
                 id: id.clone(),
                 label: label.clone(),
@@ -367,10 +457,11 @@ impl Store {
         description: String,
     ) -> Result<(), StoreError> {
         self.mutate(|s| {
-            let n = s
-                .doc
-                .node_mut(id)
-                .ok_or_else(|| StoreError::UnknownNode(id.clone()))?;
+            if s.doc.node(id).is_none() {
+                return Err(StoreError::UnknownNode(id.clone()));
+            }
+            push_undo(s, &format!("edited \u{201c}{label}\u{201d}"));
+            let n = s.doc.node_mut(id).expect("validated above");
             n.label = label.clone();
             n.kind = kind;
             n.description = description.clone();
@@ -406,6 +497,7 @@ impl Store {
             let label = node.label.clone();
             match node.origin {
                 Origin::User => {
+                    push_undo(s, &format!("deleted \u{201c}{label}\u{201d}"));
                     s.doc.nodes.retain(|n| &n.id != id);
                     s.doc.edges.retain(|e| &e.from != id && &e.to != id);
                     push_event(
@@ -421,10 +513,14 @@ impl Store {
                     );
                 }
                 Origin::Agent => {
-                    let n = s.doc.node_mut(id).expect("existence checked above");
-                    if n.status == ElementStatus::Removed {
+                    if s.doc.node(id).expect("checked above").status == ElementStatus::Removed {
                         return Ok(());
                     }
+                    push_undo(
+                        s,
+                        &format!("asked the agent to remove \u{201c}{label}\u{201d}"),
+                    );
+                    let n = s.doc.node_mut(id).expect("existence checked above");
                     n.status = ElementStatus::Removed;
                     push_event(
                         s,
@@ -464,6 +560,7 @@ impl Store {
             if s.doc.edges.iter().any(|e| e.key() == (from, to, kind)) {
                 return Err(StoreError::DuplicateEdge(from.clone(), to.clone()));
             }
+            push_undo(s, &format!("connected {from} \u{2192} {to}"));
             s.doc.edges.push(Edge {
                 from: from.clone(),
                 to: to.clone(),
@@ -498,11 +595,11 @@ impl Store {
         kind: EdgeKind,
     ) -> Result<(), StoreError> {
         self.mutate(|s| {
-            let before = s.doc.edges.len();
-            s.doc.edges.retain(|e| e.key() != (from, to, kind));
-            if s.doc.edges.len() == before {
+            if !s.doc.edges.iter().any(|e| e.key() == (from, to, kind)) {
                 return Err(StoreError::UnknownEdge(from.clone(), to.clone()));
             }
+            push_undo(s, &format!("removed the edge {from} \u{2192} {to}"));
+            s.doc.edges.retain(|e| e.key() != (from, to, kind));
             push_event(
                 s,
                 DecisionKind::EdgeDeleted {
@@ -555,6 +652,7 @@ impl Store {
                 );
             }
             s.flush_seq += 1;
+            clear_undo(s); // delivered decisions are facts
             push_activity(
                 s,
                 ActivityOrigin::User,
@@ -583,6 +681,7 @@ impl Store {
             edge.origin = Origin::Agent;
         }
         Ok(self.mutate(|s| {
+            clear_undo(s); // an agent turn invalidates the user's undo window
             let old_revision = s.doc.revision;
             let previous = std::mem::take(&mut s.doc);
             s.doc = incoming;
@@ -643,6 +742,7 @@ impl Store {
             });
         }
         Ok(self.mutate(|s| {
+            clear_undo(s); // an agent turn invalidates the user's undo window
             doc.revision = s.doc.revision;
             s.doc = doc;
             if announces.is_empty() {
@@ -759,6 +859,41 @@ fn push_event(s: &mut SessionState, kind: DecisionKind) {
     });
 }
 
+/// Record the pre-mutation state as an undoable step (called at the top of
+/// every user mutation once its validation has passed). A new action
+/// invalidates any redo history.
+fn push_undo(s: &mut SessionState, label: &str) {
+    s.undo.push(Snapshot {
+        label: label.to_owned(),
+        doc: s.doc.clone(),
+        log_tail: s.decision_log[s.delivery_cursor..].to_vec(),
+    });
+    if s.undo.len() > UNDO_CAP {
+        let excess = s.undo.len() - UNDO_CAP;
+        s.undo.drain(..excess);
+    }
+    s.redo.clear();
+}
+
+/// Apply a snapshot: doc restored (revision stays monotonic — the watch
+/// channel and agents both assume it never goes backward), the undelivered
+/// decision-log tail replaced wholesale, and a feed receipt.
+fn restore(s: &mut SessionState, snap: Snapshot, verb: &str) {
+    let revision = s.doc.revision;
+    s.doc = snap.doc;
+    s.doc.revision = revision;
+    s.decision_log.truncate(s.delivery_cursor);
+    s.decision_log.extend(snap.log_tail);
+    push_activity(s, ActivityOrigin::User, format!("{verb}: {}", snap.label));
+}
+
+/// Wipe both undo stacks — used when history becomes non-undoable (a flush
+/// delivered decisions, or the agent mutated the graph).
+fn clear_undo(s: &mut SessionState) {
+    s.undo.clear();
+    s.redo.clear();
+}
+
 fn push_activity(s: &mut SessionState, origin: ActivityOrigin, text: String) {
     s.activity.push(ActivityEntry {
         at: Utc::now(),
@@ -776,6 +911,7 @@ fn push_activity(s: &mut SessionState, origin: ActivityOrigin, text: String) {
 fn autoflush(s: &mut SessionState) {
     if s.doc.open_choice_count() == 0 && s.delivery_cursor < s.decision_log.len() {
         s.flush_seq += 1;
+        clear_undo(s); // delivered decisions are facts
         push_activity(
             s,
             ActivityOrigin::System,
@@ -1300,6 +1436,147 @@ mod tests {
         assert_eq!(n.label, "Adoptee (enriched)");
         assert_eq!(n.notes.len(), 1, "user note survives adoption");
         assert_eq!(n.position, Some(Point { x: 5.0, y: 6.0 }));
+    }
+
+    #[test]
+    fn undo_redo_round_trip_user_edit() {
+        use crate::model::NodeKind;
+        let store = demo_store();
+        let id = store
+            .add_user_node("Widget".into(), NodeKind::Component, None)
+            .unwrap();
+        let meta = store.snapshot_meta();
+        assert!(meta.undo_available);
+        assert!(!meta.redo_available);
+
+        assert!(store.undo());
+        assert!(store.snapshot_doc().node(&id).is_none(), "node gone");
+        assert_eq!(store.read(|s| s.decision_log.len()), 0, "event gone");
+        let meta = store.snapshot_meta();
+        assert!(!meta.undo_available);
+        assert!(meta.redo_available);
+        assert!(
+            meta.activity.iter().any(|a| a.text.contains("undid")),
+            "receipt"
+        );
+
+        assert!(store.redo());
+        assert!(store.snapshot_doc().node(&id).is_some(), "node back");
+        assert_eq!(store.read(|s| s.decision_log.len()), 1, "event back");
+    }
+
+    #[test]
+    fn undo_restores_decision_and_log_monotonic_revision() {
+        let store = demo_store();
+        pick_first_choice(&store); // demo has two open choices — no autoflush
+        let rev_after_pick = store.snapshot_doc().revision;
+        assert_eq!(store.read(|s| s.decision_log.len()), 1);
+
+        assert!(store.undo());
+        let doc = store.snapshot_doc();
+        let choice = &doc.node(&NodeId::from("sync-engine")).unwrap().choices[0];
+        assert_eq!(choice.status, ChoiceStatus::Open, "choice open again");
+        assert!(choice.selected.is_none());
+        assert_eq!(store.read(|s| s.decision_log.len()), 0);
+        assert!(
+            doc.revision > rev_after_pick,
+            "revision stays monotonic: {} vs {rev_after_pick}",
+            doc.revision
+        );
+    }
+
+    #[test]
+    fn flush_clears_stacks() {
+        use crate::model::NodeKind;
+        let store = demo_store();
+        store
+            .add_user_node("Widget".into(), NodeKind::Component, None)
+            .unwrap();
+        assert!(store.snapshot_meta().undo_available);
+        store.request_flush(None);
+        let meta = store.snapshot_meta();
+        assert!(!meta.undo_available, "delivered decisions are facts");
+        assert!(!meta.redo_available);
+        assert!(!store.undo(), "nothing to undo after a flush");
+    }
+
+    #[test]
+    fn autoflush_clears_stacks() {
+        let store = demo_store();
+        pick_first_choice(&store);
+        store
+            .select_option(
+                &NodeId::from("ws-gateway"),
+                &ChoiceId::from("ws-deployment"),
+                &OptionId::from("dedicated"),
+                vec![],
+            )
+            .unwrap(); // last open choice → autoflush
+        assert!(store.read(|s| s.flush_seq) > 0, "autoflush fired");
+        let meta = store.snapshot_meta();
+        assert!(!meta.undo_available);
+        assert!(!meta.redo_available);
+    }
+
+    #[test]
+    fn agent_mutations_clear_stacks() {
+        use crate::model::NodeKind;
+        let store = demo_store();
+        store
+            .add_user_node("Widget".into(), NodeKind::Component, None)
+            .unwrap();
+        store
+            .apply_update(vec![GraphOp::SetTitle {
+                title: "new title".into(),
+            }])
+            .unwrap();
+        assert!(
+            !store.snapshot_meta().undo_available,
+            "agent turn invalidates the undo window"
+        );
+
+        store
+            .add_user_node("Widget 2".into(), NodeKind::Component, None)
+            .unwrap();
+        store.apply_propose(demo_doc()).unwrap();
+        assert!(!store.snapshot_meta().undo_available);
+    }
+
+    #[test]
+    fn drag_checkpoints_once() {
+        let store = demo_store();
+        store.checkpoint_position(&NodeId::from("web-ui"));
+        for i in 0..3 {
+            store.set_position(
+                &NodeId::from("web-ui"),
+                Point {
+                    x: f64::from(i) * 10.0,
+                    y: 5.0,
+                },
+            );
+        }
+        assert_eq!(store.read(|s| s.undo.len()), 1, "one entry per drag");
+        assert!(store.undo());
+        assert!(
+            store
+                .snapshot_doc()
+                .node(&NodeId::from("web-ui"))
+                .unwrap()
+                .position
+                .is_none(),
+            "back to auto-layout"
+        );
+    }
+
+    #[test]
+    fn undo_cap_holds() {
+        let store = demo_store();
+        for i in 0..60 {
+            store
+                .add_note(&NodeId::from("web-ui"), format!("note {i}"))
+                .unwrap();
+        }
+        assert_eq!(store.read(|s| s.undo.len()), 50, "capped");
     }
 
     #[test]
