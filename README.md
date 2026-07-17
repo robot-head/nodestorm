@@ -113,6 +113,10 @@ Every edit flows back as a decision event with your next Send.
   immediately (with their edges); agent components are only marked
   `removed` — the agent gets a `removal_requested` event and applies it (or
   pushes back). Edges always delete immediately.
+- **Undo/Redo** (topbar buttons or `Ctrl+Z`/`Ctrl+Y`) covers every edit
+  and every not-yet-sent decision. Honest boundaries: once decisions are
+  delivered to the agent, or the agent mutates the graph, the undo history
+  clears — you can't unsend facts or silently clobber agent work.
 
 Finding your way around big graphs: the **search box** highlights matches
 (Enter cycles + zooms, Esc clears, `/` focuses it) and the **minimap**
@@ -121,7 +125,9 @@ outside the viewport aren't rendered at all (always-on culling), and any
 `group` can be **collapsed into one cluster card** — click a card's group
 pill, or right-click → *Collapse group*. Edges into a collapsed cluster
 merge into one thick `×N` bundle; expand with the cluster's ⊞ button or a
-double-click. Try it: `nodestorm --demo-big 300`.
+double-click. Long edges (spanning several columns) route through shared
+horizontal channels, one lane per edge, instead of criss-crossing the
+gutters. Try it: `nodestorm --demo-big 300`.
 
 ## Sessions
 
@@ -158,6 +164,7 @@ you typed into the Send box.
 | `Del` | delete the selection |
 | `+` / `-` / `0` | zoom in / out / fit |
 | `n` | new component at the view center |
+| `Ctrl+Z` / `Ctrl+Y` | undo / redo your edits and undelivered decisions |
 | `Esc` | cancel connect → close menu → clear search → deselect |
 | double-click card | zoom to it |
 | double-click background | new component there |

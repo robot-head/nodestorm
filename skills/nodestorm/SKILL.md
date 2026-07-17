@@ -80,6 +80,9 @@ notes — handle each kind:
 - `node_deleted` / `edge_deleted` — done deals (user-owned node, or any
   edge). Never silently re-add one; if you disagree, say so first.
 - `edge_added` — the user drew a dependency. Factor it into your analysis.
+- The user can **undo** edits and decisions *until they are delivered to
+  you* — treat only what arrives through `await_decisions` as final, and
+  expect `decisions_so_far` previews to occasionally shrink.
 
 ## Named sessions
 

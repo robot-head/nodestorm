@@ -387,6 +387,13 @@ try {
     # changes the UIA-exposed name.
     if (-not (Wait-Element 'REMOVED' 10)) { Fail 'agent node was not marked removed' }
     Log 'agent node soft-removed (removal_requested queued)'
+
+    # v0.6: undo restores the node's status; redo re-marks it.
+    Click-Element $hwnd ([string][char]0x21B6 + ' Undo')
+    if (-not (Wait-ElementGone 'REMOVED' 10)) { Fail 'undo did not clear the removal' }
+    Click-Element $hwnd ([string][char]0x21B7 + ' Redo')
+    if (-not (Wait-Element 'REMOVED' 10)) { Fail 'redo did not re-mark the removal' }
+    Log 'undo/redo round-trip on the soft-delete'
     Save-WindowPng $hwnd (Join-Path $OutDir '03-edited.png')
 
     # ---- v0.4 sessions + timeline through the real controls ----

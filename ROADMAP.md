@@ -60,7 +60,16 @@ tight, make its results durable, then make the canvas scale.
       (components/edges/decision drift) via the `diff_sessions` tool and a
       per-session Compare panel
 
+## Done — v0.6
+
+- [x] Undo/redo for user edits and undelivered decisions (snapshot stacks;
+      cleared on delivery and on agent turns — no unsending facts, no
+      clobbering agent work), topbar buttons + Ctrl+Z / Ctrl+Y
+- [x] Channel-lane routing for rank-spanning edges (cosmetic bundling for
+      expanded graphs)
+
 ## Later
 
-- [ ] Cosmetic curve bundling for expanded graphs
 - [ ] Minimap virtualization for very large graphs
+- [ ] Diff against exported record files (session-vs-session shipped in
+      v0.5)
