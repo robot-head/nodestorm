@@ -6,6 +6,7 @@ mod canvas;
 mod choice_panel;
 mod cluster_card;
 mod context_menu;
+mod diff_panel;
 mod edge_layer;
 mod minimap;
 mod node_card;
@@ -43,6 +44,11 @@ pub(crate) struct ZoomTarget(pub Signal<Option<NodeId>>);
 /// Live search query from the topbar box.
 #[derive(Clone, Copy)]
 pub(crate) struct SearchQuery(pub Signal<String>);
+
+/// `Some(other)` while the diff panel compares the active session with
+/// `other`.
+#[derive(Clone, Copy)]
+pub(crate) struct CompareWith(pub Signal<Option<String>>);
 
 /// Case-insensitive substring match over label, id, and group.
 pub(crate) fn node_matches(node: &Node, query: &str) -> bool {

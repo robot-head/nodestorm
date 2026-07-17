@@ -53,6 +53,8 @@ pub fn TopBar(
     let mut comment = use_signal(String::new);
     let mut sessions_open = use_signal(|| false);
     let mut new_session_draft = use_signal(String::new);
+    let mut rename_draft = use_signal(String::new);
+    let mut compare_with = use_context::<super::CompareWith>().0;
     let d = doc.read();
     let m = meta.read();
     let has_nodes = !d.nodes.is_empty();
@@ -95,26 +97,43 @@ pub fn TopBar(
                     }
                     div { class: "export-dropdown sessions-dropdown",
                         for info in sessions.list() {
-                            button {
+                            div {
                                 key: "{info.name}",
                                 class: if info.active { "session-row active" } else { "session-row" },
-                                onclick: {
-                                    let sessions = sessions.clone();
-                                    let name = info.name.clone();
-                                    move |_| {
-                                        if let Err(err) = sessions.switch(&name) {
-                                            tracing::warn!(%err, "switch failed");
+                                button {
+                                    class: "sess-switch",
+                                    onclick: {
+                                        let sessions = sessions.clone();
+                                        let name = info.name.clone();
+                                        move |_| {
+                                            if let Err(err) = sessions.switch(&name) {
+                                                tracing::warn!(%err, "switch failed");
+                                            }
+                                            sessions_open.set(false);
                                         }
-                                        sessions_open.set(false);
+                                    },
+                                    span { class: "sess-name", "{info.name}" }
+                                    span { class: "sess-badges",
+                                        if info.open_choices > 0 {
+                                            span { class: "pill pill-open", "{info.open_choices}" }
+                                        }
+                                        if info.agent_waiting {
+                                            span { class: "pill pill-waiting", "●" }
+                                        }
                                     }
-                                },
-                                span { class: "sess-name", "{info.name}" }
-                                span { class: "sess-badges",
-                                    if info.open_choices > 0 {
-                                        span { class: "pill pill-open", "{info.open_choices}" }
-                                    }
-                                    if info.agent_waiting {
-                                        span { class: "pill pill-waiting", "●" }
+                                }
+                                if !info.active {
+                                    button {
+                                        class: "ctl-btn",
+                                        title: "Compare this session with the active one",
+                                        onclick: {
+                                            let name = info.name.clone();
+                                            move |_| {
+                                                compare_with.set(Some(name.clone()));
+                                                sessions_open.set(false);
+                                            }
+                                        },
+                                        "Compare"
                                     }
                                 }
                             }
@@ -148,6 +167,31 @@ pub fn TopBar(
                                 "Create"
                             }
                         }
+                        div { class: "session-create",
+                            input {
+                                class: "session-name-input",
+                                placeholder: "rename to…",
+                                value: "{rename_draft}",
+                                oninput: move |ev| rename_draft.set(ev.value()),
+                            }
+                            button {
+                                class: "btn",
+                                disabled: rename_draft.read().trim().is_empty(),
+                                onclick: {
+                                    let sessions = sessions.clone();
+                                    move |_| {
+                                        let name = rename_draft.read().trim().to_owned();
+                                        let active = sessions.active_name();
+                                        match sessions.rename(&active, &name) {
+                                            Ok(_) => rename_draft.set(String::new()),
+                                            Err(err) => tracing::warn!(%err, "rename failed"),
+                                        }
+                                        sessions_open.set(false);
+                                    }
+                                },
+                                "Rename"
+                            }
+                        }
                         button {
                             class: "session-archive",
                             title: "Save this session's file into sessions/archive/ and drop it from the list",
@@ -162,6 +206,49 @@ pub fn TopBar(
                                 }
                             },
                             "Archive current"
+                        }
+                        button {
+                            class: "session-archive",
+                            title: "Delete the active session permanently (file and all)",
+                            onclick: {
+                                let sessions = sessions.clone();
+                                move |_| {
+                                    let name = sessions.active_name();
+                                    if let Err(err) = sessions.delete(&name) {
+                                        tracing::warn!(%err, "delete failed");
+                                    }
+                                    sessions_open.set(false);
+                                }
+                            },
+                            "Delete current"
+                        }
+                        {
+                            let archived = sessions.list_archived();
+                            rsx! {
+                                if !archived.is_empty() {
+                                    div { class: "archived-list",
+                                        span { class: "archived-label", "Archived" }
+                                        for name in archived {
+                                            button {
+                                                key: "{name}",
+                                                class: "sess-switch",
+                                                title: "Bring this archived session back",
+                                                onclick: {
+                                                    let sessions = sessions.clone();
+                                                    let name = name.clone();
+                                                    move |_| {
+                                                        if let Err(err) = sessions.unarchive(&name) {
+                                                            tracing::warn!(%err, "unarchive failed");
+                                                        }
+                                                        sessions_open.set(false);
+                                                    }
+                                                },
+                                                "↩ {name}"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
