@@ -10,20 +10,88 @@ use std::collections::HashMap;
 
 use dioxus::prelude::*;
 
-use crate::model::{Choice, ChoiceId, ChoiceStatus, Node, NodeId, OptionId};
+use crate::model::{
+    Choice, ChoiceId, ChoiceStatus, EdgeKind, Node, NodeId, NodeKind, OptionId, Origin, SessionDoc,
+};
 
 use super::app::use_store;
+
+/// `<select>` values ↔ [`NodeKind`], in display order.
+const KIND_VALUES: [(&str, NodeKind); 8] = [
+    ("service", NodeKind::Service),
+    ("module", NodeKind::Module),
+    ("component", NodeKind::Component),
+    ("data_store", NodeKind::DataStore),
+    ("queue", NodeKind::Queue),
+    ("ui", NodeKind::Ui),
+    ("external", NodeKind::External),
+    ("other", NodeKind::Other),
+];
+
+fn kind_value(kind: NodeKind) -> &'static str {
+    KIND_VALUES
+        .iter()
+        .find(|(_, k)| *k == kind)
+        .map(|(v, _)| *v)
+        .unwrap_or("component")
+}
+
+fn kind_from_value(value: &str) -> NodeKind {
+    KIND_VALUES
+        .iter()
+        .find(|(v, _)| *v == value)
+        .map(|(_, k)| *k)
+        .unwrap_or(NodeKind::Component)
+}
+
+fn edge_kind_phrase(kind: EdgeKind) -> &'static str {
+    match kind {
+        EdgeKind::DependsOn => "depends on",
+        EdgeKind::DataFlow => "data flow",
+        EdgeKind::Contains => "contains",
+        EdgeKind::Other => "relates to",
+    }
+}
 
 #[component]
 pub fn ChoicePanel(
     node: Node,
+    doc: Signal<SessionDoc>,
     selected: Signal<Option<NodeId>>,
     hovered_affects: Signal<Vec<NodeId>>,
 ) -> Element {
     let considered: Signal<HashMap<ChoiceId, Vec<OptionId>>> = use_signal(HashMap::new);
     let mut note_draft = use_signal(String::new);
+    let mut label_draft = use_signal(|| node.label.clone());
+    let mut kind_draft = use_signal(|| kind_value(node.kind).to_owned());
+    let mut desc_draft = use_signal(|| node.description.clone());
     let store = use_store();
+    let mut connect_from = use_context::<Signal<Option<NodeId>>>();
     let node_id = node.id.clone();
+    let connecting = connect_from() == Some(node.id.clone());
+    let delete_title = if node.origin == Origin::User {
+        "Delete this component (yours — removed immediately, with its edges)"
+    } else {
+        "Mark removed and ask the agent to apply the removal"
+    };
+    // Edges touching this node, with the far end's label for display.
+    let incident: Vec<(NodeId, NodeId, EdgeKind, String)> = {
+        let d = doc.read();
+        d.edges
+            .iter()
+            .filter(|e| e.from == node.id || e.to == node.id)
+            .map(|e| {
+                let text = format!(
+                    "{} —{}→ {}",
+                    d.node(&e.from)
+                        .map_or(e.from.to_string(), |n| n.label.clone()),
+                    edge_kind_phrase(e.kind),
+                    d.node(&e.to).map_or(e.to.to_string(), |n| n.label.clone()),
+                );
+                (e.from.clone(), e.to.clone(), e.kind, text)
+            })
+            .collect()
+    };
 
     rsx! {
         aside { class: "panel",
@@ -38,6 +106,107 @@ pub fn ChoicePanel(
             }
             if !node.description.is_empty() {
                 p { class: "panel-desc", "{node.description}" }
+            }
+
+            details { class: "edit-form",
+                summary { "Edit" }
+                input {
+                    class: "edit-label",
+                    value: "{label_draft}",
+                    placeholder: "component label",
+                    oninput: move |ev| label_draft.set(ev.value()),
+                }
+                select {
+                    class: "edit-kind",
+                    value: "{kind_draft}",
+                    onchange: move |ev| kind_draft.set(ev.value()),
+                    for (value, _) in KIND_VALUES {
+                        option { value: "{value}", selected: *kind_draft.read() == value, "{value}" }
+                    }
+                }
+                textarea {
+                    class: "edit-desc",
+                    value: "{desc_draft}",
+                    placeholder: "description",
+                    oninput: move |ev| desc_draft.set(ev.value()),
+                }
+                button {
+                    class: "btn",
+                    disabled: label_draft.read().trim().is_empty(),
+                    onclick: {
+                        let store = store.clone();
+                        let node_id = node_id.clone();
+                        move |_| {
+                            let label = label_draft.read().trim().to_owned();
+                            if let Err(err) = store.edit_node(
+                                &node_id,
+                                label,
+                                kind_from_value(&kind_draft.read()),
+                                desc_draft.read().trim().to_owned(),
+                            ) {
+                                tracing::warn!(%err, "edit_node failed");
+                            }
+                        }
+                    },
+                    "Save"
+                }
+            }
+
+            div { class: "panel-actions",
+                button {
+                    class: if connecting { "btn btn-armed" } else { "btn" },
+                    title: "Then click the target card to draw an edge from this component",
+                    onclick: {
+                        let node_id = node_id.clone();
+                        move |_| {
+                            if connecting {
+                                connect_from.set(None);
+                            } else {
+                                connect_from.set(Some(node_id.clone()));
+                            }
+                        }
+                    },
+                    if connecting { "Cancel connect" } else { "Connect →" }
+                }
+                button {
+                    class: "btn btn-danger",
+                    title: "{delete_title}",
+                    onclick: {
+                        let store = store.clone();
+                        let node_id = node_id.clone();
+                        move |_| {
+                            if let Err(err) = store.delete_node(&node_id) {
+                                tracing::warn!(%err, "delete_node failed");
+                            }
+                            selected.set(None);
+                        }
+                    },
+                    "Delete"
+                }
+            }
+
+            if !incident.is_empty() {
+                div { class: "connections",
+                    h3 { "Connections" }
+                    for (from, to, kind, text) in incident {
+                        div { class: "conn-row", key: "{from}-{to}-{kind:?}",
+                            span { "{text}" }
+                            button {
+                                class: "ctl-btn",
+                                title: "Delete this edge",
+                                onclick: {
+                                    let store = store.clone();
+                                    move |_| {
+                                        if let Err(err) = store.delete_edge(&from, &to, kind) {
+                                            tracing::warn!(%err, "delete_edge failed");
+                                        }
+                                    }
+                                },
+                                "✕"
+                            }
+                        }
+                    }
+                }
             }
 
             for choice in node.choices.iter() {

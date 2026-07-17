@@ -423,6 +423,95 @@ body {
   border-color: var(--accent);
 }
 
+/* ---------- editing controls (panel) ---------- */
+
+.edit-form {
+  margin: 10px 0 12px;
+}
+
+.edit-form summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 6px;
+}
+
+.edit-form input,
+.edit-form select,
+.edit-form textarea {
+  display: block;
+  width: 100%;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+}
+
+.edit-form input:focus,
+.edit-form select:focus,
+.edit-form textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.edit-form textarea {
+  min-height: 48px;
+  resize: vertical;
+}
+
+.panel-actions {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.btn-danger {
+  border-color: var(--status-removed);
+  color: var(--status-removed);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--status-removed) 15%, transparent);
+}
+
+.btn-armed {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.connections {
+  margin: 0 0 12px;
+}
+
+.connections h3 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  margin: 0 0 6px;
+}
+
+.conn-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.canvas-viewport.connecting {
+  cursor: crosshair;
+}
+
 /* ---------- activity feed ---------- */
 
 .activity {

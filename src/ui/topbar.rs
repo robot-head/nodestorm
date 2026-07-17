@@ -4,13 +4,17 @@
 use dioxus::prelude::*;
 
 use crate::cli::Cli;
-use crate::model::SessionDoc;
+use crate::model::{NodeId, NodeKind, SessionDoc};
 use crate::store::UiMeta;
 
 use super::app::use_store;
 
 #[component]
-pub fn TopBar(doc: Signal<SessionDoc>, meta: Signal<UiMeta>) -> Element {
+pub fn TopBar(
+    doc: Signal<SessionDoc>,
+    meta: Signal<UiMeta>,
+    selected: Signal<Option<NodeId>>,
+) -> Element {
     let store = use_store();
     let cli = use_context::<Cli>();
     let mut comment = use_signal(String::new);
@@ -39,6 +43,25 @@ pub fn TopBar(doc: Signal<SessionDoc>, meta: Signal<UiMeta>) -> Element {
             }
             if m.undelivered > 0 {
                 span { class: "pill pill-undelivered", "{m.undelivered} to send" }
+            }
+            button {
+                class: "btn",
+                title: "Add a component you own to the canvas (agents adopt it if they enrich it)",
+                onclick: {
+                    let store = store.clone();
+                    let mut selected = selected;
+                    move |_| {
+                        match store.add_user_node(
+                            "New component".into(),
+                            NodeKind::Component,
+                            None,
+                        ) {
+                            Ok(id) => selected.set(Some(id)),
+                            Err(err) => tracing::warn!(%err, "add component failed"),
+                        }
+                    }
+                },
+                "+ Component"
             }
             button {
                 class: "btn",

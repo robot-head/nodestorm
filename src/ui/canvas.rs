@@ -10,7 +10,7 @@
 use dioxus::prelude::*;
 
 use crate::layout::Layout;
-use crate::model::{NodeId, Point, SessionDoc};
+use crate::model::{EdgeKind, NodeId, Point, SessionDoc};
 
 use super::ViewTransform;
 use super::app::use_store;
@@ -54,6 +54,7 @@ pub fn Canvas(
     let store = use_store();
     let mut transform = use_signal(|| ViewTransform::fit(&layout.read().bounds, VIEW_W, VIEW_H));
     let mut gesture: Signal<GestureState> = use_signal(GestureState::default);
+    let mut connect_from = use_context::<Signal<Option<NodeId>>>();
 
     // When the agent moves the focus, pan so that node is centered.
     let mut last_focus = use_signal(|| doc.read().focus.clone());
@@ -76,10 +77,10 @@ pub fn Canvas(
     let l = layout.read();
     let d = doc.read();
     let panning = matches!(gesture.read().gesture, Some(Gesture::Pan { .. }));
-    let viewport_class = if panning {
-        "canvas-viewport panning"
-    } else {
-        "canvas-viewport"
+    let viewport_class = match (panning, connect_from().is_some()) {
+        (true, _) => "canvas-viewport panning",
+        (false, true) => "canvas-viewport connecting",
+        (false, false) => "canvas-viewport",
     };
 
     rsx! {
@@ -126,11 +127,16 @@ pub fn Canvas(
             onmouseup: move |_| {
                 let state = gesture();
                 if let Some(Gesture::Pan { start, orig }) = state.gesture {
-                    // A motionless background click deselects.
+                    // A motionless background click deselects — or cancels an
+                    // armed connect.
                     let t = transform();
                     if (t.tx - orig.0).abs() < 3.0 && (t.ty - orig.1).abs() < 3.0 {
                         let _ = start;
-                        selected.set(None);
+                        if connect_from().is_some() {
+                            connect_from.set(None);
+                        } else {
+                            selected.set(None);
+                        }
                     }
                 }
                 gesture.set(GestureState::default());
@@ -164,7 +170,25 @@ pub fn Canvas(
                             highlighted: hovered_affects.read().contains(&node.id),
                             on_select: {
                                 let id = node.id.clone();
-                                move |_| selected.set(Some(id.clone()))
+                                let store = store.clone();
+                                move |_| {
+                                    // An armed connect turns the next card
+                                    // click into edge creation.
+                                    if let Some(from) = connect_from() {
+                                        if from != id
+                                            && let Err(err) = store.add_user_edge(
+                                                &from,
+                                                &id,
+                                                EdgeKind::DependsOn,
+                                            )
+                                        {
+                                            tracing::warn!(%err, "connect failed");
+                                        }
+                                        connect_from.set(None);
+                                    } else {
+                                        selected.set(Some(id.clone()));
+                                    }
+                                }
                             },
                             on_drag_start: {
                                 let id = node.id.clone();

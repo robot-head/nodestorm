@@ -44,6 +44,10 @@ pub fn App() -> Element {
     let layout: Memo<Layout> = use_memo(move || layout::compute(&doc.read()));
     let selected: Signal<Option<NodeId>> = use_signal(|| None);
     let hovered_affects: Signal<Vec<NodeId>> = use_signal(Vec::new);
+    // Connect mode: Some(source) while the user is picking a target card.
+    // Context (not a prop) because topbar, panel, and canvas all touch it.
+    let _connect_from: Signal<Option<NodeId>> =
+        use_context_provider(|| Signal::new(Option::<NodeId>::None));
     let mcp_url = cli.mcp_url();
     let has_nodes = !doc.read().nodes.is_empty();
     let selected_node = selected
@@ -54,13 +58,15 @@ pub fn App() -> Element {
     rsx! {
         document::Style { {include_str!("../../assets/main.css")} }
         div { class: "app",
-            TopBar { doc, meta }
+            TopBar { doc, meta, selected }
             div { class: "main",
                 if has_nodes {
                     Canvas { doc, layout, selected, hovered_affects }
                     ActivityFeed { meta }
                     if let Some(node) = selected_node {
-                        ChoicePanel { node, selected, hovered_affects }
+                        // Keyed so switching nodes remounts the panel and its
+                        // edit-form drafts start from the new node's content.
+                        ChoicePanel { key: "{node.id}", node, doc, selected, hovered_affects }
                     }
                 } else {
                     div { class: "empty-state",
