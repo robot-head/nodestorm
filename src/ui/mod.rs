@@ -95,6 +95,18 @@ impl ViewTransform {
     }
 }
 
+/// Launch the desktop window. Must be called on the main thread.
+pub fn launch(sessions: Arc<crate::sessions::Sessions>, cli: Cli) {
+    let window = WindowBuilder::new()
+        .with_title("nodestorm")
+        .with_inner_size(dioxus::desktop::tao::dpi::LogicalSize::new(1280.0, 840.0));
+    dioxus::LaunchBuilder::new()
+        .with_cfg(Config::new().with_window(window).with_menu(None))
+        .with_context(cli)
+        .with_context(sessions)
+        .launch(app::App);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,16 +137,4 @@ mod tests {
         };
         assert_eq!(ViewTransform::fit(&small, 1280.0, 780.0).scale, 1.0);
     }
-}
-
-/// Launch the desktop window. Must be called on the main thread.
-pub fn launch(sessions: Arc<crate::sessions::Sessions>, cli: Cli) {
-    let window = WindowBuilder::new()
-        .with_title("nodestorm")
-        .with_inner_size(dioxus::desktop::tao::dpi::LogicalSize::new(1280.0, 840.0));
-    dioxus::LaunchBuilder::new()
-        .with_cfg(Config::new().with_window(window).with_menu(None))
-        .with_context(cli)
-        .with_context(sessions)
-        .launch(app::App);
 }

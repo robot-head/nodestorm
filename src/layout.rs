@@ -732,9 +732,13 @@ mod tests {
     fn visible_set_culls() {
         let d = crate::demo::big_doc(200);
         let l = compute(&d);
-        // Fit-everything view: all nodes and edges visible.
-        let fit = crate::ui::ViewTransform::fit(&l.bounds, 1280.0, 780.0);
-        let all = visible_set(&l, fit.tx, fit.ty, fit.scale, 1280.0, 780.0);
+        // A view genuinely covering the whole bounds sees everything.
+        // (Built by hand: `ViewTransform::fit` deliberately clamps at a
+        // readability floor and would show only a subset of 200 nodes.)
+        let scale = (1280.0 / l.bounds.w).min(780.0 / l.bounds.h).min(1.0);
+        let tx = -l.bounds.x * scale + (1280.0 - l.bounds.w * scale) / 2.0;
+        let ty = -l.bounds.y * scale + (780.0 - l.bounds.h * scale) / 2.0;
+        let all = visible_set(&l, tx, ty, scale, 1280.0, 780.0);
         assert_eq!(all.nodes.len(), 200);
         assert_eq!(all.edges.len(), l.edges.len());
         // A tight corner view sees strictly fewer.
