@@ -1,4 +1,4 @@
-//! The five nodestorm MCP tools.
+//! The six nodestorm MCP tools.
 //!
 //! All rmcp contact stays in this module (and `server::mod`): the store knows
 //! nothing about MCP, which keeps it unit-testable and shields the rest of
@@ -280,6 +280,23 @@ impl NodestormServer {
         let summary = self.store.clear_session();
         json_result(GraphSummary::from(summary))
     }
+
+    #[tool(
+        description = "Export the current brainstorm as a Markdown decision record with an \
+                       embedded Mermaid architecture diagram: decisions with pros/cons and the \
+                       user's considered trail, dismissed choices, open questions, notes, and a \
+                       component inventory. Returns plain Markdown — write it into the user's \
+                       repo (e.g. docs/decisions/)."
+    )]
+    async fn export_markdown(
+        &self,
+        Parameters(_): Parameters<EmptyParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let markdown = self
+            .store
+            .read(|s| crate::export::render_markdown(&s.doc, &s.decision_log, chrono::Utc::now()));
+        Ok(CallToolResult::success(vec![ContentBlock::text(markdown)]))
+    }
 }
 
 #[tool_handler]
@@ -296,7 +313,8 @@ impl ServerHandler for NodestormServer {
              options, writes notes, and clicks Send; on status=timeout just call it again; \
              (3) apply the ripple with update_graph (mark affected nodes, open follow-up \
              choices, announce a summary) and repeat. Keep discussing in the terminal; the \
-             canvas is a companion, not a replacement."
+             canvas is a companion, not a replacement. When the brainstorm winds down, call \
+             export_markdown and save the decision record into the user's repo."
                 .into(),
         );
         info

@@ -42,17 +42,38 @@ pub fn load(path: &Path) -> Option<SessionState> {
     }
 }
 
-/// Atomic write: temp file in the same directory, then rename.
-pub fn save(path: &Path, state: &SessionState) -> anyhow::Result<()> {
+/// Atomic write primitive shared by [`save`] and [`save_export`]: temp file
+/// (`<name>.tmp`) in the same directory, then rename over the target.
+fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
     }
-    let tmp = path.with_extension("json.tmp");
-    let json = serde_json::to_vec_pretty(state)?;
-    std::fs::write(&tmp, json).with_context(|| format!("writing {}", tmp.display()))?;
+    let tmp = {
+        let mut name = path.as_os_str().to_owned();
+        name.push(".tmp");
+        PathBuf::from(name)
+    };
+    std::fs::write(&tmp, bytes).with_context(|| format!("writing {}", tmp.display()))?;
     std::fs::rename(&tmp, path).with_context(|| format!("renaming into {}", path.display()))?;
     Ok(())
+}
+
+/// Atomic session save.
+pub fn save(path: &Path, state: &SessionState) -> anyhow::Result<()> {
+    write_atomic(path, &serde_json::to_vec_pretty(state)?)
+}
+
+/// Where a UI-triggered export lands: the session path with its extension
+/// swapped, e.g. `session.json` → `session.export.md`.
+pub fn export_path(session_path: &Path) -> PathBuf {
+    session_path.with_extension("export.md")
+}
+
+/// Atomically write an exported Markdown record; overwriting an earlier
+/// export is intentional and idempotent.
+pub fn save_export(path: &Path, markdown: &str) -> anyhow::Result<()> {
+    write_atomic(path, markdown.as_bytes())
 }
 
 /// Autosave loop: waits for a revision change, debounces, saves. Runs on the
@@ -110,6 +131,34 @@ mod tests {
     #[test]
     fn missing_file_is_none() {
         assert!(load(Path::new("/definitely/not/here.json")).is_none());
+    }
+
+    #[test]
+    fn export_path_maps_session_json() {
+        assert_eq!(
+            export_path(Path::new("/data/session.json")),
+            PathBuf::from("/data/session.export.md")
+        );
+        // A `--session` override without an extension still gets a sane name.
+        assert_eq!(
+            export_path(Path::new("custom-session")),
+            PathBuf::from("custom-session.export.md")
+        );
+    }
+
+    #[test]
+    fn save_export_round_trip() {
+        let path = tmp_path("record.export.md");
+        save_export(&path, "# hello\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "# hello\n");
+        // Re-export overwrites in place.
+        save_export(&path, "# again\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "# again\n");
+        // No temp residue next to the record.
+        let mut tmp = path.as_os_str().to_owned();
+        tmp.push(".tmp");
+        assert!(!PathBuf::from(tmp).exists());
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]

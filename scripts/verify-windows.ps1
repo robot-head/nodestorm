@@ -33,6 +33,7 @@ $ErrorActionPreference = 'Stop'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 if (-not $OutDir) { $OutDir = Join-Path $RepoRoot 'target\verify' }
 $SessionFile = Join-Path $env:TEMP "nodestorm-verify-session-$Port.json"
+$ExportFile = $SessionFile -replace '\.json$', '.export.md'
 
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName UIAutomationClient
@@ -206,6 +207,7 @@ function Wait-Tcp([int]$TcpPort, [int]$TimeoutSec = 60) {
 
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 Remove-Item $SessionFile -Force -ErrorAction SilentlyContinue
+Remove-Item $ExportFile -Force -ErrorAction SilentlyContinue
 
 if (-not $NoBuild) {
     Log 'cargo build (nodestorm + drive example)...'
@@ -297,6 +299,18 @@ try {
         if ($out -notlike "*$expect*") { Fail "delivered decisions missing $expect :`n$out" }
     }
     Log 'drive received both decisions (at-least-once, postgres)'
+
+    # Export: the topbar button writes the Markdown decision record next to
+    # the session file (topbar is never covered by the choice panel).
+    Click-Element $hwnd 'Export'
+    $deadline = (Get-Date).AddSeconds(10)
+    while ((Get-Date) -lt $deadline -and -not (Test-Path $ExportFile)) { Start-Sleep -Milliseconds 250 }
+    if (-not (Test-Path $ExportFile)) { Fail "export file did not appear: $ExportFile" }
+    $record = Get-Content $ExportFile -Raw
+    foreach ($needle in @('```mermaid', '# Add a webhook subsystem', 'At-least-once with retries')) {
+        if ($record -notlike "*$needle*") { Fail "export record missing '$needle':`n$record" }
+    }
+    Log "Export button wrote the decision record ($ExportFile)"
     Write-Host 'PASS: full decision round-trip verified through the real GUI' -ForegroundColor Green
     Write-Host "artifacts: $OutDir"
     exit 0
@@ -304,4 +318,5 @@ try {
     if ($drive -and -not $drive.HasExited) { Stop-Process -Id $drive.Id -Force -ErrorAction SilentlyContinue }
     if (-not $KeepOpen -and -not $app.HasExited) { Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue }
     Remove-Item $SessionFile -Force -ErrorAction SilentlyContinue
+    Remove-Item $ExportFile -Force -ErrorAction SilentlyContinue
 }

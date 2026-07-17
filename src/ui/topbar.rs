@@ -1,7 +1,9 @@
-//! Top bar: session title, agent status pill, and the Send-to-agent control.
+//! Top bar: session title, agent status pill, Export, and the Send-to-agent
+//! control.
 
 use dioxus::prelude::*;
 
+use crate::cli::Cli;
 use crate::model::SessionDoc;
 use crate::store::UiMeta;
 
@@ -10,9 +12,11 @@ use super::app::use_store;
 #[component]
 pub fn TopBar(doc: Signal<SessionDoc>, meta: Signal<UiMeta>) -> Element {
     let store = use_store();
+    let cli = use_context::<Cli>();
     let mut comment = use_signal(String::new);
     let d = doc.read();
     let m = meta.read();
+    let has_nodes = !d.nodes.is_empty();
     let open = m.open_choices;
     let plural = if open == 1 { "" } else { "s" };
     let title = if d.title.is_empty() {
@@ -35,6 +39,36 @@ pub fn TopBar(doc: Signal<SessionDoc>, meta: Signal<UiMeta>) -> Element {
             }
             if m.undelivered > 0 {
                 span { class: "pill pill-undelivered", "{m.undelivered} to send" }
+            }
+            button {
+                class: "btn",
+                disabled: !has_nodes,
+                title: "Save a Markdown decision record (with Mermaid diagram) next to the session file",
+                onclick: {
+                    let store = store.clone();
+                    move |_| {
+                        let outcome = cli.session_path().and_then(|session| {
+                            let path = crate::persist::export_path(&session);
+                            let markdown = store.read(|s| {
+                                crate::export::render_markdown(
+                                    &s.doc,
+                                    &s.decision_log,
+                                    chrono::Utc::now(),
+                                )
+                            });
+                            crate::persist::save_export(&path, &markdown)?;
+                            Ok(path)
+                        });
+                        match outcome {
+                            Ok(path) => store.record_export(&path),
+                            Err(err) => {
+                                tracing::warn!(%err, "export failed");
+                                store.record_export_failed(&err.to_string());
+                            }
+                        }
+                    }
+                },
+                "Export"
             }
             input {
                 class: "send-comment",

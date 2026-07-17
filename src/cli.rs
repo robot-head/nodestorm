@@ -33,4 +33,32 @@ impl Cli {
     pub fn mcp_url(&self) -> String {
         format!("http://127.0.0.1:{}/mcp", self.port)
     }
+
+    /// The session file to load and autosave: the `--session` override, or
+    /// the platform default.
+    pub fn session_path(&self) -> anyhow::Result<PathBuf> {
+        match &self.session {
+            Some(path) => Ok(path.clone()),
+            None => crate::persist::default_session_path(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_path_prefers_override() {
+        let cli = Cli::parse_from(["nodestorm", "--session", "some/dir/mine.json"]);
+        assert_eq!(
+            cli.session_path().unwrap(),
+            PathBuf::from("some/dir/mine.json")
+        );
+        let cli = Cli::parse_from(["nodestorm"]);
+        assert_eq!(
+            cli.session_path().unwrap(),
+            crate::persist::default_session_path().unwrap()
+        );
+    }
 }

@@ -278,6 +278,23 @@ impl Store {
         self.mutate(|s| push_activity(s, ActivityOrigin::Agent, message));
     }
 
+    /// Record a completed UI export in the activity feed — the feed entry is
+    /// the user's receipt for where the record landed.
+    pub fn record_export(&self, path: &std::path::Path) {
+        self.mutate(|s| {
+            push_activity(
+                s,
+                ActivityOrigin::User,
+                format!("exported decision record to {}", path.display()),
+            );
+        });
+    }
+
+    /// Surface a failed UI export in the activity feed.
+    pub fn record_export_failed(&self, err: &str) {
+        self.mutate(|s| push_activity(s, ActivityOrigin::User, format!("export failed: {err}")));
+    }
+
     /// "Send to agent": flush everything undelivered (an empty flush is a
     /// valid "reviewed, proceed" signal).
     pub fn request_flush(&self, comment: Option<String>) {
@@ -622,6 +639,29 @@ mod tests {
 
     fn demo_store() -> Arc<Store> {
         Store::with_doc(demo_doc())
+    }
+
+    #[test]
+    fn record_export_lands_in_activity() {
+        let store = demo_store();
+        store.record_export(std::path::Path::new("some/dir/session.export.md"));
+        let meta = store.snapshot_meta();
+        let entry = meta.activity.last().expect("an activity entry");
+        assert_eq!(entry.origin, ActivityOrigin::User);
+        assert!(
+            entry.text.contains("session.export.md"),
+            "text: {}",
+            entry.text
+        );
+
+        store.record_export_failed("disk full");
+        let meta = store.snapshot_meta();
+        let entry = meta.activity.last().unwrap();
+        assert!(
+            entry.text.contains("export failed: disk full"),
+            "text: {}",
+            entry.text
+        );
     }
 
     fn pick_first_choice(store: &Arc<Store>) {
