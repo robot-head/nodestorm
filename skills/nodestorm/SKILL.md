@@ -62,6 +62,25 @@ continue without it — never block on its absence.
    record. The user can also click **Export** in the app — that copy lands
    next to the session file, not in the repo.
 
+## The user edits too
+
+The canvas is a shared whiteboard: the user can add, rename, connect, and
+delete components. Their edits arrive as decision events alongside picks and
+notes — handle each kind:
+
+- `node_added` — the user created a component (`origin: user`; it survives
+  your re-proposes automatically). Acknowledge it in the terminal. If you
+  enrich it via `upsert_node` you **adopt** it — from then on include it in
+  your proposes like any of your nodes.
+- `node_edited` — the user corrected a card (label/kind/description). Treat
+  the new content as canonical; carry it forward in your next upsert.
+- `removal_requested` — the user marked one of *your* nodes `removed`.
+  Apply the real removal with `update_graph` `remove_node` (and clean up
+  edges/choices), or push back in the terminal with your reasons.
+- `node_deleted` / `edge_deleted` — done deals (user-owned node, or any
+  edge). Never silently re-add one; if you disagree, say so first.
+- `edge_added` — the user drew a dependency. Factor it into your analysis.
+
 ## Etiquette
 
 - **The terminal stays the primary channel.** Narrate what's on the canvas

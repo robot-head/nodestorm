@@ -31,10 +31,14 @@ HTTP).
 - **Exactly-once delivery**: decisions queue until you click *Send to agent*
   (or the last open choice is decided); a timed-out agent re-calls and gets
   them — nothing is ever lost.
+- **You can edit too**: add, rename, connect, and delete components right on
+  the canvas; your changes flow back to the agent as decision events, and
+  your components survive agent re-proposes.
 - **Everything leaves a record**: the agent pulls a Markdown decision record
   (with an embedded Mermaid diagram) over `export_markdown` and writes it
-  into your repo — or you click **Export** and it lands next to the session
-  file.
+  into your repo — or use the **Export ▾** menu (write next to the session
+  file, Save As…, copy Markdown/Mermaid to the clipboard, or a mermaid-only
+  file).
 
 ## Install
 
@@ -92,6 +96,40 @@ nodestorm --demo                 # a built-in sample brainstorm
 cargo run --example drive        # simulates an agent against a running app
 ```
 
+## Edit the graph yourself
+
+The canvas is a shared whiteboard, not just the agent's. Everything you
+author is origin-tracked and **survives agent re-proposes** until the agent
+adopts it (enriching your node via upsert makes it theirs to carry forward).
+Every edit flows back as a decision event with your next Send.
+
+- **Add**: the **+ Component** button, double-click empty canvas, or
+  right-click → *Add component here* (`n` works too).
+- **Edit**: select a card → the panel's *Edit* form (label, kind,
+  description).
+- **Connect**: drag the ◉ handle from one card onto another, or the panel's
+  *Connect →* button, then click the target.
+- **Delete**: panel *Delete*, right-click, or `Del`. Your components delete
+  immediately (with their edges); agent components are only marked
+  `removed` — the agent gets a `removal_requested` event and applies it (or
+  pushes back). Edges always delete immediately.
+
+Finding your way around big graphs: the **search box** highlights matches
+(Enter cycles + zooms, Esc clears, `/` focuses it) and the **minimap**
+(bottom-right) pans on click/drag.
+
+| Key | Action |
+| --- | --- |
+| arrows | move selection to the nearest card in that direction |
+| `Tab` / `Shift-Tab` | cycle selection in document order |
+| `Enter` | open the panel for the focus node when nothing is selected |
+| `Del` | delete the selection |
+| `+` / `-` / `0` | zoom in / out / fit |
+| `n` | new component at the view center |
+| `Esc` | cancel connect → close menu → clear search → deselect |
+| double-click card | zoom to it |
+| double-click background | new component there |
+
 ## CLI
 
 | Flag | Meaning |
@@ -110,7 +148,7 @@ cargo run --example drive        # simulates an agent against a running app
 | `await_decisions` | block until the user sends decisions (default 240 s, then `status:"timeout"` → call again) |
 | `get_state` | non-blocking full state + undelivered decisions (post-error resync) |
 | `clear_session` | wipe canvas and decision log |
-| `export_markdown` | the brainstorm as a Markdown decision record with an embedded Mermaid diagram (plain text — save it into the repo's docs) |
+| `export_markdown` | the brainstorm as a Markdown decision record with an embedded Mermaid diagram (plain text — save it into the repo's docs); `format: "mermaid"` returns just the diagram |
 
 User positions, notes, and already-decided choices survive agent upserts;
 re-opening a decided choice requires the agent to set `"reopen": true`.
@@ -150,8 +188,10 @@ human uses the desktop (the app window is pushed to the bottom of the
 z-order). Full mode runs `examples/drive.rs` as the agent, clicks through
 both proposed choices in the real UI, waits for the autoflush delivery, and
 fails unless the drive client actually receives the decisions over MCP —
-then clicks **Export** and fails unless the Markdown decision record lands
-on disk. Screenshots and logs land in `target\verify\`. Note that clicks land at an
+then exercises user editing (add a component, rename it through the panel
+form with window-targeted `WM_CHAR` typing, connect it, soft-delete an
+agent node) and exports via the menu, failing unless the record on disk
+contains the user's edits. Screenshots and logs land in `target\verify\`. Note that clicks land at an
 element's *visual* position: close the choice panel (its `✕`) before
 selecting a card the panel overlaps, as the script does.
 
