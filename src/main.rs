@@ -17,6 +17,11 @@ fn main() -> anyhow::Result<()> {
             .active_store()
             .apply_propose(nodestorm::demo::demo_doc())
             .context("loading the demo graph")?;
+    } else if let Some(n) = cli.demo_big {
+        sessions
+            .active_store()
+            .apply_propose(nodestorm::demo::big_doc(n))
+            .context("loading the big demo graph")?;
     }
 
     // The MCP server gets its own runtime on a dedicated thread; the UI

@@ -258,9 +258,66 @@ pub fn demo_doc() -> SessionDoc {
     }
 }
 
+/// Deterministic large graph for scaling checks (`--demo-big N`): `n`
+/// components in groups of 12, chained plus one cross-group link each.
+pub fn big_doc(n: usize) -> SessionDoc {
+    use EdgeKind::{DataFlow, DependsOn};
+    use ElementStatus::Existing;
+    use NodeKind::Component;
+
+    let mut nodes = Vec::with_capacity(n);
+    let mut edges = Vec::new();
+    for i in 0..n {
+        let mut node = self::n(
+            &format!("node-{i}"),
+            &format!("Component {i}"),
+            Component,
+            Existing,
+            "",
+        );
+        node.group = Some(format!("cluster-{}", i / 12));
+        nodes.push(node);
+        if i > 0 {
+            edges.push(e(
+                &format!("node-{}", i - 1),
+                &format!("node-{i}"),
+                DependsOn,
+                Existing,
+            ));
+        }
+        if i >= 12 {
+            edges.push(e(
+                &format!("node-{}", i - 12),
+                &format!("node-{i}"),
+                DataFlow,
+                Existing,
+            ));
+        }
+    }
+    SessionDoc {
+        version: SessionDoc::VERSION,
+        title: format!("big demo ({n} components)"),
+        revision: 0,
+        focus: None,
+        nodes,
+        edges,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn big_doc_is_valid_and_deterministic() {
+        let d = big_doc(200);
+        assert_eq!(d.nodes.len(), 200);
+        let v = d.validate();
+        assert!(v.is_ok(), "errors: {:?}", v.errors);
+        assert_eq!(big_doc(200), big_doc(200));
+        let layout = crate::layout::compute(&d);
+        assert_eq!(layout.rects.len(), 200);
+    }
 
     #[test]
     fn demo_doc_is_valid() {

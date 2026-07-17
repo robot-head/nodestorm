@@ -27,6 +27,8 @@ fn kind_class(kind: EdgeKind) -> &'static str {
 #[component]
 pub fn EdgeLayer(
     layout: Memo<Layout>,
+    /// Indices into `layout.edges` that survived viewport culling.
+    visible: Vec<usize>,
     /// Rubber-band line while a connect drag is live: (from-center, cursor),
     /// both in plane coordinates.
     ghost: Option<((f64, f64), (f64, f64))>,
@@ -57,10 +59,22 @@ pub fn EdgeLayer(
                     }
                 }
             }
-            for (i, e) in l.edges.iter().enumerate() {
+            for (i, e) in visible.iter().map(|&i| (i, &l.edges[i])) {
                 path {
                     key: "{e.from}-{e.to}-{i}",
-                    class: "edge edge-{status_class(e.status)} edge-kind-{kind_class(e.kind)}",
+                    class: if e.bundle_count > 1 {
+                        "edge edge-bundled edge-{status_class(e.status)} edge-kind-{kind_class(e.kind)}"
+                    } else {
+                        "edge edge-{status_class(e.status)} edge-kind-{kind_class(e.kind)}"
+                    },
+                    style: if e.bundle_count > 1 {
+                        format!(
+                            "stroke-width: {:.1}px;",
+                            1.5 + (e.bundle_count as f64).ln() * 1.4
+                        )
+                    } else {
+                        String::new()
+                    },
                     d: "{e.path}",
                     marker_end: "url(#arrow-{status_class(e.status)})",
                     oncontextmenu: {

@@ -29,6 +29,10 @@ pub struct Cli {
     #[arg(long)]
     pub demo: bool,
 
+    /// Load a deterministic N-component graph (scaling checks).
+    #[arg(long, value_name = "N")]
+    pub demo_big: Option<usize>,
+
     /// Run the MCP server without opening a window (for CI and agent-only use).
     #[arg(long)]
     pub headless: bool,

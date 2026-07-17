@@ -56,6 +56,10 @@ pub struct SessionState {
     /// The last `flush_seq` actually delivered to an `await_decisions` call.
     pub delivered_flush_seq: u64,
     pub activity: Vec<ActivityEntry>,
+    /// Groups the user collapsed on the canvas. View state: persisted per
+    /// session, never part of the doc, invisible to agents.
+    #[serde(default)]
+    pub collapsed_groups: Vec<String>,
     /// Live `await_decisions` calls (transient; not persisted).
     #[serde(skip)]
     pub waiting_agents: usize,
@@ -68,6 +72,7 @@ pub struct UiMeta {
     pub undelivered: usize,
     pub open_choices: usize,
     pub activity: Vec<ActivityEntry>,
+    pub collapsed_groups: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -151,6 +156,7 @@ impl Store {
             undelivered: s.decision_log.len() - s.delivery_cursor,
             open_choices: s.doc.open_choice_count(),
             activity: s.activity.clone(),
+            collapsed_groups: s.collapsed_groups.clone(),
         })
     }
 
@@ -160,6 +166,18 @@ impl Store {
         self.mutate(|s| {
             if let Some(n) = s.doc.node_mut(node) {
                 n.position = Some(position);
+            }
+        });
+    }
+
+    /// Collapse/expand a group on the canvas. View state only: no decision
+    /// event, invisible to agents, persisted with the session.
+    pub fn toggle_group_collapsed(&self, group: &str) {
+        self.mutate(|s| {
+            if let Some(i) = s.collapsed_groups.iter().position(|g| g == group) {
+                s.collapsed_groups.remove(i);
+            } else {
+                s.collapsed_groups.push(group.to_owned());
             }
         });
     }
@@ -1282,6 +1300,24 @@ mod tests {
         assert_eq!(n.label, "Adoptee (enriched)");
         assert_eq!(n.notes.len(), 1, "user note survives adoption");
         assert_eq!(n.position, Some(Point { x: 5.0, y: 6.0 }));
+    }
+
+    #[test]
+    fn toggle_group_collapsed_round_trips_and_never_events() {
+        let store = demo_store();
+        let log_before = store.read(|s| s.decision_log.len());
+        store.toggle_group_collapsed("Platform");
+        assert_eq!(
+            store.snapshot_meta().collapsed_groups,
+            vec!["Platform".to_owned()]
+        );
+        store.toggle_group_collapsed("Platform");
+        assert!(store.snapshot_meta().collapsed_groups.is_empty());
+        assert_eq!(
+            store.read(|s| s.decision_log.len()),
+            log_before,
+            "view state emits no decision events"
+        );
     }
 
     #[test]

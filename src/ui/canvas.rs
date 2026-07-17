@@ -14,6 +14,7 @@ use crate::model::{EdgeKind, NodeId, NodeKind, Point, SessionDoc};
 
 use super::ViewTransform;
 use super::app::use_store;
+use super::cluster_card::ClusterCard;
 use super::context_menu::{ContextMenu, MenuAction, MenuTarget};
 use super::edge_layer::EdgeLayer;
 use super::minimap::Minimap;
@@ -167,6 +168,9 @@ pub fn Canvas(
     let t = transform();
     let l = layout.read();
     let d = doc.read();
+    // Viewport culling: only on-screen(±margin) cards, clusters, and edges
+    // hit the DOM — the difference between 30 and 300 components.
+    let vis = crate::layout::visible_set(&l, t.tx, t.ty, t.scale, VIEW_W, VIEW_H);
     let panning = matches!(gesture.read().gesture, Some(Gesture::Pan { .. }));
     let viewport_class = match (panning, connect_from().is_some()) {
         (true, _) => "canvas-viewport panning",
@@ -372,6 +376,7 @@ pub fn Canvas(
                 style: "transform: translate({t.tx}px, {t.ty}px) scale({t.scale});",
                 EdgeLayer {
                     layout,
+                    visible: vis.edges.clone(),
                     ghost: connect_from().and_then(|from| {
                         let l = layout.read();
                         let r = l.rects.get(&from)?;
@@ -382,7 +387,20 @@ pub fn Canvas(
                         menu.set(Some((cx, cy, MenuTarget::Edge(from, to, kind))));
                     },
                 }
-                for node in d.nodes.iter() {
+                for &ci in vis.clusters.iter() {
+                    ClusterCard {
+                        key: "{l.clusters[ci].group}",
+                        group: l.clusters[ci].group.clone(),
+                        rect: l.clusters[ci].rect,
+                        member_count: l.clusters[ci].member_count,
+                        on_expand: {
+                            let store = store.clone();
+                            let group = l.clusters[ci].group.clone();
+                            move |()| store.toggle_group_collapsed(&group)
+                        },
+                    }
+                }
+                for node in d.nodes.iter().filter(|n| vis.nodes.contains(&n.id)) {
                     if let Some(rect) = l.rects.get(&node.id) {
                         NodeCard {
                             key: "{node.id}",
@@ -459,14 +477,28 @@ pub fn Canvas(
                             },
                             on_context: {
                                 let id = node.id.clone();
+                                let group = node.group.clone();
                                 move |ev: MouseEvent| {
                                     let c = ev.client_coordinates();
-                                    menu.set(Some((c.x, c.y, MenuTarget::Node(id.clone()))));
+                                    menu.set(Some((
+                                        c.x,
+                                        c.y,
+                                        MenuTarget::Node(id.clone(), group.clone()),
+                                    )));
                                 }
                             },
                             on_zoom: {
                                 let rect = *rect;
                                 move |_| zoom_to(rect)
+                            },
+                            on_toggle_group: {
+                                let store = store.clone();
+                                let group = node.group.clone();
+                                move |_| {
+                                    if let Some(g) = &group {
+                                        store.toggle_group_collapsed(g);
+                                    }
+                                }
                             },
                         }
                     }
@@ -510,6 +542,9 @@ pub fn Canvas(
                                             tracing::warn!(%err, "add component failed");
                                         }
                                     }
+                                }
+                                MenuAction::ToggleGroup(group) => {
+                                    store.toggle_group_collapsed(&group);
                                 }
                             }
                             menu.set(None);

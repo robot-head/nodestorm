@@ -622,6 +622,26 @@ body {
   color: var(--status-removed) !important;
 }
 
+/* ---------- clusters & bundles ---------- */
+
+.cluster-card {
+  border-style: dashed;
+  cursor: default;
+}
+
+.cluster-expand {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.node-group {
+  cursor: pointer;
+}
+
+.node-group:hover {
+  color: var(--accent);
+}
+
 /* ---------- timeline panel ---------- */
 
 .timeline-row {

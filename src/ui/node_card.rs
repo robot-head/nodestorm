@@ -55,6 +55,7 @@ pub fn NodeCard(
     on_connect_drop: EventHandler<MouseEvent>,
     on_context: EventHandler<MouseEvent>,
     on_zoom: EventHandler<MouseEvent>,
+    on_toggle_group: EventHandler<MouseEvent>,
 ) -> Element {
     let open = node.open_choice_count();
     let decided = node.choices.len() - open;
@@ -108,7 +109,15 @@ pub fn NodeCard(
                     span { class: "node-status-tag tag-{status}", "{status}" }
                 }
                 if let Some(group) = &node.group {
-                    span { class: "node-group", "{group}" }
+                    span {
+                        class: "node-group",
+                        title: "Collapse this group into one card",
+                        onclick: move |ev| {
+                            ev.stop_propagation();
+                            on_toggle_group.call(ev);
+                        },
+                        "{group}"
+                    }
                 }
             }
             if !node.description.is_empty() {

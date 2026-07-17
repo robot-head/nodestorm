@@ -4,6 +4,7 @@ mod activity;
 mod app;
 mod canvas;
 mod choice_panel;
+mod cluster_card;
 mod context_menu;
 mod edge_layer;
 mod minimap;

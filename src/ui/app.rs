@@ -35,7 +35,11 @@ pub fn App() -> Element {
     use_context_provider(|| super::ZoomTarget(Signal::new(None)));
     let mut search = use_context_provider(|| super::SearchQuery(Signal::new(String::new()))).0;
 
-    let layout: Memo<Layout> = use_memo(move || layout::compute(&doc.read()));
+    let layout: Memo<Layout> = use_memo(move || {
+        let collapsed: std::collections::BTreeSet<String> =
+            meta.read().collapsed_groups.iter().cloned().collect();
+        layout::compute_collapsed(&doc.read(), &collapsed)
+    });
     let mut selected: Signal<Option<NodeId>> = use_signal(|| None);
     let hovered_affects: Signal<Vec<NodeId>> = use_signal(Vec::new);
     let mut timeline_open: Signal<bool> = use_signal(|| false);
