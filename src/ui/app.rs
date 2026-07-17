@@ -37,6 +37,18 @@ pub fn App() -> Element {
     let mut search = use_context_provider(|| super::SearchQuery(Signal::new(String::new()))).0;
     let mut compare_with = use_context_provider(|| super::CompareWith(Signal::new(None))).0;
 
+    // Theme preference: seeded from the file loaded in launch(); the CSS
+    // reacts through data-theme/data-mode below, the native title bar
+    // through set_theme (Auto = follow the OS).
+    let initial_prefs = use_context::<crate::prefs::Preferences>();
+    let theme_prefs = use_context_provider(move || super::ThemePref(Signal::new(initial_prefs))).0;
+    let window = dioxus::desktop::use_window();
+    use_effect(move || {
+        window
+            .window
+            .set_theme(super::tao_theme(theme_prefs.read().mode));
+    });
+
     let layout: Memo<Layout> = use_memo(move || {
         let collapsed: std::collections::BTreeSet<String> =
             meta.read().collapsed_groups.iter().cloned().collect();
@@ -105,7 +117,10 @@ pub fn App() -> Element {
 
     rsx! {
         document::Style { {include_str!("../../assets/main.css")} }
-        div { class: "app",
+        div {
+            class: "app",
+            "data-theme": "{theme_prefs.read().theme}",
+            "data-mode": "{theme_prefs.read().mode.as_str()}",
             TopBar { doc, meta, selected, session_name, timeline_open }
             div { class: "main",
                 if has_nodes {

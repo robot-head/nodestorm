@@ -65,7 +65,7 @@ body {
 .topbar {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
   height: 48px;
   padding: 0 16px;
   background: var(--bg-panel);
@@ -129,7 +129,10 @@ body {
   border-radius: 6px;
   color: var(--text);
   padding: 6px 10px;
+  /* Shrinkable so the topbar fits narrow windows (basis 230px, floor 110px). */
   width: 230px;
+  min-width: 110px;
+  flex: 0 1 auto;
   font: inherit;
   font-size: 12.5px;
 }
@@ -525,7 +528,10 @@ body {
 }
 
 .search-box {
+  /* Shrinkable so the topbar fits narrow windows (basis 190px, floor 110px). */
   width: 190px;
+  min-width: 110px;
+  flex: 0 1 auto;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -1138,6 +1144,73 @@ body {
 }
 
 /* ---------- theming ---------- */
+
+/* Theme picker dropdown (shares the export-dropdown shell). */
+.theme-dropdown {
+  min-width: 230px;
+}
+
+.mode-row {
+  display: flex;
+  gap: 4px;
+  padding: 2px 2px 6px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.mode-btn {
+  flex: 1;
+  padding: 5px 0;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.mode-btn:hover {
+  background: var(--bg-card-hover);
+  color: var(--text);
+}
+
+.mode-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.theme-dropdown .theme-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.theme-name {
+  flex: 1;
+  text-align: left;
+}
+
+.theme-swatches {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+}
+
+.swatch-bg { background: var(--bg); }
+.swatch-accent { background: var(--accent); }
+.swatch-modified { background: var(--status-modified); }
+.swatch-affected { background: var(--status-affected); }
+
+.theme-check {
+  color: var(--accent);
+  font-weight: 700;
+}
 
 /* Mode is pure `color-scheme`: in auto, the light-dark() values below track
    the OS preference live; scrollbars and form controls follow too. */
