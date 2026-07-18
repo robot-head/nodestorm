@@ -1868,6 +1868,56 @@ mod tests {
     }
 
     #[test]
+    fn legacy_persisted_note_and_node_events_deserialize() {
+        let state: SessionState = serde_json::from_str(
+            r#"{
+                "doc": {"title": "Legacy session"},
+                "decision_log": [
+                    {
+                        "seq": 1,
+                        "at": "2026-07-01T12:00:00Z",
+                        "kind": "note_added",
+                        "node_id": "legacy-node",
+                        "text": "Keep this context"
+                    },
+                    {
+                        "seq": 2,
+                        "at": "2026-07-01T12:01:00Z",
+                        "kind": "node_added",
+                        "node_id": "legacy-service",
+                        "label": "Legacy Service",
+                        "node_kind": "service"
+                    }
+                ],
+                "delivery_cursor": 0,
+                "flush_seq": 0,
+                "delivered_flush_seq": 0,
+                "activity": []
+            }"#,
+        )
+        .expect("legacy persisted session deserializes");
+
+        match &state.decision_log[0].kind {
+            DecisionKind::NoteAdded { node_id, note } => {
+                assert_eq!(node_id, &NodeId::from("legacy-node"));
+                assert_eq!(note.id, NoteId::from("legacy-note-1"));
+                assert_eq!(note.text, "Keep this context");
+                assert_eq!(note.created_at.to_rfc3339(), "2026-07-01T12:00:00+00:00");
+            }
+            event => panic!("expected migrated note event, got {event:?}"),
+        }
+        match &state.decision_log[1].kind {
+            DecisionKind::NodeAdded { node } => {
+                assert_eq!(node.id, NodeId::from("legacy-service"));
+                assert_eq!(node.label, "Legacy Service");
+                assert_eq!(node.kind, NodeKind::Service);
+                assert_eq!(node.origin, Origin::User);
+            }
+            event => panic!("expected migrated node event, got {event:?}"),
+        }
+    }
+
+    #[test]
     fn record_export_lands_in_activity() {
         let store = demo_store();
         store.record_export(std::path::Path::new("some/dir/session.export.md"));
