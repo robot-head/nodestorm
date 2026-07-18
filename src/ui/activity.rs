@@ -6,7 +6,14 @@ use crate::model::ActivityOrigin;
 use crate::store::UiMeta;
 
 const COLLAPSED_COUNT: usize = 1;
-const EXPANDED_COUNT: usize = 10;
+
+fn entry_count(total: usize, expanded: bool) -> usize {
+    if expanded {
+        total
+    } else {
+        total.min(COLLAPSED_COUNT)
+    }
+}
 
 #[component]
 pub fn ActivityFeed(meta: Signal<UiMeta>) -> Element {
@@ -15,16 +22,12 @@ pub fn ActivityFeed(meta: Signal<UiMeta>) -> Element {
     if m.activity.is_empty() {
         return rsx! {};
     }
-    let count = if expanded() {
-        EXPANDED_COUNT
-    } else {
-        COLLAPSED_COUNT
-    };
+    let count = entry_count(m.activity.len(), expanded());
     let entries: Vec<_> = m.activity.iter().rev().take(count).cloned().collect();
     let toggle_label = if expanded() { "▾" } else { "▸" };
 
     rsx! {
-        div { class: "activity",
+        div { class: if expanded() { "activity expanded" } else { "activity" },
             div {
                 class: "activity-head",
                 onclick: move |_| expanded.toggle(),
@@ -45,5 +48,17 @@ pub fn ActivityFeed(meta: Signal<UiMeta>) -> Element {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expanded_feed_includes_every_retained_entry() {
+        assert_eq!(entry_count(200, true), 200);
+        assert_eq!(entry_count(200, false), 1);
+        assert_eq!(entry_count(0, false), 0);
     }
 }

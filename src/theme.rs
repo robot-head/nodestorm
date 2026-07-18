@@ -155,6 +155,28 @@ mod tests {
         &CSS[open + 1..close]
     }
 
+    fn assert_block_contains(selector: &str, declaration: &str) {
+        let block = block_for(selector);
+        assert!(
+            block.contains(declaration),
+            "{selector} must contain `{declaration}`, got: {block}"
+        );
+    }
+
+    #[test]
+    fn long_content_surfaces_have_overflow_contracts() {
+        assert_block_contains(".panel {", "width: min(360px, 100vw)");
+        assert_block_contains(".panel {", "overflow-x: hidden");
+        assert_block_contains(".panel-head h2 {", "overflow-wrap: anywhere");
+        assert_block_contains(".option-label {", "overflow-wrap: anywhere");
+        assert_block_contains(".export-dropdown {", "max-height: calc(100vh - 64px)");
+        assert_block_contains(".export-dropdown {", "overflow-y: auto");
+        assert_block_contains(".activity.expanded {", "overflow-y: auto");
+        assert_block_contains(".activity-text {", "overflow-wrap: anywhere");
+        assert_block_contains(".diff-text {", "overflow-wrap: anywhere");
+        assert_block_contains(".empty-cmd {", "max-width: 100%");
+    }
+
     #[test]
     fn family_ids_are_unique_and_slug_safe() {
         let mut seen = std::collections::BTreeSet::new();
