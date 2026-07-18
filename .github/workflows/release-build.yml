@@ -82,10 +82,9 @@ jobs:
           bash plugins/nodestorm/skills/nodestorm/scripts/setup.sh --dry-run --os linux --arch "${{ matrix.arch }}"
       - name: Package pinned artifact
         run: |
-          mkdir -p dist/assets
+          mkdir -p dist
           cp target/release/nodestorm dist/nodestorm
-          cp assets/nodestorm-mark.svg dist/assets/nodestorm-mark.svg
-          tar -C dist -czf "nodestorm-v${VERSION}-linux-${{ matrix.arch }}.tar.gz" nodestorm assets
+          tar -C dist -czf "nodestorm-v${VERSION}-linux-${{ matrix.arch }}.tar.gz" nodestorm
       - uses: actions/attest-build-provenance@v3
         with:
           subject-path: nodestorm-v${{ env.VERSION }}-linux-${{ matrix.arch }}.tar.gz
@@ -129,10 +128,9 @@ jobs:
           cargo build --release --locked
           bash plugins/nodestorm/skills/nodestorm/scripts/setup.sh --dry-run --os macos --arch "${{ matrix.arch }}"
           APP="$RUNNER_TEMP/Nodestorm.app"
-          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/assets"
+          mkdir -p "$APP/Contents/MacOS"
           cp packaging/macos/Info.plist "$APP/Contents/Info.plist"
           cp target/release/nodestorm "$APP/Contents/MacOS/nodestorm"
-          cp assets/nodestorm-mark.svg "$APP/Contents/Resources/assets/nodestorm-mark.svg"
           "$APP/Contents/MacOS/nodestorm" --version | grep -F "$VERSION"
       - name: Sign, notarize, staple, and verify
         env:

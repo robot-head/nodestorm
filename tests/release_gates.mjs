@@ -64,18 +64,3 @@ test("Windows setup aborts unavailable Store, version, port, and readiness paths
   ]) assert.match(script, pattern);
   assert.doesNotMatch(script, /releases\/download|https?:\/\/[^\s"']+\.msix(?:bundle)?/i);
 });
-
-test("desktop release packages stage the topbar mark asset", async () => {
-  const [workflow, windowsLayout] = await Promise.all([
-    readFile(path.join(root, ".github", "workflows", "release-build.yml"), "utf8"),
-    readFile(path.join(root, "packaging", "windows", "prepare-layout.ps1"), "utf8"),
-  ]);
-
-  assert.match(workflow, /cp assets\/nodestorm-mark\.svg dist\/assets\/nodestorm-mark\.svg/);
-  assert.match(workflow, /tar -C dist -czf .* nodestorm assets/);
-  assert.match(workflow, /cp assets\/nodestorm-mark\.svg "\$APP\/Contents\/Resources\/assets\/nodestorm-mark\.svg"/);
-  assert.match(
-    windowsLayout,
-    /Copy-Item \(Join-Path \$PSScriptRoot "\.\.\/\.\.\/assets\/nodestorm-mark\.svg"\) \(Join-Path \$Layout "Assets\/nodestorm-mark\.svg"\)/,
-  );
-});

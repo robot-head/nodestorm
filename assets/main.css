@@ -91,13 +91,11 @@ body {
 }
 
 .topbar-mark {
-  display: inline-block;
+  display: block;
   flex: 0 0 17px;
   width: 17px;
   height: 17px;
-  background: var(--accent);
-  -webkit-mask: url("/assets/nodestorm-mark.svg") center / contain no-repeat;
-  mask: url("/assets/nodestorm-mark.svg") center / contain no-repeat;
+  color: var(--accent);
 }
 
 .topbar-word {

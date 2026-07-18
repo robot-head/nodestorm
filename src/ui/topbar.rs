@@ -53,7 +53,28 @@ pub fn TopBar(
     rsx! {
         header { class: "topbar",
             span { class: "topbar-brand",
-                span { class: "topbar-mark", aria_hidden: "true" }
+                svg {
+                    class: "topbar-mark",
+                    view_box: "0 0 256 256",
+                    "aria-hidden": "true",
+                    defs {
+                        mask { id: "topbar-bolt-cutout",
+                            rect { width: "256", height: "256", fill: "white" }
+                            path { d: "M145 42 78 137h47l-14 77 67-97h-47l14-75Z", fill: "black" }
+                        }
+                    }
+                    g {
+                        fill: "currentColor",
+                        stroke: "currentColor",
+                        stroke_linecap: "round",
+                        stroke_linejoin: "round",
+                        mask: "url(#topbar-bolt-cutout)",
+                        path { d: "M59 184 120 66 199 171", fill: "none", stroke_width: "24" }
+                        circle { cx: "59", cy: "184", r: "27", stroke: "none" }
+                        circle { cx: "120", cy: "66", r: "27", stroke: "none" }
+                        circle { cx: "199", cy: "171", r: "27", stroke: "none" }
+                    }
+                }
                 span { class: "topbar-word", "nodestorm" }
             }
             div { class: "export-menu",

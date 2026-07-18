@@ -129,7 +129,6 @@ mod tests {
     use super::*;
 
     const CSS: &str = include_str!("../assets/main.css");
-    const APP_ICON_SVG: &str = include_str!("../assets/nodestorm-mark.svg");
     const TOPBAR_SOURCE: &str = include_str!("ui/topbar.rs");
 
     /// Tokens that can never share a value between light and dark variants,
@@ -189,12 +188,12 @@ mod tests {
             .0;
         assert!(brand.contains("topbar-mark"));
         assert!(!brand.contains("\"ϟ\""));
-        assert!(APP_ICON_SVG.contains("viewBox=\"0 0 256 256\""));
-        assert!(APP_ICON_SVG.contains("id=\"bolt-cutout\""));
-        assert_block_contains(
-            ".topbar-mark",
-            "mask: url(\"/assets/nodestorm-mark.svg\") center / contain no-repeat",
-        );
+        assert!(brand.contains("svg {"));
+        assert!(brand.contains("class: \"topbar-mark\""));
+        assert!(brand.contains("id: \"topbar-bolt-cutout\""));
+        assert!(!brand.contains("/assets/nodestorm-mark.svg"));
+        assert!(!CSS.contains("/assets/nodestorm-mark.svg"));
+        assert!(!CSS.contains("mask:"));
     }
 
     #[test]
