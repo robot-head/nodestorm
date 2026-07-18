@@ -238,6 +238,50 @@ body {
   transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
 }
 
+.topbar .btn,
+.topbar .send-comment,
+.topbar .search-box,
+.topbar .status-chip {
+  border-radius: 10px;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 65%, transparent),
+    0 2px 0 color-mix(in srgb, var(--border) 72%, transparent),
+    0 5px 10px color-mix(in srgb, var(--shadow) 20%, transparent);
+}
+
+.topbar .btn,
+.topbar .search-box,
+.topbar .send-comment {
+  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease,
+    transform 120ms ease;
+}
+
+.topbar .btn:hover:not(:disabled),
+.topbar .search-box:hover,
+.topbar .send-comment:hover {
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 72%, transparent),
+    0 3px 0 color-mix(in srgb, var(--border) 72%, transparent),
+    0 7px 12px color-mix(in srgb, var(--shadow) 24%, transparent);
+}
+
+.topbar .btn:active:not(:disabled),
+.topbar .search-box:active,
+.topbar .send-comment:active {
+  transform: translateY(2px);
+  box-shadow:
+    inset 0 1px 2px color-mix(in srgb, var(--shadow) 20%, transparent),
+    0 1px 0 color-mix(in srgb, var(--border) 72%, transparent),
+    0 2px 5px color-mix(in srgb, var(--shadow) 14%, transparent);
+}
+
+.topbar .btn:focus-visible,
+.topbar .search-box:focus-visible,
+.topbar .send-comment:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .btn:hover:not(:disabled) {
   border-color: var(--accent);
   background: var(--accent-soft);
