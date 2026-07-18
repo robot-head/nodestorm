@@ -153,14 +153,14 @@ pub(crate) fn describe_event(doc: &SessionDoc, event: &DecisionEvent) -> String 
                 None => format!("dismissed “{prompt}”"),
             }
         }
-        DecisionKind::NoteAdded { node_id, text } => {
-            format!("note on {}: {text}", node_label(doc, node_id))
+        DecisionKind::NoteAdded { node_id, note } => {
+            format!("note on {}: {}", node_label(doc, node_id), note.text)
         }
         DecisionKind::FlushRequested { comment } => match comment {
             Some(c) => format!("comment: “{c}”"),
             None => "sent decisions to the agent".into(),
         },
-        DecisionKind::NodeAdded { label, .. } => format!("added component “{label}”"),
+        DecisionKind::NodeAdded { node } => format!("added component “{}”", node.label),
         DecisionKind::NodeEdited { label, .. } => format!("edited “{label}”"),
         DecisionKind::NodeDeleted { node_id } => format!("deleted component {node_id}"),
         DecisionKind::RemovalRequested { node_id } => {
@@ -1131,9 +1131,18 @@ mod tests {
             seq: 4,
             at: ts(),
             kind: DecisionKind::NodeAdded {
-                node_id: "rate-limiter".into(),
-                label: "Rate Limiter".into(),
-                node_kind: NodeKind::Component,
+                node: Node {
+                    id: "rate-limiter".into(),
+                    label: "Rate Limiter".into(),
+                    kind: NodeKind::Component,
+                    description: String::new(),
+                    status: ElementStatus::Proposed,
+                    group: None,
+                    choices: vec![],
+                    notes: vec![],
+                    position: None,
+                    origin: Origin::User,
+                },
             },
         });
         let md = render_markdown(&doc, &log, ts());

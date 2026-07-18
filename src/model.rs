@@ -522,7 +522,7 @@ pub enum DecisionKind {
     },
     NoteAdded {
         node_id: NodeId,
-        text: String,
+        note: Note,
     },
     /// The user pressed "Send to agent" (possibly with no other events —
     /// that means "reviewed, proceed").
@@ -532,11 +532,8 @@ pub enum DecisionKind {
     },
     /// The user created a node on the canvas. Enriching it via upsert adopts
     /// it — from then on the agent carries it forward like its own nodes.
-    /// (Field is `node_kind`, not `kind`: the envelope's tag owns that name.)
     NodeAdded {
-        node_id: NodeId,
-        label: String,
-        node_kind: NodeKind,
+        node: Node,
     },
     /// The user edited a card. Treat the new content as canonical.
     NodeEdited {
@@ -693,9 +690,18 @@ mod tests {
                 seq: 1,
                 at,
                 kind: DecisionKind::NodeAdded {
-                    node_id: "rate-limiter".into(),
-                    label: "Rate Limiter".into(),
-                    node_kind: NodeKind::Component,
+                    node: Node {
+                        id: "rate-limiter".into(),
+                        label: "Rate Limiter".into(),
+                        kind: NodeKind::Component,
+                        description: String::new(),
+                        status: ElementStatus::Proposed,
+                        group: None,
+                        choices: vec![],
+                        notes: vec![],
+                        position: None,
+                        origin: Origin::User,
+                    },
                 },
             },
             DecisionEvent {
