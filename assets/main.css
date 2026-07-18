@@ -1443,7 +1443,7 @@ button.empty-cmd code {
     --bg: light-dark(#fdf6e3, #002b36);
     --bg-panel: light-dark(#eee8d5, #073642);
     --bg-card: light-dark(#fdf6e3, #073642);
-    --bg-card-hover: light-dark(#eee8d5, #586e75);
+    --bg-card-hover: light-dark(#eee8d5, #002b36);
     --border: light-dark(#93a1a1, #586e75);
     --text: light-dark(#657b83, #839496);
     --text-dim: light-dark(#93a1a1, #657b83);
@@ -1517,7 +1517,7 @@ button.empty-cmd code {
     --text: light-dark(#2e3440, #eceff4);
     --text-dim: light-dark(#4c566a, #d8dee9);
     --accent: light-dark(#5e81ac, #88c0d0);
-    --status-existing: light-dark(#4c566a, #4c566a);
+    --status-existing: light-dark(#4c566a, #d8dee9);
     --status-proposed: light-dark(#5e81ac, #88c0d0);
     --status-modified: light-dark(#d08770, #ebcb8b);
     --status-affected: light-dark(#5e81ac, #b48ead);
@@ -1527,7 +1527,7 @@ button.empty-cmd code {
     --badge-notes: light-dark(#4c566a, #d8dee9);
     --on-accent: light-dark(#eceff4, #2e3440);
     --on-badge: light-dark(#eceff4, #2e3440);
-    --shadow: light-dark(#2e344059, #2e3440);
+    --shadow: light-dark(#2e344059, #000000);
     --dot-grid: light-dark(#d8dee9, #3b4252);
   }
 

@@ -254,6 +254,12 @@ mod tests {
             ("everforest", "--bg: light-dark(#fdf6e3, #2d353b);"),
             ("rose-pine", "--bg: light-dark(#faf4ed, #191724);"),
             ("monokai", "--bg: light-dark(#fafaf4, #272822);"),
+            (
+                "solarized",
+                "--bg-card-hover: light-dark(#eee8d5, #002b36);",
+            ),
+            ("nord", "--status-existing: light-dark(#4c566a, #d8dee9);"),
+            ("nord", "--shadow: light-dark(#2e344059, #000000);"),
         ];
 
         for (id, declaration) in anchors {
