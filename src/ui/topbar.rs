@@ -23,6 +23,8 @@ pub fn TopBar(
     let mut sessions_open = use_signal(|| false);
     let mut new_session_draft = use_signal(String::new);
     let mut rename_draft = use_signal(String::new);
+    let mut manage_open = use_signal(|| false);
+    let mut delete_pending = use_signal(|| false);
     let mut compare_with = use_context::<super::CompareWith>().0;
     let d = doc.read();
     let m = meta.read();
@@ -58,46 +60,76 @@ pub fn TopBar(
                 button {
                     class: "btn sess-pod",
                     title: "Switch, create, or archive named sessions",
-                    onclick: move |_| sessions_open.toggle(),
+                    onclick: move |_| {
+                        if sessions_open() {
+                            new_session_draft.set(String::new());
+                            rename_draft.set(String::new());
+                            manage_open.set(false);
+                            delete_pending.set(false);
+                            sessions_open.set(false);
+                        } else {
+                            sessions_open.set(true);
+                        }
+                    },
                     "{session_name} ▾"
                 }
                 if sessions_open() {
                     div {
                         class: "menu-catcher",
-                        onclick: move |_| sessions_open.set(false),
+                        onclick: move |_| {
+                            new_session_draft.set(String::new());
+                            rename_draft.set(String::new());
+                            manage_open.set(false);
+                            delete_pending.set(false);
+                            sessions_open.set(false);
+                        },
                     }
                     div { class: "export-dropdown sessions-dropdown",
                         div { class: "session-doc-title", title: "{title}",
                             span { "Brainstorm" }
-                            strong { "{title}" }
-                        }
-                        for info in sessions.list() {
-                            div {
-                                key: "{info.name}",
-                                class: if info.active { "session-row active" } else { "session-row" },
-                                button {
-                                    class: "sess-switch",
-                                    onclick: {
-                                        let sessions = sessions.clone();
-                                        let name = info.name.clone();
-                                        move |_| {
-                                            if let Err(err) = sessions.switch(&name) {
-                                                tracing::warn!(%err, "switch failed");
-                                            }
-                                            sessions_open.set(false);
-                                        }
-                                    },
-                                    span { class: "sess-name", title: "{info.name}", "{info.name}" }
-                                    span { class: "sess-badges",
-                                        if info.open_choices > 0 {
-                                            span { class: "pill pill-open", "{info.open_choices}" }
-                                        }
-                                        if info.agent_waiting {
-                                            span { class: "pill pill-waiting", "●" }
-                                        }
+                            div { class: "session-doc-heading",
+                                strong { "{title}" }
+                                span { class: "sess-badges",
+                                    if open > 0 {
+                                        span { class: "pill pill-open", "{open}" }
+                                    }
+                                    if m.waiting_agents > 0 {
+                                        span { class: "pill pill-waiting", "●" }
                                     }
                                 }
-                                if !info.active {
+                            }
+                        }
+                        for info in sessions.list() {
+                            if !info.active {
+                                div {
+                                    key: "{info.name}",
+                                    class: "session-row",
+                                    button {
+                                        class: "sess-switch",
+                                        onclick: {
+                                            let sessions = sessions.clone();
+                                            let name = info.name.clone();
+                                            move |_| {
+                                                if let Err(err) = sessions.switch(&name) {
+                                                    tracing::warn!(%err, "switch failed");
+                                                }
+                                                new_session_draft.set(String::new());
+                                                rename_draft.set(String::new());
+                                                manage_open.set(false);
+                                                delete_pending.set(false);
+                                                sessions_open.set(false);
+                                            }
+                                        },
+                                        span { class: "sess-name", title: "{info.name}", "{info.name}" }
+                                        span { class: "sess-badges",
+                                            if info.open_choices > 0 {
+                                                span { class: "pill pill-open", "{info.open_choices}" }
+                                            }
+                                            if info.agent_waiting {
+                                                span { class: "pill pill-waiting", "●" }
+                                            }
+                                        }
+                                    }
                                     button {
                                         class: "ctl-btn",
                                         title: "Compare this session with the active one",
@@ -105,6 +137,10 @@ pub fn TopBar(
                                             let name = info.name.clone();
                                             move |_| {
                                                 compare_with.set(Some(name.clone()));
+                                                new_session_draft.set(String::new());
+                                                rename_draft.set(String::new());
+                                                manage_open.set(false);
+                                                delete_pending.set(false);
                                                 sessions_open.set(false);
                                             }
                                         },
@@ -113,89 +149,140 @@ pub fn TopBar(
                                 }
                             }
                         }
-                        div { class: "session-create",
-                            input {
-                                class: "session-name-input",
-                                placeholder: "new session…",
-                                value: "{new_session_draft}",
-                                oninput: move |ev| new_session_draft.set(ev.value()),
+                        button {
+                            class: "session-manage-toggle",
+                            onclick: move |_| { delete_pending.set(false); manage_open.toggle(); },
+                            "Manage session"
+                        }
+                        if manage_open() {
+                            div { class: "session-manage",
+                                div { class: "session-form",
+                                    label { r#for: "rename-session", "Rename current session" }
+                                    div { class: "session-form-row",
+                                        input {
+                                            id: "rename-session",
+                                            class: "session-name-input",
+                                            placeholder: "new name…",
+                                            value: "{rename_draft}",
+                                            oninput: move |ev| rename_draft.set(ev.value()),
+                                        }
+                                        button {
+                                            class: "btn",
+                                            disabled: rename_draft.read().trim().is_empty(),
+                                            onclick: {
+                                                let sessions = sessions.clone();
+                                                move |_| {
+                                                    let name = rename_draft.read().trim().to_owned();
+                                                    let active = sessions.active_name();
+                                                    match sessions.rename(&active, &name) {
+                                                        Ok(_) => rename_draft.set(String::new()),
+                                                        Err(err) => tracing::warn!(%err, "rename failed"),
+                                                    }
+                                                    new_session_draft.set(String::new());
+                                                    rename_draft.set(String::new());
+                                                    manage_open.set(false);
+                                                    delete_pending.set(false);
+                                                    sessions_open.set(false);
+                                                }
+                                            },
+                                            "Rename"
+                                        }
+                                    }
+                                }
+                                div { class: "session-form",
+                                    label { r#for: "create-session", "Create new session" }
+                                    div { class: "session-form-row",
+                                        input {
+                                            id: "create-session",
+                                            class: "session-name-input",
+                                            placeholder: "session name…",
+                                            value: "{new_session_draft}",
+                                            oninput: move |ev| new_session_draft.set(ev.value()),
+                                        }
+                                        button {
+                                            class: "btn",
+                                            disabled: new_session_draft.read().trim().is_empty(),
+                                            onclick: {
+                                                let sessions = sessions.clone();
+                                                move |_| {
+                                                    let name = new_session_draft.read().trim().to_owned();
+                                                    match sessions.create(&name) {
+                                                        Ok(slug) => {
+                                                            let _ = sessions.switch(&slug);
+                                                            new_session_draft.set(String::new());
+                                                        }
+                                                        Err(err) => {
+                                                            tracing::warn!(%err, "create session failed");
+                                                        }
+                                                    }
+                                                    new_session_draft.set(String::new());
+                                                    rename_draft.set(String::new());
+                                                    manage_open.set(false);
+                                                    delete_pending.set(false);
+                                                    sessions_open.set(false);
+                                                }
+                                            },
+                                            "Create"
+                                        }
+                                    }
+                                }
                             }
+                        }
+                        div { class: "session-danger",
+                            span { class: "session-section-label", "Danger zone" }
                             button {
-                                class: "btn",
-                                disabled: new_session_draft.read().trim().is_empty(),
+                                class: "session-archive",
+                                title: "Save this session's file into sessions/archive/ and drop it from the list",
                                 onclick: {
                                     let sessions = sessions.clone();
                                     move |_| {
-                                        let name = new_session_draft.read().trim().to_owned();
-                                        match sessions.create(&name) {
-                                            Ok(slug) => {
-                                                let _ = sessions.switch(&slug);
+                                        let name = sessions.active_name();
+                                        if let Err(err) = sessions.archive(&name) {
+                                            tracing::warn!(%err, "archive failed");
+                                        }
+                                        new_session_draft.set(String::new());
+                                        rename_draft.set(String::new());
+                                        manage_open.set(false);
+                                        delete_pending.set(false);
+                                        sessions_open.set(false);
+                                    }
+                                },
+                                "Archive session"
+                            }
+                            if delete_pending() {
+                                div { class: "delete-confirm",
+                                    span { "Delete {session_name} permanently?" }
+                                    button {
+                                        class: "session-delete-confirm",
+                                        onclick: {
+                                            let sessions = sessions.clone();
+                                            move |_| {
+                                                let name = sessions.active_name();
+                                                if let Err(err) = sessions.delete(&name) {
+                                                    tracing::warn!(%err, "delete failed");
+                                                }
                                                 new_session_draft.set(String::new());
+                                                rename_draft.set(String::new());
+                                                manage_open.set(false);
+                                                delete_pending.set(false);
+                                                sessions_open.set(false);
                                             }
-                                            Err(err) => {
-                                                tracing::warn!(%err, "create session failed");
-                                            }
-                                        }
-                                        sessions_open.set(false);
+                                        },
+                                        "Confirm delete"
                                     }
-                                },
-                                "Create"
-                            }
-                        }
-                        div { class: "session-create",
-                            input {
-                                class: "session-name-input",
-                                placeholder: "rename to…",
-                                value: "{rename_draft}",
-                                oninput: move |ev| rename_draft.set(ev.value()),
-                            }
-                            button {
-                                class: "btn",
-                                disabled: rename_draft.read().trim().is_empty(),
-                                onclick: {
-                                    let sessions = sessions.clone();
-                                    move |_| {
-                                        let name = rename_draft.read().trim().to_owned();
-                                        let active = sessions.active_name();
-                                        match sessions.rename(&active, &name) {
-                                            Ok(_) => rename_draft.set(String::new()),
-                                            Err(err) => tracing::warn!(%err, "rename failed"),
-                                        }
-                                        sessions_open.set(false);
+                                    button {
+                                        class: "session-cancel",
+                                        onclick: move |_| delete_pending.set(false),
+                                        "Cancel"
                                     }
-                                },
-                                "Rename"
-                            }
-                        }
-                        button {
-                            class: "session-archive",
-                            title: "Save this session's file into sessions/archive/ and drop it from the list",
-                            onclick: {
-                                let sessions = sessions.clone();
-                                move |_| {
-                                    let name = sessions.active_name();
-                                    if let Err(err) = sessions.archive(&name) {
-                                        tracing::warn!(%err, "archive failed");
-                                    }
-                                    sessions_open.set(false);
                                 }
-                            },
-                            "Archive current"
-                        }
-                        button {
-                            class: "session-archive",
-                            title: "Delete the active session permanently (file and all)",
-                            onclick: {
-                                let sessions = sessions.clone();
-                                move |_| {
-                                    let name = sessions.active_name();
-                                    if let Err(err) = sessions.delete(&name) {
-                                        tracing::warn!(%err, "delete failed");
-                                    }
-                                    sessions_open.set(false);
+                            } else {
+                                button {
+                                    class: "session-delete",
+                                    onclick: move |_| delete_pending.set(true),
+                                    "Delete session"
                                 }
-                            },
-                            "Delete current"
+                            }
                         }
                         {
                             let archived = sessions.list_archived();
@@ -215,6 +302,10 @@ pub fn TopBar(
                                                         if let Err(err) = sessions.unarchive(&name) {
                                                             tracing::warn!(%err, "unarchive failed");
                                                         }
+                                                        new_session_draft.set(String::new());
+                                                        rename_draft.set(String::new());
+                                                        manage_open.set(false);
+                                                        delete_pending.set(false);
                                                         sessions_open.set(false);
                                                     }
                                                 },

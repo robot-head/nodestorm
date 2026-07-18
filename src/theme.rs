@@ -367,6 +367,57 @@ mod tests {
     }
 
     #[test]
+    fn session_menu_discloses_management_and_confirms_delete() {
+        for markup in [
+            "let mut manage_open = use_signal(|| false);",
+            "let mut delete_pending = use_signal(|| false);",
+            "if !info.active {",
+            "Manage session",
+            "Rename current session",
+            "Create new session",
+            "Confirm delete",
+            "Cancel",
+        ] {
+            assert!(TOPBAR_SOURCE.contains(markup), "missing `{markup}`");
+        }
+    }
+
+    #[test]
+    fn active_session_statuses_stay_in_the_session_menu_header() {
+        assert!(
+            TOPBAR_SOURCE.contains(
+                r#"div { class: "session-doc-heading",
+                                strong { "{title}" }
+                                span { class: "sess-badges",
+                                    if open > 0 {"#
+            ),
+            "session header must retain the active session's open-choice badge"
+        );
+        assert!(
+            TOPBAR_SOURCE.contains(
+                r#"if m.waiting_agents > 0 {
+                                        span { class: "pill pill-waiting", "●" }"#
+            ),
+            "session header must retain the active session's waiting badge"
+        );
+        assert_block_contains(".session-doc-heading", "display: flex");
+        assert_block_contains(".session-doc-title > span", "text-transform: uppercase");
+    }
+
+    #[test]
+    fn session_management_forms_and_danger_zone_are_distinct() {
+        assert_block_contains(".session-manage", "border-top: 1px solid var(--border)");
+        assert_block_contains(".session-form", "display: grid");
+        assert_block_contains(".session-form-row", "display: flex");
+        assert_block_contains(".session-form-row .btn", "width: auto");
+        assert_block_contains(".session-name-input", "border-radius: 7px");
+        assert_block_contains(".session-name-input", "width: 100%");
+        assert_block_contains(".session-danger", "border-top: 1px solid var(--border)");
+        assert_block_contains(".session-delete", "color: var(--status-removed)");
+        assert_block_contains(".delete-confirm", "background: var(--accent-soft)");
+    }
+
+    #[test]
     fn family_ids_are_unique_and_slug_safe() {
         let mut seen = std::collections::BTreeSet::new();
         for f in FAMILIES {
