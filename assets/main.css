@@ -296,15 +296,54 @@ body {
   gap: 12px;
 }
 
+.empty-bolt {
+  font-size: 56px;
+  color: var(--accent);
+  text-shadow: 0 0 24px var(--glow);
+  line-height: 1;
+}
+
 .empty-state h1 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: 0.06em;
   font-size: 28px;
-  letter-spacing: 0.04em;
   margin: 0;
 }
 
 .empty-state p {
   color: var(--text-dim);
   margin: 0;
+}
+
+.empty-cmd {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  padding: 8px 16px;
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.empty-cmd:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 10px var(--glow);
+}
+
+.empty-cmd code {
+  background: none;
+  border: none;
+  padding: 0;
+  user-select: all;
+}
+
+.empty-copy {
+  color: var(--text-dim);
 }
 
 .empty-state code {
@@ -879,6 +918,11 @@ body {
   cursor: pointer;
 }
 
+.minimap:hover {
+  opacity: 1;
+  box-shadow: 0 0 10px var(--glow);
+}
+
 .mini-node {
   stroke: none;
 }
@@ -1037,6 +1081,8 @@ body {
   flex: 1;
   overflow: hidden;
   background:
+    radial-gradient(ellipse at center, transparent 55%,
+      color-mix(in srgb, var(--shadow) 7%, transparent) 100%),
     radial-gradient(circle at 1px 1px, var(--dot-grid) 1px, transparent 0) 0 0 / 28px 28px,
     var(--bg);
   cursor: grab;
