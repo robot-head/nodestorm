@@ -901,6 +901,7 @@ button.empty-cmd code {
 }
 
 .session-row > .ctl-btn {
+  width: auto;
   flex: 0 0 auto;
 }
 

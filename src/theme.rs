@@ -213,6 +213,7 @@ mod tests {
         assert_block_contains(".sess-name", "overflow-wrap: anywhere");
         assert_block_contains(".sess-badges", "flex: 0 0 auto");
         assert_block_contains(".session-row > .ctl-btn", "flex: 0 0 auto");
+        assert_block_contains(".session-row > .ctl-btn", "width: auto");
         assert!(
             TOPBAR_SOURCE
                 .contains(r#"span { class: "sess-name", title: "{info.name}", "{info.name}" }"#),
