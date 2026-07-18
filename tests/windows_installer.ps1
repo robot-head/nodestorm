@@ -42,6 +42,7 @@ try {
     if ($commands -notmatch "winget show") { throw "WinGet listing check did not execute." }
     if ($commands -notmatch "curl .*apps.microsoft.com/detail/9TESTNODESTORM") { throw "Store page check did not execute." }
     if ($commands -match "winget install") { throw "Installer ran after Store availability failed." }
+    $global:LASTEXITCODE = 0
     Write-Host "Windows Store-not-live failure path passed."
 } finally {
     Remove-Item Env:NODESTORM_SETUP_TESTING -ErrorAction SilentlyContinue
