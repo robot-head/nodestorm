@@ -343,6 +343,30 @@ mod tests {
     }
 
     #[test]
+    fn topbar_title_has_a_wrapping_hover_card() {
+        assert!(
+            TOPBAR_SOURCE.contains(r#"class: "topbar-title""#)
+                && TOPBAR_SOURCE.contains(r#""data-full-title": "{title}""#),
+            "topbar title markup must provide its complete text to the hover card"
+        );
+        assert!(
+            TOPBAR_SOURCE.contains(r#"class: "topbar-title-text""#),
+            "the clipped title text must be separate from the hover-card host"
+        );
+        assert_block_contains(".topbar-title", "position: relative");
+        assert_block_contains(".topbar-title", "min-width: 0");
+        assert_block_contains(".topbar-title-text", "overflow: hidden");
+        assert_block_contains(".topbar-title-text", "text-overflow: ellipsis");
+        assert_block_contains(".topbar-title::after", "content: attr(data-full-title)");
+        assert_block_contains(
+            ".topbar-title::after",
+            "max-width: min(420px, calc(100vw - 32px))",
+        );
+        assert_block_contains(".topbar-title::after", "overflow-wrap: anywhere");
+        assert_block_contains(".topbar-title:hover::after", "opacity: 1");
+    }
+
+    #[test]
     fn family_ids_are_unique_and_slug_safe() {
         let mut seen = std::collections::BTreeSet::new();
         for f in FAMILIES {
