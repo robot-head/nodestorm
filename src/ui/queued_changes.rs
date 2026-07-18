@@ -7,12 +7,16 @@ use super::app::use_store;
 
 fn queued_change_label(doc: &SessionDoc, change: &QueuedChange) -> String {
     let label = crate::export::describe_event(doc, &change.event);
-    change
-        .blocked_reason
-        .as_ref()
-        .map_or(label.clone(), |reason| {
-            format!("{label} — blocked: {reason}")
-        })
+    if let Some(reason) = &change.interaction_error {
+        format!("{label} — unavailable: {reason}")
+    } else {
+        change
+            .blocked_reason
+            .as_ref()
+            .map_or(label.clone(), |reason| {
+                format!("{label} — blocked: {reason}")
+            })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -62,31 +66,35 @@ pub fn QueuedChangesPanel(
             }
             for change in changes {
                 {
+                    let id = change.id.clone();
                     let seq = change.event.seq;
                     let blocked = change.blocked_reason.is_some();
-                    let row_class = if blocked { "queue-row queue-blocked" } else { "queue-row" };
+                    let unavailable = change.interaction_error.is_some();
+                    let row_class = if blocked || unavailable { "queue-row queue-blocked" } else { "queue-row" };
                     let at = change.event.at.format("%H:%M").to_string();
                     let label = queued_change_label(&d, &change);
                     let replacement = queued_edit_replacement(&change);
                     let store = store.clone();
                     let on_close = on_close;
                     rsx! {
-                        div { class: "{row_class}", key: "{seq}-{blocked}",
+                        div { class: "{row_class}", key: "{id}",
                             span { class: "timeline-time", "{at}" }
                             span { class: "timeline-text", "{label}" }
                             div { class: "queue-actions",
                                 button {
                                     class: "ctl-btn",
                                     title: "Edit queued change",
+                                    disabled: unavailable,
                                     onclick: {
                                         let store = store.clone();
                                         let mut selected = selected;
                                         let mut composer_comment = composer.comment;
                                         let mut composer_open = composer.open;
                                         let replacement = replacement.clone();
+                                        let id = id.clone();
                                         move |_| {
                                             let target = if blocked {
-                                                store.remove_blocked_change(seq)
+                                                store.remove_blocked_change(&id)
                                             } else {
                                                 store.remove_queued_change(seq)
                                             };
@@ -133,11 +141,13 @@ pub fn QueuedChangesPanel(
                                 button {
                                     class: "ctl-btn",
                                     title: "Remove queued change",
+                                    disabled: unavailable,
                                     onclick: {
                                         let store = store.clone();
+                                        let id = id.clone();
                                         move |_| {
                                             let result = if blocked {
-                                                store.remove_blocked_change(seq)
+                                                store.remove_blocked_change(&id)
                                             } else {
                                                 store.remove_queued_change(seq)
                                             };
@@ -172,6 +182,7 @@ mod tests {
     fn blocked_changes_explain_why_they_will_not_send() {
         let doc = SessionDoc::default();
         let change = QueuedChange {
+            id: "blocked:test".into(),
             event: DecisionEvent {
                 seq: 1,
                 at: Utc::now(),
@@ -183,6 +194,7 @@ mod tests {
                 },
             },
             blocked_reason: Some("node widget no longer exists".into()),
+            interaction_error: None,
         };
 
         assert_eq!(
@@ -206,14 +218,17 @@ mod tests {
             origin: Origin::User,
         };
         let added = QueuedChange {
+            id: "pending:1".into(),
             event: DecisionEvent {
                 seq: 1,
                 at: Utc::now(),
                 kind: DecisionKind::NodeAdded { node },
             },
             blocked_reason: None,
+            interaction_error: None,
         };
         let comment = QueuedChange {
+            id: "pending:2".into(),
             event: DecisionEvent {
                 seq: 2,
                 at: Utc::now(),
@@ -222,6 +237,7 @@ mod tests {
                 },
             },
             blocked_reason: None,
+            interaction_error: None,
         };
 
         assert!(matches!(

@@ -37,9 +37,18 @@ pub struct Snapshot {
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct QueuedChange {
+    /// Stable row identity. Pending changes derive this from their current
+    /// sequence; blocked changes keep a UUID because replay can renumber the
+    /// live tail.
+    #[serde(default)]
+    pub id: String,
     pub event: DecisionEvent,
     #[serde(default)]
     pub blocked_reason: Option<String>,
+    /// Set only while the queue is displayed: persisted sessions from before
+    /// queue replay and agent graph mutations have no safe replay baseline.
+    #[serde(skip)]
+    pub interaction_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -69,7 +78,7 @@ pub enum StoreError {
     #[error("no edge {0} -> {1} of that kind")]
     UnknownEdge(NodeId, NodeId),
     #[error("queued change `{0}` is unavailable")]
-    UnknownQueuedChange(u64),
+    UnknownQueuedChange(String),
     #[error("queued changes cannot be replayed because their baseline is unavailable")]
     MissingQueuedBaseline,
 }
@@ -90,6 +99,10 @@ pub struct SessionState {
     /// removed. Kept for the user to inspect or dismiss.
     #[serde(default)]
     pub blocked_changes: Vec<QueuedChange>,
+    /// Why the undelivered tail cannot be safely replayed. Persisted so an
+    /// autosave/restart does not make an unavailable queue look editable.
+    #[serde(default)]
+    pub queue_edit_error: Option<String>,
     /// Bumped by "Send to agent" (or autoflush when the last choice closes).
     pub flush_seq: u64,
     /// The last `flush_seq` actually delivered to an `await_decisions` call.
@@ -149,7 +162,17 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn new(state: SessionState) -> Arc<Self> {
+    pub fn new(mut state: SessionState) -> Arc<Self> {
+        normalize_blocked_change_ids(&mut state);
+        if state.decision_log.len() > state.delivery_cursor
+            && state.pending_base.is_none()
+            && state.queue_edit_error.is_none()
+        {
+            state.queue_edit_error = Some(
+                "This queue was saved before queue editing was available; send it before making changes."
+                    .into(),
+            );
+        }
         let (revision_tx, _) = watch::channel(state.doc.revision);
         Arc::new(Self {
             state: Mutex::new(state),
@@ -702,6 +725,7 @@ impl Store {
         }
         Ok(self.mutate(|s| {
             clear_undo(s); // an agent turn invalidates the user's undo window
+            invalidate_pending_replay(s);
             let old_revision = s.doc.revision;
             let previous = std::mem::take(&mut s.doc);
             s.doc = incoming;
@@ -748,6 +772,7 @@ impl Store {
 
     /// Apply a batch of ops atomically: all-or-nothing against validation.
     pub fn apply_update(&self, ops: Vec<GraphOp>) -> Result<UpdateSummary, StoreError> {
+        let mutates_document = ops.iter().any(|op| !matches!(op, GraphOp::Announce { .. }));
         // Stage on a clone so a failed op or failed validation commits nothing.
         let staged = self.read(|s| s.doc.clone());
         let mut doc = staged;
@@ -763,6 +788,9 @@ impl Store {
         }
         Ok(self.mutate(|s| {
             clear_undo(s); // an agent turn invalidates the user's undo window
+            if mutates_document {
+                invalidate_pending_replay(s);
+            }
             doc.revision = s.doc.revision;
             s.doc = doc;
             if announces.is_empty() {
@@ -795,10 +823,15 @@ impl Store {
                 .iter()
                 .cloned()
                 .map(|event| QueuedChange {
+                    id: format!("pending:{}", event.seq),
                     event,
                     blocked_reason: None,
+                    interaction_error: s.queue_edit_error.clone(),
                 })
-                .chain(s.blocked_changes.iter().cloned())
+                .chain(s.blocked_changes.iter().cloned().map(|mut change| {
+                    change.interaction_error = None;
+                    change
+                }))
                 .collect()
         })
     }
@@ -808,12 +841,12 @@ impl Store {
     pub fn remove_queued_change(&self, seq: u64) -> Result<QueueEditTarget, StoreError> {
         self.mutate(|s| {
             if seq <= s.delivery_cursor as u64 {
-                return Err(StoreError::UnknownQueuedChange(seq));
+                return Err(StoreError::UnknownQueuedChange(seq.to_string()));
             }
             let tail_index = s.decision_log[s.delivery_cursor..]
                 .iter()
                 .position(|event| event.seq == seq)
-                .ok_or(StoreError::UnknownQueuedChange(seq))?;
+                .ok_or_else(|| StoreError::UnknownQueuedChange(seq.to_string()))?;
             let target = queue_edit_target(&s.decision_log[s.delivery_cursor + tail_index]);
             let base = s
                 .pending_base
@@ -828,10 +861,7 @@ impl Store {
             for event in survivors {
                 match replay_event(&mut replayed_doc, &event) {
                     Ok(()) => replayed_tail.push(event),
-                    Err(reason) => s.blocked_changes.push(QueuedChange {
-                        event,
-                        blocked_reason: Some(reason),
-                    }),
+                    Err(reason) => s.blocked_changes.push(blocked_change(event, reason)),
                 }
             }
             // Positions are canvas-only state: they do not generate decision
@@ -862,19 +892,19 @@ impl Store {
 
     /// Dismiss a replay-blocked change without altering the document or the
     /// append-only delivered portion of the decision log.
-    pub fn remove_blocked_change(&self, seq: u64) -> Result<QueueEditTarget, StoreError> {
+    pub fn remove_blocked_change(&self, id: &str) -> Result<QueueEditTarget, StoreError> {
         self.mutate(|s| {
             let index = s
                 .blocked_changes
                 .iter()
-                .position(|change| change.event.seq == seq)
-                .ok_or(StoreError::UnknownQueuedChange(seq))?;
+                .position(|change| change.id == id)
+                .ok_or_else(|| StoreError::UnknownQueuedChange(id.to_owned()))?;
             let change = s.blocked_changes.remove(index);
             let target = queue_edit_target(&change.event);
             push_activity(
                 s,
                 ActivityOrigin::User,
-                format!("removed blocked queued change {seq}"),
+                format!("removed blocked queued change {id}"),
             );
             Ok(target)
         })
@@ -958,6 +988,7 @@ fn try_deliver_locked(s: &mut SessionState) -> Option<Vec<DecisionEvent>> {
         s.delivery_cursor = s.decision_log.len();
         s.delivered_flush_seq = s.flush_seq;
         s.pending_base = None;
+        s.queue_edit_error = None;
         Some(batch)
     } else {
         None
@@ -967,6 +998,7 @@ fn try_deliver_locked(s: &mut SessionState) -> Option<Vec<DecisionEvent>> {
 fn push_event(s: &mut SessionState, kind: DecisionKind) {
     if s.decision_log.len() == s.delivery_cursor && s.pending_base.is_none() {
         s.pending_base = Some(s.doc.clone());
+        s.queue_edit_error = None;
     }
     let seq = s.decision_log.len() as u64 + 1;
     s.decision_log.push(DecisionEvent {
@@ -982,6 +1014,7 @@ fn push_event(s: &mut SessionState, kind: DecisionKind) {
 fn push_undo(s: &mut SessionState, label: &str) {
     if s.decision_log.len() == s.delivery_cursor {
         s.pending_base = Some(s.doc.clone());
+        s.queue_edit_error = None;
     }
     s.undo.push(Snapshot {
         label: label.to_owned(),
@@ -993,6 +1026,34 @@ fn push_undo(s: &mut SessionState, label: &str) {
         s.undo.drain(..excess);
     }
     s.redo.clear();
+}
+
+fn blocked_change(event: DecisionEvent, reason: String) -> QueuedChange {
+    QueuedChange {
+        id: format!("blocked:{}", uuid::Uuid::new_v4()),
+        event,
+        blocked_reason: Some(reason),
+        interaction_error: None,
+    }
+}
+
+fn normalize_blocked_change_ids(s: &mut SessionState) {
+    for change in &mut s.blocked_changes {
+        if change.id.is_empty() {
+            change.id = format!("blocked:{}", uuid::Uuid::new_v4());
+        }
+        change.interaction_error = None;
+    }
+}
+
+fn invalidate_pending_replay(s: &mut SessionState) {
+    if s.decision_log.len() > s.delivery_cursor {
+        s.pending_base = None;
+        s.queue_edit_error = Some(
+            "Queued changes cannot be edited after an agent graph update; send them before making changes."
+                .into(),
+        );
+    }
 }
 
 fn queue_edit_target(event: &DecisionEvent) -> QueueEditTarget {
@@ -2008,6 +2069,102 @@ mod tests {
             .unwrap();
         assert_eq!(choice.status, ChoiceStatus::Open);
         assert_eq!(store.peek_undelivered().len(), 1);
+    }
+
+    #[test]
+    fn agent_update_marks_pending_changes_unavailable_for_replay() {
+        let store = demo_store();
+        pick_first_choice(&store);
+        store
+            .apply_update(vec![GraphOp::SetTitle {
+                title: "Agent title".into(),
+            }])
+            .unwrap();
+
+        let change = store.queued_changes().pop().unwrap();
+
+        assert!(
+            change
+                .interaction_error
+                .as_deref()
+                .is_some_and(|reason| reason.contains("agent graph update"))
+        );
+        assert!(matches!(
+            store.remove_queued_change(change.event.seq),
+            Err(StoreError::MissingQueuedBaseline)
+        ));
+        assert_eq!(store.snapshot_doc().title, "Agent title");
+    }
+
+    #[test]
+    fn legacy_pending_changes_explain_that_they_cannot_be_replayed() {
+        let store = Store::new(SessionState {
+            doc: demo_doc(),
+            decision_log: vec![DecisionEvent {
+                seq: 1,
+                at: Utc::now(),
+                kind: DecisionKind::FlushRequested {
+                    comment: Some("legacy queue".into()),
+                },
+            }],
+            ..SessionState::default()
+        });
+
+        let change = store.queued_changes().pop().unwrap();
+
+        assert!(
+            change
+                .interaction_error
+                .as_deref()
+                .is_some_and(|reason| reason.contains("saved before queue editing"))
+        );
+        assert!(matches!(
+            store.remove_queued_change(change.event.seq),
+            Err(StoreError::MissingQueuedBaseline)
+        ));
+    }
+
+    #[test]
+    fn blocked_changes_have_stable_unique_ids() {
+        let store = demo_store();
+        let first = store
+            .add_user_node("First".into(), NodeKind::Component, None)
+            .unwrap();
+        store
+            .edit_node(
+                &first,
+                "First edited".into(),
+                NodeKind::Component,
+                String::new(),
+            )
+            .unwrap();
+        store.remove_queued_change(1).unwrap();
+
+        let second = store
+            .add_user_node("Second".into(), NodeKind::Component, None)
+            .unwrap();
+        store
+            .edit_node(
+                &second,
+                "Second edited".into(),
+                NodeKind::Component,
+                String::new(),
+            )
+            .unwrap();
+        store.remove_queued_change(1).unwrap();
+
+        let blocked: Vec<_> = store
+            .queued_changes()
+            .into_iter()
+            .filter(|change| change.blocked_reason.is_some())
+            .collect();
+        assert_eq!(blocked.len(), 2);
+        assert_ne!(blocked[0].id, blocked[1].id);
+
+        store.remove_blocked_change(&blocked[1].id).unwrap();
+        let remaining = store.queued_changes();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, blocked[0].id);
     }
 
     #[test]
