@@ -43,20 +43,6 @@ $PrefsFile = Join-Path $env:TEMP "nodestorm-verify-prefs-$Port.json"
 
 . (Join-Path $PSScriptRoot 'uia-lib.ps1')
 
-# ---------- UIA helpers ----------
-
-# ---------- input + capture helpers ----------
-
-function Send-Key([IntPtr]$TopHwnd, [int]$VirtualKey) {
-    # WM_KEYDOWN/WM_KEYUP posted to the render widget — never the real
-    # keyboard, so a human typing elsewhere is unaffected.
-    $rw = Get-RenderWidget $TopHwnd
-    [void][NodestormVerify.Native]::PostMessageW($rw, 0x0100, [IntPtr]$VirtualKey, [IntPtr]::Zero)
-    Start-Sleep -Milliseconds 30
-    [void][NodestormVerify.Native]::PostMessageW($rw, 0x0101, [IntPtr]$VirtualKey, [IntPtr]::Zero)
-    Start-Sleep -Milliseconds 30
-}
-
 # ---------- run ----------
 
 New-Item -ItemType Directory -Force $OutDir | Out-Null

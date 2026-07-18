@@ -31,6 +31,8 @@ function Fail([string]$msg) {
     exit 1
 }
 
+# ---------- UIA helpers ----------
+
 $script:AppWindow = $null   # cached UIA element for the app's top-level window
 
 function Get-AppWindow([int]$ProcessId, [int]$TimeoutSec = 30) {
@@ -79,6 +81,8 @@ function Wait-ElementGone([string]$Name, [int]$TimeoutSec = 15) {
     }
     return $false
 }
+
+# ---------- input + capture helpers ----------
 
 function Get-RenderWidget([IntPtr]$TopHwnd) {
     # The WebView2 child window that receives mouse input.
@@ -134,6 +138,16 @@ function Click-Point([IntPtr]$TopHwnd, [double]$ScreenX, [double]$ScreenY) {
     Start-Sleep -Milliseconds 50
     [void][NodestormVerify.Native]::PostMessageW($rw, 0x0202, [IntPtr]::Zero, $lp)
     Log "clicked point (client $cx,$cy)"
+}
+
+function Send-Key([IntPtr]$TopHwnd, [int]$VirtualKey) {
+    # WM_KEYDOWN/WM_KEYUP posted to the render widget — never the real
+    # keyboard, so a human typing elsewhere is unaffected.
+    $rw = Get-RenderWidget $TopHwnd
+    [void][NodestormVerify.Native]::PostMessageW($rw, 0x0100, [IntPtr]$VirtualKey, [IntPtr]::Zero)
+    Start-Sleep -Milliseconds 30
+    [void][NodestormVerify.Native]::PostMessageW($rw, 0x0101, [IntPtr]$VirtualKey, [IntPtr]::Zero)
+    Start-Sleep -Milliseconds 30
 }
 
 function Type-Text([IntPtr]$TopHwnd, [string]$Text) {
