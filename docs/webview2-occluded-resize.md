@@ -62,6 +62,19 @@ lever — a ≥ +64 px *grow* — cannot restore the true size afterwards
 (shrink-back freezes, stranding the window oversized). Anything shippable
 would be a speculative activation-emulation hack.
 
+## Related: UIA BoundingRectangle corruption after keyboard zoom-reset
+
+Found during demo recording (2026-07-18), same
+WebView2-under-window-automation family: after posting the `0`
+(zoom-to-fit) key to the render widget, subsequent UIA
+`BoundingRectangle` queries for elements inside the WebView return
+corrupted rects until further interaction, even though the page renders
+and behaves correctly. Worked around in `scripts/record-demo.ps1` by
+ordering rect-dependent actions (context-menu clicks, element-targeted
+moves) before any keyboard zoom-reset — see the comments in
+`RightClick-Element` and `Invoke-Segment4`. Not yet minimally reproduced
+or reported upstream.
+
 ## E2E impact
 
 `scripts/verify-windows.ps1` performs multiple background resizes and hits

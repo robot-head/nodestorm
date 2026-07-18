@@ -13,9 +13,9 @@ Built in Rust with [Dioxus](https://dioxuslabs.com) (desktop WebView UI) and
 [rmcp](https://github.com/modelcontextprotocol/rust-sdk) (MCP over streamable
 HTTP).
 
-[![100-second tour of nodestorm](docs/demo/poster.png)](docs/demo/nodestorm-demo.mp4)
+[![80-second tour of nodestorm](docs/demo/poster.png)](docs/demo/nodestorm-demo.mp4)
 
-*Click for the full 100-second tour (MP4 + [subtitles](docs/demo/nodestorm-demo.srt)); GIF highlights are inline below.*
+*Click for the full 80-second tour (MP4 + [subtitles](docs/demo/nodestorm-demo.srt)); GIF highlights are inline below.*
 
 ## How it works
 

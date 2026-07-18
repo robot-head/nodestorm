@@ -143,6 +143,24 @@ architecture-beta
   rendered README before merge; fallback if GitHub's mermaid chokes:
   `flowchart LR` equivalent (same nodes/legend).
 
+## As-built deviations (recorded 2026-07-18)
+
+- **Segment 4 order:** collapse/expand runs FIRST, then search + Enter
+  zoom-cycle — reversed from the table above. Two discovered platform
+  issues forced it: the group pill's UIA name is ambiguous across the
+  three `sync` cards (collapse now goes via right-click → context menu on
+  the uniquely-named Sync Engine card), and posting the `0` zoom-reset key
+  corrupts subsequent UIA BoundingRectangle queries (see
+  docs/webview2-occluded-resize.md, "Related" section). The minimap
+  drag-pan action was dropped (the ⤢ fit / minimap overlap bug is
+  tracked separately); the minimap caption stands as a feature statement.
+- **Segment 2 captions:** replaced during review — picking the last open
+  choice autoflushes delivery, so the captions now narrate auto-delivery
+  then the notes-ride-along Send, instead of the original
+  send-then-react sequence.
+- **MP4 length:** 83.5 s as-built (the table's estimates summed to 100);
+  README says "80-second tour".
+
 ## Non-goals / out of scope
 
 - No committed ffmpeg binaries; no GIF/MP4 regeneration in CI; no changes
