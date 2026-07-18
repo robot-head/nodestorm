@@ -57,54 +57,62 @@ architecture-beta
 
 ![Exporting via the menu and viewing the activity receipt](docs/demo/06-export.gif)
 
-## Install
+## Install the plugin
 
-System packages (Debian/Ubuntu):
+Version 0.9.0 ships one canonical plugin with the MCP connection and shared
+skill for Claude Code, Codex, OpenCode, and Pi. Pin the package version or tag:
+
+```text
+# Claude Code, from its /plugin UI
+/plugin marketplace add robot-head/nodestorm
+/plugin install nodestorm@nodestorm
+```
+
+```sh
+# Codex
+codex plugin marketplace add robot-head/nodestorm --ref v0.9.0
+codex plugin add nodestorm@nodestorm
+
+# OpenCode
+opencode plugin nodestorm@0.9.0 --global
+
+# Pi
+pi install npm:nodestorm@0.9.0
+```
+
+Claude Code and Codex load the bundled remote MCP declaration. OpenCode merges
+the same endpoint without overwriting an existing `mcp.nodestorm` override.
+Pi exposes one `nodestorm` proxy tool that lazily forwards all eight logical
+tools. Every host uses a 600-second call ceiling and the one skill under
+`plugins/nodestorm/skills/nodestorm/`.
+
+Then ask the host to *"design X and use Nodestorm for the choices"*. If the
+native app is not reachable, the skill offers the pinned platform setup flow
+and asks before both installation and launch:
+
+- Windows installs only the certified Microsoft Store listing, by Product ID,
+  and launches its App Execution Alias. There is no direct Windows download.
+- Linux downloads the matching x64/arm64 v0.9.0 tarball, checks SHA-256 and
+  GitHub provenance, verifies GTK/WebKitGTK dependencies, and installs in the
+  user data directory without `sudo` or PATH changes.
+- macOS downloads the matching x64/arm64 v0.9.0 app, checks SHA-256,
+  Developer ID signing, and Gatekeeper, then installs under `~/Applications`.
+
+Setup aborts on a trust or version mismatch, unavailable Store listing,
+missing Linux libraries, port conflict, or MCP readiness timeout. Removing a
+host plugin leaves the shared native app and every local session intact.
+
+## Build the native app from source
+
+Source builds are for development, not a fallback used by plugin setup.
+Debian/Ubuntu development packages and a local build:
 
 ```sh
 sudo apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev libxdo-dev
+cargo run --release
 ```
 
-On Windows nothing extra is needed — the UI uses the WebView2 runtime that
-ships with Windows 10/11.
-
-Build and run:
-
-```sh
-cargo install --path .   # or: cargo run --release
-nodestorm                # opens the window, MCP server on 127.0.0.1:4747
-```
-
-## Connect Claude Code
-
-```sh
-claude mcp add --transport http nodestorm http://127.0.0.1:4747/mcp
-```
-
-or per-project via `.mcp.json` (the bigger `timeout` lets `await_decisions`
-block comfortably):
-
-```json
-{
-  "mcpServers": {
-    "nodestorm": {
-      "type": "http",
-      "url": "http://127.0.0.1:4747/mcp",
-      "timeout": 600000
-    }
-  }
-}
-```
-
-Then install the skill so brainstorming/plan flows drive the canvas well:
-
-```sh
-mkdir -p ~/.claude/skills
-cp -r skills/nodestorm ~/.claude/skills/
-```
-
-Ask Claude Code to *"design X and use nodestorm for the choices"* — or let
-the skill trigger on its own during brainstorming.
+The app opens the canvas and serves MCP at `127.0.0.1:4747`.
 
 ## Try it without an agent
 
@@ -251,6 +259,10 @@ re-opening a decided choice requires the agent to set `"reopen": true`.
 cargo test                        # model, layout, store races, MCP round-trip
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
+npm --prefix plugins/nodestorm ci --ignore-scripts
+node --test tests/*.mjs           # package, host adapters, installers, Pi proxy
+node scripts/validate-release.mjs # synchronized v0.9.0 package contracts
+node scripts/validate-npm-pack.mjs
 ```
 
 Headless GUI verification on Linux (no display server needed):

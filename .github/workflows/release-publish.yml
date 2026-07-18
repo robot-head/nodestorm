@@ -1,0 +1,84 @@
+name: Publish certified v0.9.0 release
+
+on:
+  workflow_dispatch:
+    inputs:
+      store_version:
+        description: Certified Microsoft Store version
+        required: true
+        default: 0.9.0.0
+      confirm:
+        description: Type publish-v0.9.0 after Store certification
+        required: true
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  verify-store:
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: v0.9.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Confirm dispatch and repository release gates
+        shell: pwsh
+        run: |
+          if ("${{ inputs.confirm }}" -ne "publish-v0.9.0") { throw "Explicit publish confirmation is missing." }
+          if ("${{ inputs.store_version }}" -ne "0.9.0.0") { throw "Certified Store version must be 0.9.0.0." }
+          node scripts/validate-release.mjs --release --tag v0.9.0
+      - name: Install and confirm the certified Store package
+        shell: pwsh
+        run: |
+          $identity = Get-Content packaging/windows/store-identity.json -Raw | ConvertFrom-Json
+          & winget.exe install --id $identity.productId --source msstore --exact --accept-source-agreements --accept-package-agreements
+          if ($LASTEXITCODE -ne 0) { throw "Microsoft Store listing is not live or installable." }
+          $package = Get-AppxPackage -Name $identity.identityName |
+            Where-Object {
+              $_.Name -eq $identity.identityName -and
+              $_.Publisher -eq $identity.publisher -and
+              $_.Version.ToString() -eq "${{ inputs.store_version }}"
+            } |
+            Select-Object -First 1
+          if (-not $package) { throw "Installed Store package identity, publisher, or version does not match certification." }
+          $package | Remove-AppxPackage
+
+  publish:
+    needs: verify-store
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: v0.9.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Configure Store-backed Windows setup
+        run: node scripts/configure-store.mjs packaging/windows/store-identity.json
+      - name: Publish the existing GitHub draft idempotently
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          IS_DRAFT=$(gh release view v0.9.0 --json isDraft --jq '.isDraft')
+          if [ "$IS_DRAFT" = "true" ]; then
+            gh release edit v0.9.0 --draft=false
+          elif [ "$IS_DRAFT" != "false" ]; then
+            exit 1
+          fi
+      - name: Revalidate package and publish through npm trusted publishing
+        working-directory: plugins/nodestorm
+        run: |
+          npm test
+          node ../../scripts/validate-npm-pack.mjs
+          PUBLISHED_VERSION=$(npm view nodestorm@0.9.0 version 2>/dev/null || true)
+          if [ "$PUBLISHED_VERSION" = "0.9.0" ]; then
+            PUBLISHED_REPOSITORY=$(npm view nodestorm@0.9.0 repository.url)
+            test "$PUBLISHED_REPOSITORY" = "git+https://github.com/robot-head/nodestorm.git"
+          else
+            npm publish --provenance --access public
+          fi

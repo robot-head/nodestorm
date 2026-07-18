@@ -73,7 +73,7 @@ async fn full_decision_roundtrip() {
         .await
         .expect("mcp handshake");
 
-    // Tool discovery: all six tools are advertised.
+    // Tool discovery: all eight tools are advertised.
     let tools = client.list_all_tools().await.expect("list tools");
     let names: Vec<_> = tools.iter().map(|t| t.name.as_ref()).collect();
     for expected in [
