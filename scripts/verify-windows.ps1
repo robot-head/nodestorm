@@ -455,6 +455,8 @@ try {
     Click-Element $hwnd 'Timeline'
 
     # Export via the menu: the record must include the user edits.
+    Click-Element $hwnd 'More'
+    if (-not (Wait-Element ('Export ' + [char]0x25BE) 5)) { Fail 'More menu did not open' }
     Click-Element $hwnd ('Export ' + [char]0x25BE)
     if (-not (Wait-Element 'Copy Markdown' 5)) { Fail 'export menu did not open' }
     Click-Element $hwnd 'Export'
@@ -472,6 +474,8 @@ try {
 
     # Open the picker; a non-active family row's UIA name is its plain
     # display name (the active row flattens to "<Name> ✓").
+    Click-Element $hwnd 'More'
+    if (-not (Wait-Element ('Theme ' + [char]0x25BE) 5)) { Fail 'More menu did not open' }
     Click-Element $hwnd ('Theme ' + [char]0x25BE)
     if (-not (Wait-Element 'Gruvbox' 5)) { Fail 'theme menu did not open' }
     # Mode clicks keep the menu open; family clicks close it.

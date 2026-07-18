@@ -1,44 +1,12 @@
 //! Top bar: session title, agent status pill, Export, and the Send-to-agent
 //! control.
 
-use std::sync::Arc;
-
 use dioxus::prelude::*;
 
-use crate::cli::Cli;
 use crate::model::{NodeId, NodeKind, SessionDoc};
-use crate::store::{Store, UiMeta};
+use crate::store::UiMeta;
 
 use super::app::use_store;
-use super::theme_menu::ThemeMenu;
-
-/// Render the full decision record from current store state.
-fn render_markdown_now(store: &Arc<Store>) -> String {
-    store.read(|s| crate::export::render_markdown(&s.doc, &s.decision_log, chrono::Utc::now()))
-}
-
-/// Activity-feed receipt for an export outcome.
-fn report_export(store: &Arc<Store>, outcome: anyhow::Result<std::path::PathBuf>) {
-    match outcome {
-        Ok(path) => store.record_export(&path),
-        Err(err) => {
-            tracing::warn!(%err, "export failed");
-            store.record_export_failed(&err.to_string());
-        }
-    }
-}
-
-/// Clipboard write via the WebView's `navigator.clipboard` (no native
-/// clipboard dependency); the receipt lands in the activity feed.
-fn copy_to_clipboard(store: &Arc<Store>, text: String, receipt: &str) {
-    match serde_json::to_string(&text) {
-        Ok(js) => {
-            document::eval(&format!("navigator.clipboard.writeText({js});"));
-            store.record_user_action(receipt.to_owned());
-        }
-        Err(err) => tracing::warn!(%err, "clipboard serialization failed"),
-    }
-}
 
 #[component]
 pub fn TopBar(
@@ -49,7 +17,6 @@ pub fn TopBar(
     timeline_open: Signal<bool>,
 ) -> Element {
     let store = use_store();
-    let cli = use_context::<Cli>();
     let sessions = use_context::<std::sync::Arc<crate::sessions::Sessions>>();
     let mut comment = use_signal(String::new);
     let mut sessions_open = use_signal(|| false);
@@ -67,7 +34,6 @@ pub fn TopBar(
         d.title.clone()
     };
     let can_send = m.undelivered > 0 || m.waiting_agents > 0;
-    let mut export_open = use_signal(|| false);
     let suggested_name = {
         let slug = if d.title.is_empty() {
             "brainstorm".to_owned()
@@ -385,124 +351,7 @@ pub fn TopBar(
                 span { class: "pod-glyph", "+" }
                 span { class: "pod-label", "node" }
             }
-            div { class: "export-menu",
-                button {
-                    class: "btn",
-                    disabled: !has_nodes,
-                    title: "Export the brainstorm as a decision record",
-                    onclick: move |_| export_open.toggle(),
-                    "Export ▾"
-                }
-                if export_open() {
-                    div {
-                        class: "menu-catcher",
-                        onclick: move |_| export_open.set(false),
-                    }
-                    div { class: "export-dropdown",
-                        button {
-                            title: "Write the Markdown record next to the session file",
-                            onclick: {
-                                let store = store.clone();
-                                let cli = cli.clone();
-                                move |_| {
-                                    export_open.set(false);
-                                    let outcome = cli.session_path().and_then(|session| {
-                                        let path = crate::persist::export_path(&session);
-                                        crate::persist::save_export(
-                                            &path,
-                                            &render_markdown_now(&store),
-                                        )?;
-                                        Ok(path)
-                                    });
-                                    report_export(&store, outcome);
-                                }
-                            },
-                            "Export"
-                        }
-                        button {
-                            title: "Pick where the Markdown record is saved",
-                            onclick: {
-                                let store = store.clone();
-                                let suggested = suggested_name.clone();
-                                move |_| {
-                                    export_open.set(false);
-                                    let Some(path) = rfd::FileDialog::new()
-                                        .set_file_name(&suggested)
-                                        .save_file()
-                                    else {
-                                        return;
-                                    };
-                                    let outcome = crate::persist::save_export(
-                                        &path,
-                                        &render_markdown_now(&store),
-                                    )
-                                    .map(|()| path);
-                                    report_export(&store, outcome);
-                                }
-                            },
-                            "Export As…"
-                        }
-                        button {
-                            title: "Copy the Markdown record to the clipboard",
-                            onclick: {
-                                let store = store.clone();
-                                move |_| {
-                                    export_open.set(false);
-                                    copy_to_clipboard(
-                                        &store,
-                                        render_markdown_now(&store),
-                                        "copied the decision record to the clipboard",
-                                    );
-                                }
-                            },
-                            "Copy Markdown"
-                        }
-                        button {
-                            title: "Copy just the Mermaid diagram to the clipboard",
-                            onclick: {
-                                let store = store.clone();
-                                move |_| {
-                                    export_open.set(false);
-                                    let text = format!(
-                                        "```mermaid\n{}```\n",
-                                        store.read(|s| crate::export::render_mermaid(&s.doc)),
-                                    );
-                                    copy_to_clipboard(
-                                        &store,
-                                        text,
-                                        "copied the Mermaid diagram to the clipboard",
-                                    );
-                                }
-                            },
-                            "Copy Mermaid"
-                        }
-                        button {
-                            title: "Write just the Mermaid diagram next to the session file",
-                            onclick: {
-                                let store = store.clone();
-                                let cli = cli.clone();
-                                move |_| {
-                                    export_open.set(false);
-                                    let outcome = cli.session_path().and_then(|session| {
-                                        let path =
-                                            crate::persist::mermaid_export_path(&session);
-                                        let body = store
-                                            .read(|s| crate::export::render_mermaid(&s.doc));
-                                        crate::persist::save_export(
-                                            &path,
-                                            &format!("```mermaid\n{body}```\n"),
-                                        )?;
-                                        Ok(path)
-                                    });
-                                    report_export(&store, outcome);
-                                }
-                            },
-                            "Export Mermaid only"
-                        }
-                    }
-                }
-            }
-            ThemeMenu {}
+            super::more_menu::MoreMenu { has_nodes, suggested_name: suggested_name.clone() }
             input {
                 class: "send-comment",
                 placeholder: "optional message to the agent…",

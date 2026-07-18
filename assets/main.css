@@ -696,6 +696,26 @@ body {
   right: auto;
 }
 
+.more-dropdown {
+  min-width: 230px;
+}
+
+.more-dropdown .accordion-head {
+  font-weight: 500;
+}
+
+.accordion-body {
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  margin: 4px 0;
+  padding: 4px 0 4px 8px;
+}
+
+.more-dropdown .row-undo,
+.more-dropdown .row-redo {
+  display: none;
+}
+
 .session-row {
   display: flex;
   align-items: center;
