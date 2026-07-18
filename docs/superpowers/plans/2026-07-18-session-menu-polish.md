@@ -206,4 +206,3 @@ Expected: checks exit 0. At desktop and 520px widths, verify the initial menu ha
 git add assets/main.css src/theme.rs
 git commit -m "style(ui): polish session management menu"
 ```
-
