@@ -82,9 +82,12 @@ jobs:
           bash plugins/nodestorm/skills/nodestorm/scripts/setup.sh --dry-run --os linux --arch "${{ matrix.arch }}"
       - name: Package pinned artifact
         run: |
-          mkdir -p dist
+          mkdir -p dist/icons/{128x128,256x256,512x512}
           cp target/release/nodestorm dist/nodestorm
-          tar -C dist -czf "nodestorm-v${VERSION}-linux-${{ matrix.arch }}.tar.gz" nodestorm
+          cp assets/icons/nodestorm-128.png dist/icons/128x128/nodestorm.png
+          cp assets/icons/nodestorm-256.png dist/icons/256x256/nodestorm.png
+          cp assets/icons/nodestorm-512.png dist/icons/512x512/nodestorm.png
+          tar -C dist -czf "nodestorm-v${VERSION}-linux-${{ matrix.arch }}.tar.gz" nodestorm icons
       - uses: actions/attest-build-provenance@v3
         with:
           subject-path: nodestorm-v${{ env.VERSION }}-linux-${{ matrix.arch }}.tar.gz

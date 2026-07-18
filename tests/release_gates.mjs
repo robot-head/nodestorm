@@ -101,3 +101,21 @@ test("macOS app bundle packages the redesigned icon", async () => {
   assert.notEqual(firstCodesign, -1);
   assert.ok(iconGeneration < iconCheck && iconCheck < firstCodesign, "macOS icon must be generated and checked before codesign");
 });
+
+test("Linux release packages and installs launcher artwork", async () => {
+  const workflow = await readFile(path.join(root, ".github", "workflows", "release-build.yml"), "utf8");
+  const linuxWorkflow = workflow.slice(workflow.indexOf("\n  linux:"), workflow.indexOf("\n  macos:"));
+  const script = await readFile(path.join(scripts, "setup.sh"), "utf8");
+
+  assert.match(linuxWorkflow, /mkdir -p dist\/icons\/\{128x128,256x256,512x512\}/);
+  for (const size of [128, 256, 512]) {
+    assert.ok(
+      linuxWorkflow.includes(`cp assets/icons/nodestorm-${size}.png dist/icons/${size}x${size}/nodestorm.png`),
+      `missing Linux ${size}px icon mapping`,
+    );
+  }
+  assert.match(linuxWorkflow, /tar -C dist .* nodestorm icons/);
+  assert.match(script, /for size in 128 256 512/);
+  assert.match(script, /icons\/hicolor\/\$\{size\}x\$\{size\}\/apps/);
+  assert.match(script, /Icon=nodestorm/);
+});

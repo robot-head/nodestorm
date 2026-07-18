@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { access, copyFile, readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
@@ -72,14 +72,19 @@ async function linuxFailureFixture({ checksumValid = true, ghExit = 0, missingLi
   await mkdir(bin);
   const binary = path.join(staging, "nodestorm");
   await executable(binary, '#!/bin/bash\nif [[ "${1:-}" == "--version" ]]; then echo "nodestorm 0.9.0"; fi\n');
+  for (const size of [128, 256, 512]) {
+    const iconDir = path.join(staging, "icons", `${size}x${size}`);
+    await mkdir(iconDir, { recursive: true });
+    await copyFile(path.join(root, "assets", "icons", `nodestorm-${size}.png`), path.join(iconDir, "nodestorm.png"));
+  }
   const asset = "nodestorm-v0.9.0-linux-x64.tar.gz";
-  const tar = spawnSync("tar", ["-C", staging, "-czf", path.join(release, asset), "nodestorm"], { encoding: "utf8" });
+  const tar = spawnSync("tar", ["-C", staging, "-czf", path.join(release, asset), "nodestorm", "icons"], { encoding: "utf8" });
   assert.equal(tar.status, 0, tar.stderr);
   const archive = await readFile(path.join(release, asset));
   const digest = checksumValid ? createHash("sha256").update(archive).digest("hex") : "0".repeat(64);
   await writeFile(path.join(release, "SHA256SUMS"), `${digest}  ${asset}\n`);
 
-  await linkCommands(bin, ["dirname", "tr", "curl", "sha256sum", "tar", "gzip", "mktemp", "rm", "mkdir", "install", "grep", "sleep"]);
+  await linkCommands(bin, ["dirname", "tr", "curl", "sha256sum", "tar", "gzip", "mktemp", "rm", "mkdir", "install", "chmod", "grep", "sleep"]);
   await executable(path.join(bin, "gh"), `#!/bin/bash\nexit ${ghExit}\n`);
   await executable(
     path.join(bin, "ldd"),
@@ -101,6 +106,21 @@ async function linuxFailureFixture({ checksumValid = true, ghExit = 0, missingLi
     },
   };
 }
+
+test("Linux setup installs launcher and hicolor icons", async () => {
+  const fixture = await linuxFailureFixture();
+  const result = spawnSync(
+    "/bin/bash",
+    [path.join(scripts, "setup.sh"), "--os", "linux", "--arch", "x64", "--approve-install", "--skip-launch"],
+    { env: fixture.env, encoding: "utf8" },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const data = fixture.env.XDG_DATA_HOME;
+  assert.equal(await readFile(path.join(data, "applications", "nodestorm.desktop"), "utf8").then((s) => s.includes("Icon=nodestorm")), true);
+  for (const size of [128, 256, 512]) {
+    await access(path.join(data, "icons", "hicolor", `${size}x${size}`, "apps", "nodestorm.png"));
+  }
+});
 
 function runLinuxFixture(env) {
   return spawnSync(
