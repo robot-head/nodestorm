@@ -13,6 +13,7 @@ $ErrorActionPreference = "Stop"
 New-Item -ItemType Directory -Force $Layout | Out-Null
 New-Item -ItemType Directory -Force (Join-Path $Layout "Assets") | Out-Null
 Copy-Item $Binary (Join-Path $Layout "nodestorm.exe")
+Copy-Item (Join-Path $PSScriptRoot "../../assets/nodestorm-mark.svg") (Join-Path $Layout "Assets/nodestorm-mark.svg")
 & (Join-Path $PSScriptRoot "generate-manifest.ps1") -Architecture $Architecture -OutputPath (Join-Path $Layout "AppxManifest.xml")
 
 Add-Type -AssemblyName System.Drawing

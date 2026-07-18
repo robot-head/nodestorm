@@ -180,8 +180,15 @@ mod tests {
 
     #[test]
     fn topbar_uses_the_shared_graph_bolt_mark() {
-        assert!(TOPBAR_SOURCE.contains("topbar-mark"));
-        assert!(!TOPBAR_SOURCE.contains("\"ϟ\""));
+        let brand = TOPBAR_SOURCE
+            .split_once("span { class: \"topbar-brand\"")
+            .expect("topbar brand")
+            .1
+            .split_once("div { class: \"export-menu\"")
+            .expect("topbar export menu")
+            .0;
+        assert!(brand.contains("topbar-mark"));
+        assert!(!brand.contains("\"ϟ\""));
         assert!(APP_ICON_SVG.contains("viewBox=\"0 0 256 256\""));
         assert!(APP_ICON_SVG.contains("id=\"bolt-cutout\""));
         assert_block_contains(

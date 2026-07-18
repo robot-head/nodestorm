@@ -509,7 +509,7 @@ pub fn TopBar(
                         comment.set(String::new());
                     }
                 },
-                span { class: "send-bolt", "\u{03df}" }
+                span { class: "send-bolt", "ϟ" }
                 "Send"
             }
         }
