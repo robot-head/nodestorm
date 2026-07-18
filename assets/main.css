@@ -1416,7 +1416,7 @@ button.empty-cmd code {
    section and the registry in lock-step. Selectors are bare attributes (not
    :root-scoped) so a picker row can re-scope a family locally for swatches. */
 @supports (color: light-dark(#000, #fff)) {
-  [data-theme="nodestorm"] { /* light side derived for v0.7 */
+  [data-theme="nodestorm"] { /* Nodestorm product palette */
     --bg: light-dark(#f2f4fa, #0f1117);
     --bg-panel: light-dark(#fafbfe, #171a23);
     --bg-card: light-dark(#ffffff, #1c2030);
@@ -1440,12 +1440,12 @@ button.empty-cmd code {
   }
 
   [data-theme="solarized"] { /* accents are single-valued by design */
-    --bg: light-dark(#eee8d5, #002b36);
-    --bg-panel: light-dark(#f5efdc, #04313c);
+    --bg: light-dark(#fdf6e3, #002b36);
+    --bg-panel: light-dark(#eee8d5, #073642);
     --bg-card: light-dark(#fdf6e3, #073642);
-    --bg-card-hover: light-dark(#f6eed6, #0a4552);
-    --border: light-dark(#d9d2bc, #17505f);
-    --text: light-dark(#586e75, #93a1a1);
+    --bg-card-hover: light-dark(#eee8d5, #002b36);
+    --border: light-dark(#93a1a1, #586e75);
+    --text: light-dark(#657b83, #839496);
     --text-dim: light-dark(#93a1a1, #657b83);
     --accent: #268bd2;
     --status-existing: light-dark(#93a1a1, #586e75);
@@ -1459,14 +1459,14 @@ button.empty-cmd code {
     --on-accent: #fdf6e3;
     --on-badge: light-dark(#fdf6e3, #002b36);
     --shadow: light-dark(#586e7559, #000000);
-    --dot-grid: light-dark(#e0d9c3, #0b3944);
+    --dot-grid: light-dark(#eee8d5, #073642);
   }
 
   [data-theme="gruvbox"] {
-    --bg: light-dark(#f2e5bc, #282828);
-    --bg-panel: light-dark(#f9efc9, #32302f);
-    --bg-card: light-dark(#fbf1c7, #3c3836);
-    --bg-card-hover: light-dark(#f0e2ae, #46413d);
+    --bg: light-dark(#fbf1c7, #282828);
+    --bg-panel: light-dark(#f2e5bc, #1d2021);
+    --bg-card: light-dark(#f9f5d7, #32302f);
+    --bg-card-hover: light-dark(#ebdbb2, #3c3836);
     --border: light-dark(#d5c4a1, #504945);
     --text: light-dark(#3c3836, #ebdbb2);
     --text-dim: light-dark(#7c6f64, #a89984);
@@ -1482,14 +1482,14 @@ button.empty-cmd code {
     --on-accent: light-dark(#fbf1c7, #282828);
     --on-badge: light-dark(#fbf1c7, #282828);
     --shadow: light-dark(#3c383659, #000000);
-    --dot-grid: light-dark(#e3d5a8, #333030);
+    --dot-grid: light-dark(#d5c4a1, #32302f);
   }
 
   [data-theme="catppuccin"] { /* Mocha / Latte */
-    --bg: light-dark(#e6e9ef, #1e1e2e);
-    --bg-panel: light-dark(#eff1f5, #181825);
-    --bg-card: light-dark(#eff1f5, #313244);
-    --bg-card-hover: light-dark(#dce0e8, #45475a);
+    --bg: light-dark(#eff1f5, #1e1e2e);
+    --bg-panel: light-dark(#e6e9ef, #181825);
+    --bg-card: light-dark(#e6e9ef, #313244);
+    --bg-card-hover: light-dark(#ccd0da, #45475a);
     --border: light-dark(#bcc0cc, #585b70);
     --text: light-dark(#4c4f69, #cdd6f4);
     --text-dim: light-dark(#6c6f85, #a6adc8);
@@ -1505,33 +1505,33 @@ button.empty-cmd code {
     --on-accent: light-dark(#ffffff, #11111b);
     --on-badge: light-dark(#ffffff, #11111b);
     --shadow: light-dark(#4c4f6959, #000000);
-    --dot-grid: light-dark(#d4d8e2, #292a3d);
+    --dot-grid: light-dark(#dce0e8, #181825);
   }
 
-  [data-theme="nord"] { /* light = Snow Storm; light aurora derived */
-    --bg: light-dark(#e5e9f0, #2e3440);
-    --bg-panel: light-dark(#eceff4, #353c4a);
-    --bg-card: light-dark(#f7f9fb, #3b4252);
-    --bg-card-hover: light-dark(#dfe4ec, #434c5e);
-    --border: light-dark(#c2cad8, #4c566a);
-    --text: light-dark(#2e3440, #e5e9f0);
-    --text-dim: light-dark(#4c566a, #9aa4bb);
+  [data-theme="nord"] { /* Snow Storm / Polar Night */
+    --bg: light-dark(#eceff4, #2e3440);
+    --bg-panel: light-dark(#e5e9f0, #3b4252);
+    --bg-card: light-dark(#d8dee9, #434c5e);
+    --bg-card-hover: light-dark(#d8dee9, #4c566a);
+    --border: light-dark(#4c566a, #4c566a);
+    --text: light-dark(#2e3440, #eceff4);
+    --text-dim: light-dark(#4c566a, #d8dee9);
     --accent: light-dark(#5e81ac, #88c0d0);
-    --status-existing: light-dark(#7b88a1, #616e88);
+    --status-existing: light-dark(#4c566a, #d8dee9);
     --status-proposed: light-dark(#5e81ac, #88c0d0);
-    --status-modified: light-dark(#ac7d2a, #ebcb8b);
-    --status-affected: light-dark(#8d6a87, #b48ead);
-    --status-removed: light-dark(#a04d55, #bf616a);
-    --badge-open: light-dark(#ac7d2a, #ebcb8b);
-    --badge-decided: light-dark(#7d9665, #a3be8c);
-    --badge-notes: light-dark(#4c566a, #9aa4bb);
+    --status-modified: light-dark(#d08770, #ebcb8b);
+    --status-affected: light-dark(#5e81ac, #b48ead);
+    --status-removed: light-dark(#bf616a, #bf616a);
+    --badge-open: light-dark(#d08770, #ebcb8b);
+    --badge-decided: light-dark(#a3be8c, #a3be8c);
+    --badge-notes: light-dark(#4c566a, #d8dee9);
     --on-accent: light-dark(#eceff4, #2e3440);
     --on-badge: light-dark(#eceff4, #2e3440);
     --shadow: light-dark(#2e344059, #000000);
-    --dot-grid: light-dark(#d8dee9, #353b48);
+    --dot-grid: light-dark(#d8dee9, #3b4252);
   }
 
-  [data-theme="dracula"] { /* light = Alucard-inspired */
+  [data-theme="dracula"] { /* Alucard Light / Dracula */
     --bg: light-dark(#fffbeb, #282a36);
     --bg-panel: light-dark(#f7f3e1, #21222c);
     --bg-card: light-dark(#ffffff, #313342);
@@ -1623,14 +1623,14 @@ button.empty-cmd code {
     --dot-grid: light-dark(#e7ebf0, #161c24);
   }
 
-  [data-theme="everforest"] { /* medium contrast */
-    --bg: light-dark(#f4f0d9, #2d353b);
-    --bg-panel: light-dark(#faf5e2, #232a2e);
-    --bg-card: light-dark(#fdf6e3, #343f44);
-    --bg-card-hover: light-dark(#efebd4, #3d484d);
-    --border: light-dark(#ddd8c0, #475258);
+  [data-theme="everforest"] { /* Light / Medium */
+    --bg: light-dark(#fdf6e3, #2d353b);
+    --bg-panel: light-dark(#f4f0d9, #232a2e);
+    --bg-card: light-dark(#efebd4, #343f44);
+    --bg-card-hover: light-dark(#e6e2cc, #3d484d);
+    --border: light-dark(#bdc3af, #475258);
     --text: light-dark(#5c6a72, #d3c6aa);
-    --text-dim: light-dark(#829181, #9da9a0);
+    --text-dim: light-dark(#829181, #859289);
     --accent: light-dark(#3a94c5, #7fbbb3);
     --status-existing: light-dark(#939f91, #859289);
     --status-proposed: light-dark(#3a94c5, #7fbbb3);
@@ -1639,20 +1639,20 @@ button.empty-cmd code {
     --status-removed: light-dark(#f85552, #e67e80);
     --badge-open: light-dark(#dfa000, #dbbc7f);
     --badge-decided: light-dark(#8da101, #a7c080);
-    --badge-notes: light-dark(#829181, #9da9a0);
+    --badge-notes: light-dark(#829181, #859289);
     --on-accent: light-dark(#fdf6e3, #2d353b);
     --on-badge: light-dark(#fdf6e3, #2d353b);
-    --shadow: light-dark(#5c6a7259, #000000);
-    --dot-grid: light-dark(#e6e2cc, #333c42);
+    --shadow: light-dark(#5c6a7259, #232a2e);
+    --dot-grid: light-dark(#e6e2cc, #343f44);
   }
 
-  [data-theme="rose-pine"] { /* Main / Dawn; dark decided borrows Moon pine */
-    --bg: light-dark(#f2e9e1, #191724);
-    --bg-panel: light-dark(#faf4ed, #1f1d2e);
+  [data-theme="rose-pine"] { /* Dawn / Main */
+    --bg: light-dark(#faf4ed, #191724);
+    --bg-panel: light-dark(#f8f0e7, #1f1d2e);
     --bg-card: light-dark(#fffaf3, #26233a);
-    --bg-card-hover: light-dark(#f3eadf, #403d52);
+    --bg-card-hover: light-dark(#f4ede8, #403d52);
     --border: light-dark(#cecacd, #524f67);
-    --text: light-dark(#575279, #e0def4);
+    --text: light-dark(#464261, #e0def4);
     --text-dim: light-dark(#797593, #908caa);
     --accent: light-dark(#56949f, #9ccfd8);
     --status-existing: light-dark(#9893a5, #6e6a86);
@@ -1661,15 +1661,15 @@ button.empty-cmd code {
     --status-affected: light-dark(#907aa9, #c4a7e7);
     --status-removed: light-dark(#b4637a, #eb6f92);
     --badge-open: light-dark(#ea9d34, #f6c177);
-    --badge-decided: light-dark(#286983, #3e8fb0);
+    --badge-decided: light-dark(#6d8f89, #95b1ac);
     --badge-notes: light-dark(#797593, #908caa);
     --on-accent: light-dark(#fffaf3, #191724);
     --on-badge: light-dark(#fffaf3, #191724);
-    --shadow: light-dark(#57527959, #000000);
-    --dot-grid: light-dark(#e4dcd2, #211f31);
+    --shadow: light-dark(#46426159, #191724);
+    --dot-grid: light-dark(#f4ede8, #1f1d2e);
   }
 
-  [data-theme="monokai"] { /* light derived */
+  [data-theme="monokai"] { /* Monokai Light / Classic Monokai */
     --bg: light-dark(#fafaf4, #272822);
     --bg-panel: light-dark(#f2f2ea, #1e1f1c);
     --bg-card: light-dark(#ffffff, #31322a);

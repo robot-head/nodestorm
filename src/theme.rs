@@ -240,6 +240,37 @@ mod tests {
     }
 
     #[test]
+    fn canonical_palette_anchors_remain_stable() {
+        let anchors = [
+            ("nodestorm", "--accent: light-dark(#3d6fe0, #6c9ef8);"),
+            ("solarized", "--bg: light-dark(#fdf6e3, #002b36);"),
+            ("gruvbox", "--bg: light-dark(#fbf1c7, #282828);"),
+            ("catppuccin", "--bg: light-dark(#eff1f5, #1e1e2e);"),
+            ("nord", "--bg: light-dark(#eceff4, #2e3440);"),
+            ("dracula", "--accent: light-dark(#644ac9, #bd93f9);"),
+            ("tokyo-night", "--bg: light-dark(#e1e2e7, #1a1b26);"),
+            ("one", "--bg: light-dark(#fafafa, #282c34);"),
+            ("github", "--bg: light-dark(#f6f8fa, #0d1117);"),
+            ("everforest", "--bg: light-dark(#fdf6e3, #2d353b);"),
+            ("rose-pine", "--bg: light-dark(#faf4ed, #191724);"),
+            ("monokai", "--bg: light-dark(#fafaf4, #272822);"),
+            (
+                "solarized",
+                "--bg-card-hover: light-dark(#eee8d5, #002b36);",
+            ),
+            ("nord", "--status-existing: light-dark(#4c566a, #d8dee9);"),
+            ("nord", "--shadow: light-dark(#2e344059, #000000);"),
+        ];
+
+        for (id, declaration) in anchors {
+            assert!(
+                block_for(&format!("[data-theme=\"{id}\"]")).contains(declaration),
+                "family {id} lost its canonical palette anchor"
+            );
+        }
+    }
+
+    #[test]
     fn no_orphan_theme_blocks_in_css() {
         for (i, _) in CSS.match_indices("[data-theme=\"") {
             let rest = &CSS[i + "[data-theme=\"".len()..];
