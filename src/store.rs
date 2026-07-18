@@ -849,6 +849,7 @@ impl Store {
             }
             s.decision_log.extend(replayed_tail);
             s.pending_base = (!s.decision_log[s.delivery_cursor..].is_empty()).then_some(base);
+            s.flush_seq = s.delivered_flush_seq;
             clear_undo(s);
             push_activity(
                 s,
@@ -2023,6 +2024,45 @@ mod tests {
 
         assert_eq!(delivered.len(), 1);
         assert!(matches!(delivered[0].kind, DecisionKind::NoteAdded { .. }));
+    }
+
+    #[test]
+    fn removing_after_autoflush_cancels_delivery_until_a_new_send() {
+        let store = demo_store();
+        pick_first_choice(&store);
+        store
+            .dismiss_choice(
+                &NodeId::from("ws-gateway"),
+                &ChoiceId::from("ws-deployment"),
+                None,
+            )
+            .unwrap(); // last open choice → autoflush
+
+        store.remove_queued_change(1).unwrap();
+
+        assert!(store.try_deliver().is_none(), "removal cancels autoflush");
+        store.request_flush(None);
+        let delivered = store.try_deliver().expect("fresh send delivers");
+        assert_eq!(delivered.len(), 1);
+        assert!(matches!(
+            delivered[0].kind,
+            DecisionKind::ChoiceDismissed { .. }
+        ));
+    }
+
+    #[test]
+    fn removing_a_queued_comment_cancels_delivery_until_a_new_send() {
+        let store = demo_store();
+        store.request_flush(Some("hold for review".into()));
+
+        store.remove_queued_change(1).unwrap();
+
+        assert!(
+            store.try_deliver().is_none(),
+            "removal cancels the comment send"
+        );
+        store.request_flush(None);
+        assert_eq!(store.try_deliver(), Some(vec![]));
     }
 
     #[test]

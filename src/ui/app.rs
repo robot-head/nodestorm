@@ -37,6 +37,10 @@ pub fn App() -> Element {
     use_context_provider(|| super::ZoomTarget(Signal::new(None)));
     let mut search = use_context_provider(|| super::SearchQuery(Signal::new(String::new()))).0;
     let mut compare_with = use_context_provider(|| super::CompareWith(Signal::new(None))).0;
+    use_context_provider(|| super::MessageComposer {
+        comment: Signal::new(String::new()),
+        open: Signal::new(false),
+    });
 
     // Theme preference: seeded from the file loaded in launch(); the CSS
     // reacts through data-theme/data-mode below, the native title bar

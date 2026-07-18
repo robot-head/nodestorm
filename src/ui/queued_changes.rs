@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 
-use crate::model::{NodeId, SessionDoc};
+use crate::model::{DecisionKind, Node, NodeId, SessionDoc};
 use crate::store::{QueuedChange, UiMeta};
 
 use super::app::use_store;
@@ -15,6 +15,22 @@ fn queued_change_label(doc: &SessionDoc, change: &QueuedChange) -> String {
         })
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum QueueEditReplacement {
+    Node(Node),
+    Comment(String),
+}
+
+fn queued_edit_replacement(change: &QueuedChange) -> Option<QueueEditReplacement> {
+    match &change.event.kind {
+        DecisionKind::NodeAdded { node } => Some(QueueEditReplacement::Node(node.clone())),
+        DecisionKind::FlushRequested {
+            comment: Some(comment),
+        } => Some(QueueEditReplacement::Comment(comment.clone())),
+        _ => None,
+    }
+}
+
 #[component]
 pub fn QueuedChangesPanel(
     doc: Signal<SessionDoc>,
@@ -26,6 +42,7 @@ pub fn QueuedChangesPanel(
     // entries, so the rows remain live while this panel is open.
     let _ = meta.read();
     let store = use_store();
+    let composer = use_context::<super::MessageComposer>();
     let d = doc.read();
     let changes = store.queued_changes();
 
@@ -50,6 +67,7 @@ pub fn QueuedChangesPanel(
                     let row_class = if blocked { "queue-row queue-blocked" } else { "queue-row" };
                     let at = change.event.at.format("%H:%M").to_string();
                     let label = queued_change_label(&d, &change);
+                    let replacement = queued_edit_replacement(&change);
                     let store = store.clone();
                     let on_close = on_close.clone();
                     rsx! {
@@ -64,6 +82,9 @@ pub fn QueuedChangesPanel(
                                         let store = store.clone();
                                         let mut selected = selected;
                                         let on_close = on_close.clone();
+                                        let mut composer_comment = composer.comment;
+                                        let mut composer_open = composer.open;
+                                        let replacement = replacement.clone();
                                         move |_| {
                                             let target = if blocked {
                                                 store.remove_blocked_change(seq)
@@ -72,7 +93,36 @@ pub fn QueuedChangesPanel(
                                             };
                                             match target {
                                                 Ok(target) => {
-                                                    selected.set(target.node_id);
+                                                    match replacement.clone() {
+                                                        Some(QueueEditReplacement::Node(node)) => {
+                                                            let label = node.label.clone();
+                                                            match store.add_user_node(
+                                                                label.clone(),
+                                                                node.kind,
+                                                                node.position,
+                                                            ) {
+                                                                Ok(id) => {
+                                                                    if !node.description.is_empty()
+                                                                        && let Err(err) = store.edit_node(
+                                                                            &id,
+                                                                            label,
+                                                                            node.kind,
+                                                                            node.description,
+                                                                        )
+                                                                    {
+                                                                        tracing::warn!(%err, "restore queued node details failed");
+                                                                    }
+                                                                    selected.set(Some(id));
+                                                                }
+                                                                Err(err) => tracing::warn!(%err, "restore queued node failed"),
+                                                            }
+                                                        }
+                                                        Some(QueueEditReplacement::Comment(comment)) => {
+                                                            composer_comment.set(comment);
+                                                            composer_open.set(true);
+                                                        }
+                                                        None => selected.set(target.node_id),
+                                                    }
                                                     on_close.call(());
                                                 }
                                                 Err(err) => tracing::warn!(%err, "edit queued change failed"),
@@ -112,10 +162,12 @@ pub fn QueuedChangesPanel(
 mod tests {
     use chrono::Utc;
 
-    use crate::model::{DecisionEvent, DecisionKind, NodeId, NodeKind, SessionDoc};
+    use crate::model::{
+        DecisionEvent, DecisionKind, ElementStatus, Node, NodeId, NodeKind, Origin, SessionDoc,
+    };
     use crate::store::QueuedChange;
 
-    use super::queued_change_label;
+    use super::{QueueEditReplacement, queued_change_label, queued_edit_replacement};
 
     #[test]
     fn blocked_changes_explain_why_they_will_not_send() {
@@ -137,6 +189,51 @@ mod tests {
         assert_eq!(
             queued_change_label(&doc, &change),
             "edited “Widget” — blocked: node widget no longer exists"
+        );
+    }
+
+    #[test]
+    fn editing_special_queued_events_chooses_a_replacement_surface() {
+        let node = Node {
+            id: NodeId::from("widget"),
+            label: "Widget".into(),
+            kind: NodeKind::Component,
+            description: "needs tuning".into(),
+            status: ElementStatus::Proposed,
+            group: None,
+            choices: vec![],
+            notes: vec![],
+            position: None,
+            origin: Origin::User,
+        };
+        let added = QueuedChange {
+            event: DecisionEvent {
+                seq: 1,
+                at: Utc::now(),
+                kind: DecisionKind::NodeAdded { node },
+            },
+            blocked_reason: None,
+        };
+        let comment = QueuedChange {
+            event: DecisionEvent {
+                seq: 2,
+                at: Utc::now(),
+                kind: DecisionKind::FlushRequested {
+                    comment: Some("please keep the cache local".into()),
+                },
+            },
+            blocked_reason: None,
+        };
+
+        assert!(matches!(
+            queued_edit_replacement(&added),
+            Some(QueueEditReplacement::Node(node)) if node.label == "Widget" && node.description == "needs tuning"
+        ));
+        assert_eq!(
+            queued_edit_replacement(&comment),
+            Some(QueueEditReplacement::Comment(
+                "please keep the cache local".into()
+            ))
         );
     }
 }

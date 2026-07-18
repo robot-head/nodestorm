@@ -19,8 +19,9 @@ pub fn TopBar(
 ) -> Element {
     let store = use_store();
     let sessions = use_context::<std::sync::Arc<crate::sessions::Sessions>>();
-    let mut comment = use_signal(String::new);
-    let mut compose_open = use_signal(|| false);
+    let composer = use_context::<super::MessageComposer>();
+    let mut comment = composer.comment;
+    let mut compose_open = composer.open;
     let mut sessions_open = use_signal(|| false);
     let mut new_session_draft = use_signal(String::new);
     let mut rename_draft = use_signal(String::new);
