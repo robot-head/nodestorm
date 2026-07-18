@@ -255,7 +255,7 @@ fails unless the drive client actually receives the decisions over MCP —
 then exercises user editing (add a component, rename it through the panel
 form with window-targeted `WM_CHAR` typing, connect it, soft-delete an
 agent node), creates and switches named sessions, opens the Timeline, and
-exports via the menu — failing unless the record on disk contains the
+exports via ⋯ More → Export ▾ — failing unless the record on disk contains the
 user's edits and the session log. Screenshots and logs land in
 `target\verify\`. Note that clicks land at an
 element's *visual* position: close the choice panel (its `✕`) before

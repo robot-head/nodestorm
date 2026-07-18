@@ -138,11 +138,6 @@ body {
   animation: pulse 1.6s ease-in-out infinite;
 }
 
-.pill-undelivered {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-}
-
 @keyframes pulse {
   50% {
     opacity: 0.55;
@@ -743,8 +738,13 @@ button.empty-cmd code {
   cursor: pointer;
 }
 
-.export-dropdown button:hover {
+.export-dropdown button:hover:not(:disabled) {
   background: var(--accent-soft);
+}
+
+.export-dropdown button:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .sessions-dropdown {
@@ -1772,6 +1772,7 @@ button.empty-cmd code {
   }
 
   .sess-pod {
+    display: block;
     max-width: 90px;
     overflow: hidden;
     text-overflow: ellipsis;

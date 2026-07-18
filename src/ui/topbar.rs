@@ -1,5 +1,5 @@
-//! Top bar: session title, agent status pill, Export, and the Send-to-agent
-//! control.
+//! Top bar: brand, session switcher, search, the fused status chip, the
+//! action pods, the ⋯ More menu mount, and the Send-to-agent control.
 
 use dioxus::prelude::*;
 
