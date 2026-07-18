@@ -60,16 +60,6 @@ jobs:
           registry-url: https://registry.npmjs.org
       - name: Configure Store-backed Windows setup
         run: node scripts/configure-store.mjs packaging/windows/store-identity.json
-      - name: Publish the existing GitHub draft idempotently
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          IS_DRAFT=$(gh release view v0.9.0 --json isDraft --jq '.isDraft')
-          if [ "$IS_DRAFT" = "true" ]; then
-            gh release edit v0.9.0 --draft=false
-          elif [ "$IS_DRAFT" != "false" ]; then
-            exit 1
-          fi
       - name: Revalidate package and publish through npm trusted publishing
         working-directory: plugins/nodestorm
         run: |
@@ -81,4 +71,14 @@ jobs:
             test "$PUBLISHED_REPOSITORY" = "git+https://github.com/robot-head/nodestorm.git"
           else
             npm publish --provenance --access public
+          fi
+      - name: Publish the existing GitHub draft idempotently
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          IS_DRAFT=$(gh release view v0.9.0 --json isDraft --jq '.isDraft')
+          if [ "$IS_DRAFT" = "true" ]; then
+            gh release edit v0.9.0 --draft=false
+          elif [ "$IS_DRAFT" != "false" ]; then
+            exit 1
           fi

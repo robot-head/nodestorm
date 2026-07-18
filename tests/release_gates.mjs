@@ -22,6 +22,16 @@ test("release validation hard-fails missing Partner Center identity or a wrong t
   assert.match(`${result.stdout}\n${result.stderr}`, identityExists ? /tag .* does not match/ : /Partner Center identity is missing/);
 });
 
+test("npm is published before the GitHub release becomes public", async () => {
+  const workflow = await readFile(path.join(root, ".github", "workflows", "release-publish.yml"), "utf8");
+  const npmPublish = workflow.indexOf("npm publish --provenance --access public");
+  const githubPublish = workflow.indexOf("gh release edit v0.9.0 --draft=false");
+
+  assert.notEqual(npmPublish, -1);
+  assert.notEqual(githubPublish, -1);
+  assert.ok(npmPublish < githubPublish, "npm must be published before the GitHub draft is made public");
+});
+
 test("POSIX setup contains executable abort gates for every trust boundary", async () => {
   const script = await readFile(path.join(scripts, "setup.sh"), "utf8");
   for (const pattern of [
