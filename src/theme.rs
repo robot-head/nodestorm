@@ -226,6 +226,68 @@ mod tests {
     }
 
     #[test]
+    fn minimum_viewport_keeps_topbar_and_menus_reachable() {
+        const MEDIA: &str = "@media (max-width: 320px) {";
+        let media_start = CSS
+            .rfind(MEDIA)
+            .unwrap_or_else(|| panic!("stylesheet must end with a {MEDIA} rule"));
+        let rule = &CSS[media_start..];
+
+        for base_selector in [".compose-pop {", ".theme-dropdown {"] {
+            let base_start = CSS
+                .find(base_selector)
+                .unwrap_or_else(|| panic!("missing base {base_selector} rule"));
+            assert!(
+                media_start > base_start,
+                "minimum-viewport rule must appear after base {base_selector} rule"
+            );
+        }
+
+        let topbar = block_for_in(rule, ".topbar");
+        for declaration in ["overflow-x: auto;", "scrollbar-width: none;"] {
+            assert!(
+                topbar.contains(declaration),
+                "minimum-viewport .topbar must contain `{declaration}`"
+            );
+        }
+        assert!(
+            block_for_in(rule, ".topbar::-webkit-scrollbar").contains("display: none;"),
+            "minimum-viewport topbar must hide the WebKit scrollbar"
+        );
+
+        let dropdown = block_for_in(rule, ".export-dropdown");
+        for declaration in [
+            "position: fixed;",
+            "top: 52px;",
+            "left: 8px;",
+            "right: 8px;",
+            "width: auto;",
+            "min-width: 0;",
+            "max-width: none;",
+            "max-height: calc(100vh - 60px);",
+        ] {
+            assert!(
+                dropdown.contains(declaration),
+                "minimum-viewport .export-dropdown must contain `{declaration}`"
+            );
+        }
+
+        let session_row = block_for_in(rule, ".session-row");
+        for declaration in ["flex-direction: column;", "align-items: stretch;"] {
+            assert!(
+                session_row.contains(declaration),
+                "minimum-viewport .session-row must contain `{declaration}`"
+            );
+        }
+        for selector in [".session-row > .sess-switch", ".session-row > .ctl-btn"] {
+            assert!(
+                block_for_in(rule, selector).contains("width: 100%;"),
+                "minimum-viewport {selector} must span the full row"
+            );
+        }
+    }
+
+    #[test]
     fn collapsed_activity_preview_is_bounded() {
         assert_block_contains(
             ".activity:not(.expanded) .activity-text",
