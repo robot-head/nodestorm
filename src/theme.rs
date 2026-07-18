@@ -204,6 +204,38 @@ mod tests {
     }
 
     #[test]
+    fn collapsed_activity_preview_is_bounded() {
+        assert_block_contains(
+            ".activity:not(.expanded) .activity-text",
+            "display: -webkit-box",
+        );
+        assert_block_contains(
+            ".activity:not(.expanded) .activity-text",
+            "-webkit-line-clamp: 2",
+        );
+        assert_block_contains(
+            ".activity:not(.expanded) .activity-text",
+            "-webkit-box-orient: vertical",
+        );
+        assert_block_contains(
+            ".activity:not(.expanded) .activity-text",
+            "overflow: hidden",
+        );
+    }
+
+    #[test]
+    fn narrow_panel_clears_activity_overlay() {
+        const CLEARANCE_RULE: &str =
+            "@media (max-width: 600px) {\n  .panel {\n    padding-bottom: 104px;\n  }\n}";
+
+        assert_eq!(
+            CSS.matches(CLEARANCE_RULE).count(),
+            1,
+            "stylesheet must contain one exact narrow panel clearance rule"
+        );
+    }
+
+    #[test]
     fn session_row_keeps_names_badges_and_actions_discoverable() {
         assert_block_contains(".session-row > .sess-switch", "width: auto");
         assert_block_contains(".session-row > .sess-switch", "flex: 1 1 0");

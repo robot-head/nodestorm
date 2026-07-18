@@ -1212,6 +1212,13 @@ button.empty-cmd code {
   overflow-wrap: anywhere;
 }
 
+.activity:not(.expanded) .activity-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .activity-time {
   flex: 0 0 auto;
   color: var(--text-dim);
@@ -1859,6 +1866,12 @@ button.empty-cmd code {
     --on-badge: light-dark(#ffffff, #272822);
     --shadow: light-dark(#2c2d2459, #000000);
     --dot-grid: light-dark(#e6e6da, #2e2f28);
+  }
+}
+
+@media (max-width: 600px) {
+  .panel {
+    padding-bottom: 104px;
   }
 }
 
