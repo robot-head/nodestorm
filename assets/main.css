@@ -789,8 +789,8 @@ body {
 
 .connect-handle {
   position: absolute;
-  top: -8px;
-  right: -8px;
+  top: 6px;
+  right: 6px;
   width: 18px;
   height: 18px;
   display: flex;
@@ -1023,28 +1023,41 @@ body {
 
 /* ---------- node cards ---------- */
 /* Geometry must stay in sync with layout::estimate_height:
-   card width 260, padding 10, head row ~24px, meta row ~20px,
-   18px line-height text, description clamped to 4 lines, badge row 28px. */
+   card width 260, border 1px, padding 13px horizontal (text width 232),
+   head row ~24px, meta row ~20px, 18px line-height text, description
+   clamped to 4 lines, badge row 28px. The 3px status rail is an absolute
+   ::before overlay and adds no height. */
 
 .node-card {
   position: absolute;
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--status-existing);
-  border-radius: 10px;
-  padding: 8px 12px 10px;
+  border-radius: 12px;
+  padding: 8px 13px 10px;
   cursor: pointer;
-  transition: box-shadow 120ms ease, border-color 120ms ease, background 120ms ease;
+  overflow: hidden;
+  transition: box-shadow 120ms ease, border-color 120ms ease,
+    background 120ms ease, transform 120ms ease;
   box-shadow: 0 2px 10px color-mix(in srgb, var(--shadow) 35%, transparent);
+}
+
+.node-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: var(--status-existing);
 }
 
 .node-card:hover {
   background: var(--bg-card-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--shadow) 40%, transparent);
 }
 
 .node-card.selected {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
+  box-shadow: 0 0 0 2px var(--glow), 0 0 16px var(--glow);
 }
 
 .node-card.ripple {
@@ -1053,20 +1066,12 @@ body {
     0 0 18px color-mix(in srgb, var(--status-affected) 45%, transparent);
 }
 
-.node-card.status-proposed {
-  border-left-color: var(--status-proposed);
-}
-
-.node-card.status-modified {
-  border-left-color: var(--status-modified);
-}
-
-.node-card.status-affected {
-  border-left-color: var(--status-affected);
-}
+.node-card.status-proposed::before { background: var(--status-proposed); }
+.node-card.status-modified::before { background: var(--status-modified); }
+.node-card.status-affected::before { background: var(--status-affected); }
+.node-card.status-removed::before { background: var(--status-removed); }
 
 .node-card.status-removed {
-  border-left-color: var(--status-removed);
   opacity: 0.65;
 }
 
@@ -1083,7 +1088,10 @@ body {
 }
 
 .node-label {
-  font-weight: 600;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 13.5px;
+  letter-spacing: -0.01em;
   line-height: 18px;
 }
 
@@ -1097,31 +1105,29 @@ body {
 }
 
 .node-status-tag {
-  padding: 0 6px;
-  border-radius: 4px;
+  padding: 0;
+  border-radius: 0;
   font-size: 10px;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.08em;
+  background: none;
 }
 
 .tag-proposed {
   color: var(--status-proposed);
-  background: color-mix(in srgb, var(--status-proposed) 15%, transparent);
 }
 
 .tag-modified {
   color: var(--status-modified);
-  background: color-mix(in srgb, var(--status-modified) 15%, transparent);
 }
 
 .tag-affected {
   color: var(--status-affected);
-  background: color-mix(in srgb, var(--status-affected) 15%, transparent);
 }
 
 .tag-removed {
   color: var(--status-removed);
-  background: color-mix(in srgb, var(--status-removed) 15%, transparent);
 }
 
 .node-group {

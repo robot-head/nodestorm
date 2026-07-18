@@ -128,7 +128,9 @@ pub fn visible_set(
 }
 
 /// Estimated card height in px. Must stay consistent with `assets/main.css`
-/// (card width 260, 18px line height, description clamped to 4 lines).
+/// (card width 260, 13px horizontal padding → 232px text width, 18px line
+/// height, description clamped to 4 lines; the 3px status rail is an
+/// absolute overlay and adds no height).
 pub fn estimate_height(node: &Node) -> f64 {
     const BASE: f64 = 54.0; // padding + kind row + first label line
     const LINE_H: f64 = 18.0;
