@@ -116,6 +116,7 @@ pub fn App() -> Element {
     });
 
     rsx! {
+        document::Style { {include_str!("../../assets/fonts.css")} }
         document::Style { {include_str!("../../assets/main.css")} }
         div {
             class: "app",

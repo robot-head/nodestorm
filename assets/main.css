@@ -85,6 +85,12 @@ body {
   color: var(--accent);
 }
 
+.topbar-brand,
+.panel-head h2,
+.empty-state h1 {
+  font-family: var(--font-display);
+}
+
 .topbar-title {
   color: var(--text-dim);
   overflow: hidden;
