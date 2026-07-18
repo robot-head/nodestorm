@@ -36,6 +36,60 @@ function Write-Utf8NoBom([string]$Path, [string]$Content) {
     [System.IO.File]::WriteAllText($Path, $Content, $script:Utf8NoBom)
 }
 
+# ---------- frame-resolution normalization (segment 8 fix) ----------
+# Segment 8 relaunches the app at two different window widths (760px then
+# 520px), so its two capture runs produce two different PNG resolutions.
+# ffmpeg's image2 demuxer reconfigures (tears down and recreates) its whole
+# -vf filter graph the instant it sees a frame whose size differs from the
+# previous one. That reconfiguration cascades to every filter in the chain,
+# including palettegen/paletteuse (Convert-SegmentGif's gif path) - and
+# palettegen only flushes its accumulated palette at its OWN instance's
+# end-of-stream. When the graph is rebuilt mid-stream, the pre-boundary
+# instance never reaches EOF, so every frame it already buffered is
+# silently dropped from the encoded gif (confirmed: an encode of the raw
+# mixed-resolution merged directory produced a gif whose frame count and
+# duration exactly matched an encode of the post-boundary run ALONE - the
+# pre-boundary run's frames vanished with no ffmpeg error). Padding
+# in-graph (an ffmpeg `pad` filter ahead of the rest of the chain) does
+# NOT help: the reconfiguration is triggered upstream, by the buffer
+# source itself, before any filter runs. libx264 (Publish-Demo's mp4
+# path) tolerates the same mid-stream resolution change without dropping
+# frames - only the gif's palette-based encode is affected - but the only
+# fix that removes the resolution change (and therefore the
+# reconfiguration) entirely is to materialize every frame at one fixed
+# size on disk before ffmpeg ever opens the sequence.
+Add-Type -AssemblyName System.Drawing
+
+function Get-ImageSize([string]$Path) {
+    $img = [System.Drawing.Image]::FromFile($Path)
+    try { return @{ W = $img.Width; H = $img.Height } } finally { $img.Dispose() }
+}
+
+function Copy-FramePadded([string]$Src, [string]$Dst, [int]$CanvasW, [int]$CanvasH) {
+    $srcImg = [System.Drawing.Image]::FromFile($Src)
+    $sameSize = ($srcImg.Width -eq $CanvasW -and $srcImg.Height -eq $CanvasH)
+    if ($sameSize) {
+        $srcImg.Dispose()
+        Copy-Item $Src $Dst -Force
+        return
+    }
+    try {
+        $canvas = New-Object System.Drawing.Bitmap $CanvasW, $CanvasH
+        try {
+            $g = [System.Drawing.Graphics]::FromImage($canvas)
+            try {
+                $g.Clear([System.Drawing.Color]::Black)
+                $x = [int](($CanvasW - $srcImg.Width) / 2)
+                $y = [int](($CanvasH - $srcImg.Height) / 2)
+                $g.DrawImage($srcImg, $x, $y, $srcImg.Width, $srcImg.Height)
+            } finally { $g.Dispose() }
+            $canvas.Save($Dst, [System.Drawing.Imaging.ImageFormat]::Png)
+        } finally { $canvas.Dispose() }
+    } finally {
+        $srcImg.Dispose()
+    }
+}
+
 $script:App = $null
 $script:AgentProc = $null
 $script:Hwnd = [IntPtr]::Zero
@@ -318,6 +372,11 @@ function Invoke-Segment2 {
     Invoke-Dwell 3
     Click-Element $script:Hwnd 'CRDT document model'
     Add-Caption 'Picked - with the trade-offs recorded' 2.5
+    # Let the picked option + its trade-offs sit on screen before the panel
+    # closes - without this the close (and everything after it) happens
+    # instantly, so viewers never actually see the state this caption
+    # describes.
+    Invoke-Dwell 2
     Click-Element $script:Hwnd ([string][char]0x2715)   # close panel
     Click-Element $script:Hwnd 'Notes Store'
     if (-not (Wait-Element 'Edit history storage' 10)) { Fail 'choice panel did not open on Notes Store' }
@@ -325,6 +384,8 @@ function Invoke-Segment2 {
     Click-Element $script:Hwnd ('optional message to the agent' + [char]0x2026)
     Type-Text $script:Hwnd 'prefer CRDTs - offline first'
     Add-Caption 'Add a note for the agent and send your decisions' 3
+    # Show the typed note before Send whisks it away.
+    Invoke-Dwell 2
     Click-Element $script:Hwnd 'Send to agent'
     # The agent reacts once per delivery: Sync Engine -> modified, Notes
     # Store -> affected. The status tag renders lowercase but CSS
@@ -345,6 +406,11 @@ function Invoke-Segment3 {
     Click-Element $script:Hwnd '+ Component'
     Add-Caption 'The canvas is yours too - add your own components' 3
     if (-not (Wait-Element 'New component' 10)) { Fail 'user component did not appear' }
+    # Let the freshly-added default-named card sit on screen for a beat -
+    # without this the rename form opens over it instantly, so viewers
+    # never see the "you just added a component" state this caption
+    # describes before it's replaced by the rename UI.
+    Invoke-Dwell 2
     if (-not (Wait-Element 'Edit' 10)) { Fail 'panel did not open with an Edit button' }
     # Rename via the panel's Edit form - the exact click/backspace/type
     # sequence proven in verify-windows.ps1's user-editing flow.
@@ -374,6 +440,8 @@ function Invoke-Segment3 {
     Click-Element $script:Hwnd 'Delete'
     if (-not (Wait-Element 'REMOVED' 10)) { Fail 'agent node was not marked removed' }
     Add-Caption "Deleting an agent's component asks the agent politely" 3
+    # Show the REMOVED tag before Undo clears it right back out.
+    Invoke-Dwell 2
     Click-Element $script:Hwnd ([string][char]0x21B6 + ' Undo')
     if (-not (Wait-ElementGone 'REMOVED' 10)) { Fail 'undo did not clear the removal' }
     Add-Caption 'Undo covers every edit until decisions are delivered' 2.5
@@ -413,6 +481,10 @@ function Invoke-Segment4 {
     Click-Element $script:Hwnd ('search components' + [char]0x2026)
     Type-Text $script:Hwnd 'notes'
     Add-Caption 'Search highlights matches...' 3
+    # Show the highlighted-but-not-yet-zoomed matches before Enter pans
+    # the view - otherwise the zoom fires instantly and viewers never see
+    # the plain highlight state this caption describes.
+    Invoke-Dwell 1.5
     Send-Key $script:Hwnd 0x0D   # Enter
     Invoke-Dwell 1.2
     Send-Key $script:Hwnd 0x0D   # Enter again: cycles to the next match
@@ -436,6 +508,9 @@ function Invoke-Segment5 {
         Fail 'created session did not become the active empty canvas'
     }
     Add-Caption 'Sessions are parallel brainstorms - agents can wait on one while you work in another' 3.5
+    # Let the new empty "waiting for an agent" canvas sit on screen before
+    # the switcher menu opens over it.
+    Invoke-Dwell 1.5
     if (-not (Wait-Element ('experiment ' + [char]0x25BE) 10)) {
         Fail 'switcher label did not update to the new active session'
     }
@@ -454,6 +529,11 @@ function Invoke-Segment5 {
     Click-Element $script:Hwnd 'Compare'
     if (-not (Wait-Element 'Session diff' 10)) { Fail 'diff panel did not open' }
     Add-Caption 'Compare shows how two sessions drifted' 3
+    # The diff panel must actually be visible while this caption is on
+    # screen - without this dwell the close (and the Timeline open right
+    # after it) happens instantly, so viewers see the Timeline panel
+    # instead of the diff this caption describes.
+    Invoke-Dwell 2
     Click-Element $script:Hwnd ([string][char]0x2715)
     Click-Element $script:Hwnd 'Timeline'
     if (-not (Wait-Element 'Session timeline' 5)) { Fail 'timeline panel did not open' }
@@ -493,6 +573,10 @@ function Invoke-Segment7 {
     Click-Element $script:Hwnd ('Theme ' + [char]0x25BE)
     if (-not (Wait-Element 'Gruvbox' 5)) { Fail 'theme accordion did not open' }
     Add-Caption 'Twelve palettes, light and dark, live-switching' 3
+    # Show the open palette menu before the first mode click repaints the
+    # whole UI - without this the switch happens instantly and viewers
+    # never see the menu of palettes this caption introduces.
+    Invoke-Dwell 1.5
     Click-Element $script:Hwnd 'Light'   # mode click: menu stays open
     Invoke-Dwell 1.5
     Click-Element $script:Hwnd 'Gruvbox'   # family click: menu closes
@@ -561,16 +645,25 @@ function Invoke-Segment8 {
     Stop-DemoApp
 
     # Merge: dir1's frames keep their numbers; dir2's continue the count.
+    # The two runs are two different window widths (760px/520px), so their
+    # captured PNGs are two different pixel resolutions - pad every frame
+    # onto one common canvas (the max width/height of the two runs) as a
+    # real file on disk before the merge, not as an ffmpeg -vf filter (see
+    # Copy-FramePadded for why an in-graph pad doesn't work here).
     $merged = Join-Path $seg 'frames'
     Remove-Item -Recurse -Force $merged -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force $merged | Out-Null
     $dir1Frames = Get-ChildItem (Join-Path $dir1 'frames') -Filter 'frame_*.png' | Sort-Object Name
-    foreach ($f in $dir1Frames) { Copy-Item $f.FullName (Join-Path $merged $f.Name) }
-    $n = $dir1Frames.Count
     $dir2Frames = Get-ChildItem (Join-Path $dir2 'frames') -Filter 'frame_*.png' | Sort-Object Name
+    $size1 = Get-ImageSize $dir1Frames[0].FullName
+    $size2 = Get-ImageSize $dir2Frames[0].FullName
+    $canvasW = [Math]::Max($size1.W, $size2.W)
+    $canvasH = [Math]::Max($size1.H, $size2.H)
+    foreach ($f in $dir1Frames) { Copy-FramePadded $f.FullName (Join-Path $merged $f.Name) $canvasW $canvasH }
+    $n = $dir1Frames.Count
     $i = $n
     foreach ($f in $dir2Frames) {
-        Copy-Item $f.FullName (Join-Path $merged ("frame_{0:D5}.png" -f $i))
+        Copy-FramePadded $f.FullName (Join-Path $merged ("frame_{0:D5}.png" -f $i)) $canvasW $canvasH
         $i++
     }
 

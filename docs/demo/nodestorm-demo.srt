@@ -1,92 +1,92 @@
 1
-00:00:00,013 --> 00:00:03,032
+00:00:00,013 --> 00:00:03,024
 nodestorm: a live canvas your agent draws on while you decide
 
 2
-00:00:03,033 --> 00:00:06,033
+00:00:03,025 --> 00:00:06,029
 Claude Code (any MCP agent) proposes an architecture...
 
 3
-00:00:06,033 --> 00:00:09,037
+00:00:06,029 --> 00:00:09,032
 Components become cards, dependencies become edges
 
 4
-00:00:09,037 --> 00:00:12,545
+00:00:09,032 --> 00:00:12,532
 Status rails: existing, proposed - and the agent is now waiting on YOU
 
 5
-00:00:13,044 --> 00:00:16,053
+00:00:12,940 --> 00:00:15,957
 Every open choice is pinned to its component
 
 6
-00:00:16,053 --> 00:00:19,181
+00:00:15,957 --> 00:00:19,101
 Hover an option - the components it would ripple into light up
 
 7
-00:00:19,181 --> 00:00:21,696
+00:00:19,102 --> 00:00:22,479
 Picked - with the trade-offs recorded
 
 8
-00:00:21,696 --> 00:00:24,698
+00:00:22,479 --> 00:00:25,490
 Add a note for the agent and send your decisions
 
 9
-00:00:24,698 --> 00:00:27,705
+00:00:25,491 --> 00:00:28,500
 The agent wakes with your decisions and updates the graph
 
 10
-00:00:27,833 --> 00:00:30,968
+00:00:28,647 --> 00:00:33,734
 The canvas is yours too - add your own components
 
 11
-00:00:30,968 --> 00:00:33,971
+00:00:33,734 --> 00:00:36,745
 Rename, connect, delete - your edits flow back to the agent
 
 12
-00:00:33,971 --> 00:00:36,977
+00:00:36,745 --> 00:00:39,770
 Deleting an agent's component asks the agent politely
 
 13
-00:00:36,977 --> 00:00:39,477
+00:00:39,770 --> 00:00:42,275
 Undo covers every edit until decisions are delivered
 
 14
-00:00:39,500 --> 00:00:44,528
+00:00:42,300 --> 00:00:47,326
 The minimap pans big graphs - groups collapse into one card
 
 15
-00:00:44,528 --> 00:00:47,536
+00:00:47,326 --> 00:00:50,337
 Search highlights matches...
 
 16
-00:00:47,536 --> 00:00:50,536
+00:00:50,337 --> 00:00:53,337
 ...and Enter zoom-cycles through them
 
 17
-00:00:50,044 --> 00:00:53,548
+00:00:52,505 --> 00:00:56,016
 Sessions are parallel brainstorms - agents can wait on one while you work in another
 
 18
-00:00:53,548 --> 00:00:56,553
+00:00:56,016 --> 00:00:59,033
 Compare shows how two sessions drifted
 
 19
-00:00:56,553 --> 00:00:59,197
+00:00:59,033 --> 00:01:01,677
 The timeline is the session's full decision log
 
 20
-00:01:00,055 --> 00:01:03,235
+00:01:02,549 --> 00:01:05,729
 Export writes a Markdown decision record - pros, cons, and the trail
 
 21
-00:01:04,058 --> 00:01:12,294
+00:01:06,563 --> 00:01:16,292
 Twelve palettes, light and dark, live-switching
 
 22
-00:01:12,301 --> 00:01:15,301
+00:01:16,301 --> 00:01:19,301
 Narrow window? The bar folds - message the agent from the compose pod
 
 23
-00:01:15,200 --> 00:01:18,260
+00:01:19,200 --> 00:01:22,264
 Even tiny windows keep every control reachable via More
 
