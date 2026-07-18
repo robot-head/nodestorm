@@ -130,23 +130,6 @@ pub fn App() -> Element {
                 if has_nodes {
                     Canvas { doc, layout, selected, hovered_affects }
                     ActivityFeed { meta }
-                    if let Some(node) = selected_node {
-                        // Keyed so switching nodes remounts the panel and its
-                        // edit-form drafts start from the new node's content.
-                        // Selection takes the right-panel slot over Timeline.
-                        ChoicePanel { key: "{node.id}", node, doc, selected, hovered_affects }
-                    } else if let Some(text) = compare_text {
-                        DiffPanel { text, on_close: move |()| compare_with.set(None) }
-                    } else if timeline_open() {
-                        Timeline { doc, meta, on_close: move |()| timeline_open.set(false) }
-                    } else if queued_changes_open() {
-                        QueuedChangesPanel {
-                            doc,
-                            meta,
-                            selected,
-                            on_close: move |()| queued_changes_open.set(false),
-                        }
-                    }
                 } else {
                     div { class: "empty-state",
                         span { class: "empty-bolt", "ϟ" }
@@ -171,6 +154,23 @@ pub fn App() -> Element {
                             code { "claude mcp add --transport http nodestorm {mcp_url}" }
                             span { class: "empty-copy", "⧉" }
                         }
+                    }
+                }
+                if let Some(node) = selected_node {
+                    // Keyed so switching nodes remounts the panel and its
+                    // edit-form drafts start from the new node's content.
+                    // Selection takes the right-panel slot over Timeline.
+                    ChoicePanel { key: "{node.id}", node, doc, selected, hovered_affects }
+                } else if let Some(text) = compare_text {
+                    DiffPanel { text, on_close: move |()| compare_with.set(None) }
+                } else if timeline_open() {
+                    Timeline { doc, meta, on_close: move |()| timeline_open.set(false) }
+                } else if queued_changes_open() {
+                    QueuedChangesPanel {
+                        doc,
+                        meta,
+                        selected,
+                        on_close: move |()| queued_changes_open.set(false),
                     }
                 }
             }

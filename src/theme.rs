@@ -129,6 +129,7 @@ mod tests {
     use super::*;
 
     const CSS: &str = include_str!("../assets/main.css");
+    const APP_SOURCE: &str = include_str!("ui/app.rs");
     const TOPBAR_SOURCE: &str = include_str!("ui/topbar.rs");
 
     /// Tokens that can never share a value between light and dark variants,
@@ -228,6 +229,33 @@ mod tests {
     #[test]
     fn status_chip_keeps_its_complete_wide_layout_label() {
         assert_block_contains(".status-chip", "flex-shrink: 0");
+    }
+
+    #[test]
+    fn queue_panel_is_available_when_the_document_is_empty() {
+        let empty_state = APP_SOURCE
+            .find("} else {\n                    div { class: \"empty-state\"")
+            .expect("App must render an empty state when there are no nodes");
+        let queue_panel = APP_SOURCE
+            .find("} else if queued_changes_open()")
+            .expect("App must render the queued changes panel");
+
+        assert!(
+            queue_panel > empty_state,
+            "the queued changes panel must not be gated by the canvas branch"
+        );
+    }
+
+    #[test]
+    fn queue_segment_button_resets_native_button_chrome() {
+        for declaration in [
+            "background: none;",
+            "border: 0;",
+            "cursor: pointer;",
+            "font: inherit;",
+        ] {
+            assert_block_contains(".status-chip button.seg", declaration);
+        }
     }
 
     #[test]
