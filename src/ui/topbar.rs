@@ -53,7 +53,7 @@ pub fn TopBar(
     rsx! {
         header { class: "topbar",
             span { class: "topbar-brand",
-                span { class: "topbar-bolt", "ϟ" }
+                span { class: "topbar-mark", aria_hidden: "true" }
                 span { class: "topbar-word", "nodestorm" }
             }
             div { class: "export-menu",
@@ -509,7 +509,7 @@ pub fn TopBar(
                         comment.set(String::new());
                     }
                 },
-                span { class: "send-bolt", "ϟ" }
+                span { class: "send-bolt", "\u{03df}" }
                 "Send"
             }
         }
