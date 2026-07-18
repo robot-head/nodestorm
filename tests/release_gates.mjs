@@ -74,6 +74,8 @@ test("desktop release packages stage the topbar mark asset", async () => {
   assert.match(workflow, /cp assets\/nodestorm-mark\.svg dist\/assets\/nodestorm-mark\.svg/);
   assert.match(workflow, /tar -C dist -czf .* nodestorm assets/);
   assert.match(workflow, /cp assets\/nodestorm-mark\.svg "\$APP\/Contents\/Resources\/assets\/nodestorm-mark\.svg"/);
-  assert.match(windowsLayout, /assets\/nodestorm-mark\.svg/);
-  assert.match(windowsLayout, /Join-Path \$Layout "Assets\/nodestorm-mark\.svg"/);
+  assert.match(
+    windowsLayout,
+    /Copy-Item \(Join-Path \$PSScriptRoot "\.\.\/\.\.\/assets\/nodestorm-mark\.svg"\) \(Join-Path \$Layout "Assets\/nodestorm-mark\.svg"\)/,
+  );
 });
