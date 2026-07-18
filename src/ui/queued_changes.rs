@@ -69,7 +69,7 @@ pub fn QueuedChangesPanel(
                     let label = queued_change_label(&d, &change);
                     let replacement = queued_edit_replacement(&change);
                     let store = store.clone();
-                    let on_close = on_close.clone();
+                    let on_close = on_close;
                     rsx! {
                         div { class: "{row_class}", key: "{seq}-{blocked}",
                             span { class: "timeline-time", "{at}" }
@@ -81,7 +81,6 @@ pub fn QueuedChangesPanel(
                                     onclick: {
                                         let store = store.clone();
                                         let mut selected = selected;
-                                        let on_close = on_close.clone();
                                         let mut composer_comment = composer.comment;
                                         let mut composer_open = composer.open;
                                         let replacement = replacement.clone();
