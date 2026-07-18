@@ -142,7 +142,10 @@ pub fn launch(sessions: Arc<crate::sessions::Sessions>, cli: Cli) {
         .unwrap_or_default();
     let window = WindowBuilder::new()
         .with_title("nodestorm")
-        .with_inner_size(dioxus::desktop::tao::dpi::LogicalSize::new(1280.0, 840.0))
+        .with_inner_size({
+            let (w, h) = cli.window_size.unwrap_or((1280.0, 840.0));
+            dioxus::desktop::tao::dpi::LogicalSize::new(w, h)
+        })
         .with_theme(tao_theme(prefs.mode));
     dioxus::LaunchBuilder::new()
         .with_cfg(Config::new().with_window(window).with_menu(None))

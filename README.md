@@ -196,6 +196,7 @@ it never touches session files, undo history, agents, or exported records
 | `--demo` | load the demo graph instead of restoring |
 | `--demo-big <N>` | load a deterministic N-component graph (scaling checks) |
 | `--headless` | MCP server without a window (CI / remote) |
+| `--window-size <WxH>` | initial window size in logical px (default `1280x840`) |
 
 ## MCP tools
 
