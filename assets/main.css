@@ -1518,7 +1518,7 @@ button.empty-cmd code {
 
 /* Theme picker dropdown (shares the export-dropdown shell). */
 .theme-dropdown {
-  min-width: 230px;
+  min-width: 0;
 }
 
 .mode-row {
@@ -1894,7 +1894,7 @@ button.empty-cmd code {
 }
 
 .compose-pop {
-  min-width: 260px;
+  min-width: min(260px, calc(100vw - 32px));
   padding: 10px;
   display: flex;
   flex-direction: column;

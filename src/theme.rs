@@ -221,6 +221,8 @@ mod tests {
             "min-width: min(230px, calc(100vw - 32px))",
         );
         assert_block_contains(".more-dropdown", "max-width: calc(100vw - 32px)");
+        assert_block_contains(".theme-dropdown", "min-width: 0");
+        assert_block_contains(".compose-pop", "min-width: min(260px, calc(100vw - 32px))");
     }
 
     #[test]
