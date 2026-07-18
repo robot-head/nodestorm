@@ -13,17 +13,29 @@ Built in Rust with [Dioxus](https://dioxuslabs.com) (desktop WebView UI) and
 [rmcp](https://github.com/modelcontextprotocol/rust-sdk) (MCP over streamable
 HTTP).
 
+[![100-second tour of nodestorm](docs/demo/poster.png)](docs/demo/nodestorm-demo.mp4)
+
+*Click for the full 100-second tour (MP4 + [subtitles](docs/demo/nodestorm-demo.srt)); GIF highlights are inline below.*
+
 ## How it works
 
+```mermaid
+architecture-beta
+    service agent(server)[Claude Code agent]
+
+    group app[nodestorm desktop app]
+    service mcp(internet)[MCP server] in app
+    service store(database)[Session stores] in app
+    service canvas(cloud)[Canvas UI] in app
+
+    agent:R <--> L:mcp
+    mcp:R <--> L:store
+    store:R <--> L:canvas
 ```
-┌────────────┐  MCP (streamable HTTP, 127.0.0.1:4747)  ┌───────────────┐
-│ Claude Code │ ──── propose_graph / update_graph ────► │   nodestorm    │
-│  (agent)    │ ◄─── await_decisions (blocks…) ──────── │  desktop app   │
-└────────────┘        decisions, notes, comments        └──────┬────────┘
-                                                               │ you click
-                                                               ▼
-                                                      cards · choices · ripple
-```
+
+*`propose_graph` / `update_graph` flow left→right; `await_decisions` blocks until your decisions flow back with **Send ϟ** (loopback HTTP on 127.0.0.1:4747).*
+
+![Empty state to proposal with cards and edges appearing](docs/demo/01-propose.gif)
 
 - **Agent is the author**: it proposes nodes, edges, and open choices.
 - **You are the decider**: pick options (pros/cons, ★ recommendation),
@@ -31,6 +43,9 @@ HTTP).
 - **Exactly-once delivery**: decisions queue until you click *Send to agent*
   (or the last open choice is decided); a timed-out agent re-calls and gets
   them — nothing is ever lost.
+
+![Selecting cards, viewing choices, and sending decisions](docs/demo/02-decide.gif)
+
 - **You can edit too**: add, rename, connect, and delete components right on
   the canvas; your changes flow back to the agent as decision events, and
   your components survive agent re-proposes.
@@ -39,6 +54,8 @@ HTTP).
   into your repo — or use **⋯ More → Export ▾** (write next to the session
   file, Save As…, copy Markdown/Mermaid to the clipboard, or a mermaid-only
   file).
+
+![Exporting via the menu and viewing the activity receipt](docs/demo/06-export.gif)
 
 ## Install
 
@@ -118,6 +135,8 @@ Every edit flows back as a decision event with your next Send.
   delivered to the agent, or the agent mutates the graph, the undo history
   clears — you can't unsend facts or silently clobber agent work.
 
+![Adding nodes, renaming via the panel, connecting, and deleting](docs/demo/03-edit.gif)
+
 Finding your way around big graphs: the **search box** highlights matches
 (Enter cycles + zooms, Esc clears, `/` focuses it) and the **minimap**
 (bottom-right) pans on click/drag. Past ~100 components: cards and edges
@@ -128,6 +147,8 @@ merge into one thick `×N` bundle; expand with the cluster's ⊞ button or a
 double-click. Long edges (spanning several columns) route through shared
 horizontal channels, one lane per edge, instead of criss-crossing the
 gutters. Try it: `nodestorm --demo-big 300`.
+
+![Search results, minimap navigation, and collapsing/expanding groups](docs/demo/04-navigate.gif)
 
 ## Sessions
 
@@ -141,6 +162,8 @@ you work in another**: every MCP tool takes an optional `session` name
 (omitted = the session on screen), `propose_graph` auto-creates missing
 names, and `list_sessions` shows what exists. Only you switch what's on
 screen.
+
+![Creating sessions, switching between them, and comparing with Timeline view](docs/demo/05-sessions.gif)
 
 The menu's Manage block also **renames** the active session (the file
 follows; a waiting agent is unaffected), **deletes** it permanently, and
@@ -177,6 +200,8 @@ default), Solarized, Gruvbox, Catppuccin (Mocha/Latte), Nord, Dracula,
 Tokyo Night, One, GitHub, Everforest, Rosé Pine, and Monokai. Each row
 shows live swatches of that palette in the current mode.
 
+![Cycling through theme families and color modes](docs/demo/07-themes.gif)
+
 The mode row switches **Auto / Light / Dark**. Auto (the default) follows
 the system setting — on Windows, *Settings → Personalization → Colors →
 "Choose your default app mode"* — and tracks changes live, no restart
@@ -184,6 +209,8 @@ needed. The native title bar follows the chosen mode too. The choice is
 global (all sessions) and persists in `preferences.json` in the data dir;
 it never touches session files, undo history, agents, or exported records
 (export colors stay fixed so records read the same everywhere).
+
+![The top bar folds gracefully at narrow widths](docs/demo/08-responsive.gif)
 
 ## CLI
 
