@@ -187,13 +187,13 @@ mod tests {
             .expect("topbar export menu")
             .0;
         assert!(brand.contains("topbar-mark"));
+        assert!(brand.contains("polyline"));
+        assert!(brand.contains("BOLT_POINTS"));
+        assert!(brand.contains("NODE_INDICES"));
+        assert!(brand.contains("currentColor"));
+        assert!(!brand.contains("mask"));
+        assert!(!brand.contains("topbar-bolt-cutout"));
         assert!(!brand.contains("\"ϟ\""));
-        assert!(brand.contains("svg {"));
-        assert!(brand.contains("class: \"topbar-mark\""));
-        assert!(brand.contains("id: \"topbar-bolt-cutout\""));
-        assert!(!brand.contains("/assets/nodestorm-mark.svg"));
-        assert!(!CSS.contains("/assets/nodestorm-mark.svg"));
-        assert!(!CSS.contains("mask:"));
     }
 
     #[test]

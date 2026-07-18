@@ -49,30 +49,30 @@ pub fn TopBar(
     let mut search = use_context::<super::SearchQuery>().0;
     let mut zoom_target = use_context::<super::ZoomTarget>().0;
     let mut search_cursor = use_signal(|| 0usize);
+    let mark_points = crate::icon::svg_points();
 
     rsx! {
         header { class: "topbar",
             span { class: "topbar-brand",
                 svg {
                     class: "topbar-mark",
-                    view_box: "0 0 256 256",
+                    view_box: crate::icon::VIEW_BOX,
                     "aria-hidden": "true",
-                    defs {
-                        mask { id: "topbar-bolt-cutout",
-                            rect { width: "256", height: "256", fill: "white" }
-                            path { d: "M145 42 78 137h47l-14 77 67-97h-47l14-75Z", fill: "black" }
-                        }
-                    }
-                    g {
-                        fill: "currentColor",
+                    polyline {
+                        points: "{mark_points}",
+                        fill: "none",
                         stroke: "currentColor",
+                        stroke_width: "{crate::icon::STROKE_WIDTH}",
                         stroke_linecap: "round",
                         stroke_linejoin: "round",
-                        mask: "url(#topbar-bolt-cutout)",
-                        path { d: "M59 184 120 66 199 171", fill: "none", stroke_width: "24" }
-                        circle { cx: "59", cy: "184", r: "27", stroke: "none" }
-                        circle { cx: "120", cy: "66", r: "27", stroke: "none" }
-                        circle { cx: "199", cy: "171", r: "27", stroke: "none" }
+                    }
+                    for index in crate::icon::NODE_INDICES {
+                        circle {
+                            cx: "{crate::icon::BOLT_POINTS[index].0}",
+                            cy: "{crate::icon::BOLT_POINTS[index].1}",
+                            r: "{crate::icon::NODE_RADIUS}",
+                            fill: "currentColor",
+                        }
                     }
                 }
                 span { class: "topbar-word", "nodestorm" }

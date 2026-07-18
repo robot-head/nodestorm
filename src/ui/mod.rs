@@ -21,7 +21,7 @@ pub(crate) const TOPBAR_H: f64 = 48.0;
 /// keeps the off-screen rest out of the DOM).
 pub(crate) const MIN_FIT_SCALE: f64 = 0.15;
 
-const APP_ICON_PNG: &[u8] = include_bytes!("../../assets/nodestorm-icon.png");
+const APP_ICON_PNG: &[u8] = include_bytes!("../../assets/icons/nodestorm-256.png");
 
 /// Live canvas content-box geometry. The fallback is used only until the
 /// viewport's first ResizeObserver measurement arrives.
