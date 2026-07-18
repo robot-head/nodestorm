@@ -11,6 +11,7 @@ mod edge_layer;
 mod minimap;
 mod more_menu;
 mod node_card;
+mod queued_changes;
 mod theme_menu;
 mod timeline;
 mod topbar;
@@ -69,6 +70,14 @@ pub(crate) struct SearchQuery(pub Signal<String>);
 /// `other`.
 #[derive(Clone, Copy)]
 pub(crate) struct CompareWith(pub Signal<Option<String>>);
+
+/// The top-bar message draft and popover state, shared with queued-change
+/// editing so a removed comment can be revised before sending again.
+#[derive(Clone, Copy)]
+pub(crate) struct MessageComposer {
+    pub comment: Signal<String>,
+    pub open: Signal<bool>,
+}
 
 /// The live theme/mode preference (loaded in [`launch`], edited by the
 /// topbar's theme menu, persisted to the global preferences file).

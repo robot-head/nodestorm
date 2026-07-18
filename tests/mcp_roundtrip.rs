@@ -145,8 +145,8 @@ async fn full_decision_roundtrip() {
     let decisions = outcome["decisions"].as_array().expect("decisions array");
     assert_eq!(decisions.len(), 3, "edits ride along: {decisions:#?}");
     assert_eq!(decisions[0]["kind"], "node_added");
-    assert_eq!(decisions[0]["node_id"], "rate-limiter");
-    assert_eq!(decisions[0]["label"], "Rate Limiter");
+    assert_eq!(decisions[0]["node"]["id"], "rate-limiter");
+    assert_eq!(decisions[0]["node"]["label"], "Rate Limiter");
     assert_eq!(decisions[1]["kind"], "removal_requested");
     assert_eq!(decisions[1]["node_id"], "api");
     assert_eq!(decisions[2]["kind"], "option_selected");

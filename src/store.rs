@@ -35,6 +35,28 @@ pub struct Snapshot {
     log_tail: Vec<DecisionEvent>,
 }
 
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct QueuedChange {
+    /// Stable row identity. Pending changes derive this from their current
+    /// sequence; blocked changes keep a UUID because replay can renumber the
+    /// live tail.
+    #[serde(default)]
+    pub id: String,
+    pub event: DecisionEvent,
+    #[serde(default)]
+    pub blocked_reason: Option<String>,
+    /// Set only while the queue is displayed: persisted sessions from before
+    /// queue replay and agent graph mutations have no safe replay baseline.
+    #[serde(skip)]
+    pub interaction_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct QueueEditTarget {
+    pub node_id: Option<NodeId>,
+    pub choice_id: Option<ChoiceId>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     #[error("unknown node `{0}`")]
@@ -55,6 +77,10 @@ pub enum StoreError {
     SelfLoop,
     #[error("no edge {0} -> {1} of that kind")]
     UnknownEdge(NodeId, NodeId),
+    #[error("queued change `{0}` is unavailable")]
+    UnknownQueuedChange(String),
+    #[error("queued changes cannot be replayed because their baseline is unavailable")]
+    MissingQueuedBaseline,
 }
 
 /// Full session state guarded by the store mutex.
@@ -65,6 +91,18 @@ pub struct SessionState {
     pub decision_log: Vec<DecisionEvent>,
     /// `decision_log[..delivery_cursor]` has been handed to the agent.
     pub delivery_cursor: usize,
+    /// Document state before the undelivered log tail, used to replay queued
+    /// edits when one is removed.
+    #[serde(default)]
+    pub pending_base: Option<SessionDoc>,
+    /// Queued events that can no longer be replayed after an earlier edit was
+    /// removed. Kept for the user to inspect or dismiss.
+    #[serde(default)]
+    pub blocked_changes: Vec<QueuedChange>,
+    /// Why the undelivered tail cannot be safely replayed. Persisted so an
+    /// autosave/restart does not make an unavailable queue look editable.
+    #[serde(default)]
+    pub queue_edit_error: Option<String>,
     /// Bumped by "Send to agent" (or autoflush when the last choice closes).
     pub flush_seq: u64,
     /// The last `flush_seq` actually delivered to an `await_decisions` call.
@@ -124,7 +162,17 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn new(state: SessionState) -> Arc<Self> {
+    pub fn new(mut state: SessionState) -> Arc<Self> {
+        normalize_blocked_change_ids(&mut state);
+        if state.decision_log.len() > state.delivery_cursor
+            && state.pending_base.is_none()
+            && state.queue_edit_error.is_none()
+        {
+            state.queue_edit_error = Some(
+                "This queue was saved before queue editing was available; send it before making changes."
+                    .into(),
+            );
+        }
         let (revision_tx, _) = watch::channel(state.doc.revision);
         Arc::new(Self {
             state: Mutex::new(state),
@@ -370,17 +418,18 @@ impl Store {
                 .map(|n| n.label.clone())
                 .ok_or_else(|| StoreError::UnknownNode(node.clone()))?;
             push_undo(s, &format!("added a note to {label}"));
-            let n = s.doc.node_mut(node).expect("validated above");
-            n.notes.push(Note {
+            let note = Note {
                 id: NoteId::new(uuid::Uuid::new_v4().to_string()),
-                text: text.clone(),
+                text,
                 created_at: Utc::now(),
-            });
+            };
+            let n = s.doc.node_mut(node).expect("validated above");
+            n.notes.push(note.clone());
             push_event(
                 s,
                 DecisionKind::NoteAdded {
                     node_id: node.clone(),
-                    text,
+                    note,
                 },
             );
             push_activity(s, ActivityOrigin::User, format!("added a note to {label}"));
@@ -417,7 +466,7 @@ impl Store {
             }
             let id = NodeId::new(candidate);
             push_undo(s, &format!("added component \u{201c}{label}\u{201d}"));
-            s.doc.nodes.push(Node {
+            let node = Node {
                 id: id.clone(),
                 label: label.clone(),
                 kind,
@@ -428,15 +477,9 @@ impl Store {
                 notes: vec![],
                 position,
                 origin: Origin::User,
-            });
-            push_event(
-                s,
-                DecisionKind::NodeAdded {
-                    node_id: id.clone(),
-                    label: label.clone(),
-                    node_kind: kind,
-                },
-            );
+            };
+            s.doc.nodes.push(node.clone());
+            push_event(s, DecisionKind::NodeAdded { node });
             push_activity(
                 s,
                 ActivityOrigin::User,
@@ -682,6 +725,7 @@ impl Store {
         }
         Ok(self.mutate(|s| {
             clear_undo(s); // an agent turn invalidates the user's undo window
+            invalidate_pending_replay(s);
             let old_revision = s.doc.revision;
             let previous = std::mem::take(&mut s.doc);
             s.doc = incoming;
@@ -728,6 +772,7 @@ impl Store {
 
     /// Apply a batch of ops atomically: all-or-nothing against validation.
     pub fn apply_update(&self, ops: Vec<GraphOp>) -> Result<UpdateSummary, StoreError> {
+        let mutates_document = ops.iter().any(|op| !matches!(op, GraphOp::Announce { .. }));
         // Stage on a clone so a failed op or failed validation commits nothing.
         let staged = self.read(|s| s.doc.clone());
         let mut doc = staged;
@@ -743,6 +788,9 @@ impl Store {
         }
         Ok(self.mutate(|s| {
             clear_undo(s); // an agent turn invalidates the user's undo window
+            if mutates_document {
+                invalidate_pending_replay(s);
+            }
             doc.revision = s.doc.revision;
             s.doc = doc;
             if announces.is_empty() {
@@ -766,6 +814,101 @@ impl Store {
     }
 
     // ---------- delivery ----------
+
+    /// The current undelivered tail followed by changes blocked during a
+    /// replay. Blocked changes are never eligible for delivery.
+    pub fn queued_changes(&self) -> Vec<QueuedChange> {
+        self.read(|s| {
+            s.decision_log[s.delivery_cursor..]
+                .iter()
+                .cloned()
+                .map(|event| QueuedChange {
+                    id: format!("pending:{}", event.seq),
+                    event,
+                    blocked_reason: None,
+                    interaction_error: s.queue_edit_error.clone(),
+                })
+                .chain(s.blocked_changes.iter().cloned().map(|mut change| {
+                    change.interaction_error = None;
+                    change
+                }))
+                .collect()
+        })
+    }
+
+    /// Remove one undelivered change, then reconstruct the visible document
+    /// from the pending baseline and the remaining replayable events.
+    pub fn remove_queued_change(&self, seq: u64) -> Result<QueueEditTarget, StoreError> {
+        self.mutate(|s| {
+            if seq <= s.delivery_cursor as u64 {
+                return Err(StoreError::UnknownQueuedChange(seq.to_string()));
+            }
+            let tail_index = s.decision_log[s.delivery_cursor..]
+                .iter()
+                .position(|event| event.seq == seq)
+                .ok_or_else(|| StoreError::UnknownQueuedChange(seq.to_string()))?;
+            let target = queue_edit_target(&s.decision_log[s.delivery_cursor + tail_index]);
+            let base = s
+                .pending_base
+                .take()
+                .ok_or(StoreError::MissingQueuedBaseline)?;
+            let mut survivors = s.decision_log[s.delivery_cursor..].to_vec();
+            survivors.remove(tail_index);
+
+            let revision = s.doc.revision;
+            let mut replayed_doc = base.clone();
+            let mut replayed_tail = Vec::with_capacity(survivors.len());
+            for event in survivors {
+                match replay_event(&mut replayed_doc, &event) {
+                    Ok(()) => replayed_tail.push(event),
+                    Err(reason) => s.blocked_changes.push(blocked_change(event, reason)),
+                }
+            }
+            // Positions are canvas-only state: they do not generate decision
+            // events, so rebase them from the live document after replay.
+            for node in &mut replayed_doc.nodes {
+                if let Some(current) = s.doc.node(&node.id) {
+                    node.position = current.position;
+                }
+            }
+            replayed_doc.revision = revision;
+            s.doc = replayed_doc;
+            s.decision_log.truncate(s.delivery_cursor);
+            for (offset, event) in replayed_tail.iter_mut().enumerate() {
+                event.seq = s.delivery_cursor as u64 + offset as u64 + 1;
+            }
+            s.decision_log.extend(replayed_tail);
+            s.pending_base = (!s.decision_log[s.delivery_cursor..].is_empty()).then_some(base);
+            s.flush_seq = s.delivered_flush_seq;
+            clear_undo(s);
+            push_activity(
+                s,
+                ActivityOrigin::User,
+                format!("removed queued change {seq}"),
+            );
+            Ok(target)
+        })
+    }
+
+    /// Dismiss a replay-blocked change without altering the document or the
+    /// append-only delivered portion of the decision log.
+    pub fn remove_blocked_change(&self, id: &str) -> Result<QueueEditTarget, StoreError> {
+        self.mutate(|s| {
+            let index = s
+                .blocked_changes
+                .iter()
+                .position(|change| change.id == id)
+                .ok_or_else(|| StoreError::UnknownQueuedChange(id.to_owned()))?;
+            let change = s.blocked_changes.remove(index);
+            let target = queue_edit_target(&change.event);
+            push_activity(
+                s,
+                ActivityOrigin::User,
+                format!("removed blocked queued change {id}"),
+            );
+            Ok(target)
+        })
+    }
 
     pub fn peek_undelivered(&self) -> Vec<DecisionEvent> {
         self.read(|s| s.decision_log[s.delivery_cursor..].to_vec())
@@ -844,6 +987,8 @@ fn try_deliver_locked(s: &mut SessionState) -> Option<Vec<DecisionEvent>> {
         let batch = s.decision_log[s.delivery_cursor..].to_vec();
         s.delivery_cursor = s.decision_log.len();
         s.delivered_flush_seq = s.flush_seq;
+        s.pending_base = None;
+        s.queue_edit_error = None;
         Some(batch)
     } else {
         None
@@ -851,6 +996,10 @@ fn try_deliver_locked(s: &mut SessionState) -> Option<Vec<DecisionEvent>> {
 }
 
 fn push_event(s: &mut SessionState, kind: DecisionKind) {
+    if s.decision_log.len() == s.delivery_cursor && s.pending_base.is_none() {
+        s.pending_base = Some(s.doc.clone());
+        s.queue_edit_error = None;
+    }
     let seq = s.decision_log.len() as u64 + 1;
     s.decision_log.push(DecisionEvent {
         seq,
@@ -863,6 +1012,10 @@ fn push_event(s: &mut SessionState, kind: DecisionKind) {
 /// every user mutation once its validation has passed). A new action
 /// invalidates any redo history.
 fn push_undo(s: &mut SessionState, label: &str) {
+    if s.decision_log.len() == s.delivery_cursor {
+        s.pending_base = Some(s.doc.clone());
+        s.queue_edit_error = None;
+    }
     s.undo.push(Snapshot {
         label: label.to_owned(),
         doc: s.doc.clone(),
@@ -873,6 +1026,185 @@ fn push_undo(s: &mut SessionState, label: &str) {
         s.undo.drain(..excess);
     }
     s.redo.clear();
+}
+
+fn blocked_change(event: DecisionEvent, reason: String) -> QueuedChange {
+    QueuedChange {
+        id: format!("blocked:{}", uuid::Uuid::new_v4()),
+        event,
+        blocked_reason: Some(reason),
+        interaction_error: None,
+    }
+}
+
+fn normalize_blocked_change_ids(s: &mut SessionState) {
+    for change in &mut s.blocked_changes {
+        if change.id.is_empty() {
+            change.id = format!("blocked:{}", uuid::Uuid::new_v4());
+        }
+        change.interaction_error = None;
+    }
+}
+
+fn invalidate_pending_replay(s: &mut SessionState) {
+    if s.decision_log.len() > s.delivery_cursor {
+        s.pending_base = None;
+        s.queue_edit_error = Some(
+            "Queued changes cannot be edited after an agent graph update; send them before making changes."
+                .into(),
+        );
+    }
+}
+
+fn queue_edit_target(event: &DecisionEvent) -> QueueEditTarget {
+    match &event.kind {
+        DecisionKind::OptionSelected {
+            node_id, choice_id, ..
+        }
+        | DecisionKind::ChoiceDismissed {
+            node_id, choice_id, ..
+        } => QueueEditTarget {
+            node_id: Some(node_id.clone()),
+            choice_id: Some(choice_id.clone()),
+        },
+        DecisionKind::NoteAdded { node_id, .. }
+        | DecisionKind::NodeEdited { node_id, .. }
+        | DecisionKind::NodeDeleted { node_id }
+        | DecisionKind::RemovalRequested { node_id } => QueueEditTarget {
+            node_id: Some(node_id.clone()),
+            choice_id: None,
+        },
+        DecisionKind::NodeAdded { node } => QueueEditTarget {
+            node_id: Some(node.id.clone()),
+            choice_id: None,
+        },
+        DecisionKind::EdgeAdded { from, .. } | DecisionKind::EdgeDeleted { from, .. } => {
+            QueueEditTarget {
+                node_id: Some(from.clone()),
+                choice_id: None,
+            }
+        }
+        DecisionKind::FlushRequested { .. } => QueueEditTarget {
+            node_id: None,
+            choice_id: None,
+        },
+    }
+}
+
+fn replay_event(doc: &mut SessionDoc, event: &DecisionEvent) -> Result<(), String> {
+    match &event.kind {
+        DecisionKind::OptionSelected {
+            node_id,
+            choice_id,
+            option_id,
+            ..
+        } => {
+            let choice = doc
+                .node_mut(node_id)
+                .ok_or_else(|| format!("node {node_id} no longer exists"))?
+                .choices
+                .iter_mut()
+                .find(|choice| choice.id == *choice_id)
+                .ok_or_else(|| format!("choice {choice_id} no longer exists"))?;
+            if !choice.options.iter().any(|option| option.id == *option_id) {
+                return Err(format!("option {option_id} no longer exists"));
+            }
+            choice.selected = Some(option_id.clone());
+            choice.status = ChoiceStatus::Decided;
+        }
+        DecisionKind::ChoiceDismissed {
+            node_id, choice_id, ..
+        } => {
+            let choice = doc
+                .node_mut(node_id)
+                .ok_or_else(|| format!("node {node_id} no longer exists"))?
+                .choices
+                .iter_mut()
+                .find(|choice| choice.id == *choice_id)
+                .ok_or_else(|| format!("choice {choice_id} no longer exists"))?;
+            choice.selected = None;
+            choice.status = ChoiceStatus::Dismissed;
+        }
+        DecisionKind::NoteAdded { node_id, note } => {
+            doc.node_mut(node_id)
+                .ok_or_else(|| format!("node {node_id} no longer exists"))?
+                .notes
+                .push(note.clone());
+        }
+        DecisionKind::FlushRequested { .. } => {}
+        DecisionKind::NodeAdded { node } => {
+            if doc.node(&node.id).is_some() {
+                return Err(format!("node {} already exists", node.id));
+            }
+            doc.nodes.push(node.clone());
+        }
+        DecisionKind::NodeEdited {
+            node_id,
+            label,
+            node_kind,
+            description,
+        } => {
+            let node = doc
+                .node_mut(node_id)
+                .ok_or_else(|| format!("node {node_id} no longer exists"))?;
+            node.label = label.clone();
+            node.kind = *node_kind;
+            node.description = description.clone();
+        }
+        DecisionKind::NodeDeleted { node_id } => {
+            if doc.node(node_id).is_none() {
+                return Err(format!("node {node_id} no longer exists"));
+            }
+            doc.nodes.retain(|node| node.id != *node_id);
+            doc.edges
+                .retain(|edge| edge.from != *node_id && edge.to != *node_id);
+        }
+        DecisionKind::RemovalRequested { node_id } => {
+            doc.node_mut(node_id)
+                .ok_or_else(|| format!("node {node_id} no longer exists"))?
+                .status = ElementStatus::Removed;
+        }
+        DecisionKind::EdgeAdded {
+            from,
+            to,
+            edge_kind,
+        } => {
+            if doc.node(from).is_none() || doc.node(to).is_none() {
+                return Err(format!("edge {from} → {to} has a missing endpoint"));
+            }
+            if doc
+                .edges
+                .iter()
+                .any(|edge| edge.key() == (from, to, *edge_kind))
+            {
+                return Err(format!("edge {from} → {to} already exists"));
+            }
+            doc.edges.push(Edge {
+                from: from.clone(),
+                to: to.clone(),
+                kind: *edge_kind,
+                label: None,
+                status: ElementStatus::Proposed,
+                origin: Origin::User,
+            });
+        }
+        DecisionKind::EdgeDeleted {
+            from,
+            to,
+            edge_kind,
+        } => {
+            if !doc
+                .edges
+                .iter()
+                .any(|edge| edge.key() == (from, to, *edge_kind))
+            {
+                return Err(format!("edge {from} → {to} no longer exists"));
+            }
+            doc.edges
+                .retain(|edge| edge.key() != (from, to, *edge_kind));
+        }
+    }
+    Ok(())
 }
 
 /// Apply a snapshot: doc restored (revision stays monotonic — the watch
@@ -1207,8 +1539,8 @@ mod tests {
         assert!(
             matches!(
                 &log.last().unwrap().kind,
-                DecisionKind::NodeAdded { node_id, label, node_kind }
-                    if node_id == &id2 && label == "My Cache" && *node_kind == NodeKind::DataStore
+                DecisionKind::NodeAdded { node }
+                    if node.id == id2 && node.label == "My Cache" && node.kind == NodeKind::DataStore
             ),
             "last event: {:?}",
             log.last()
@@ -1598,6 +1930,56 @@ mod tests {
     }
 
     #[test]
+    fn legacy_persisted_note_and_node_events_deserialize() {
+        let state: SessionState = serde_json::from_str(
+            r#"{
+                "doc": {"title": "Legacy session"},
+                "decision_log": [
+                    {
+                        "seq": 1,
+                        "at": "2026-07-01T12:00:00Z",
+                        "kind": "note_added",
+                        "node_id": "legacy-node",
+                        "text": "Keep this context"
+                    },
+                    {
+                        "seq": 2,
+                        "at": "2026-07-01T12:01:00Z",
+                        "kind": "node_added",
+                        "node_id": "legacy-service",
+                        "label": "Legacy Service",
+                        "node_kind": "service"
+                    }
+                ],
+                "delivery_cursor": 0,
+                "flush_seq": 0,
+                "delivered_flush_seq": 0,
+                "activity": []
+            }"#,
+        )
+        .expect("legacy persisted session deserializes");
+
+        match &state.decision_log[0].kind {
+            DecisionKind::NoteAdded { node_id, note } => {
+                assert_eq!(node_id, &NodeId::from("legacy-node"));
+                assert_eq!(note.id, NoteId::from("legacy-note-1"));
+                assert_eq!(note.text, "Keep this context");
+                assert_eq!(note.created_at.to_rfc3339(), "2026-07-01T12:00:00+00:00");
+            }
+            event => panic!("expected migrated note event, got {event:?}"),
+        }
+        match &state.decision_log[1].kind {
+            DecisionKind::NodeAdded { node } => {
+                assert_eq!(node.id, NodeId::from("legacy-service"));
+                assert_eq!(node.label, "Legacy Service");
+                assert_eq!(node.kind, NodeKind::Service);
+                assert_eq!(node.origin, Origin::User);
+            }
+            event => panic!("expected migrated node event, got {event:?}"),
+        }
+    }
+
+    #[test]
     fn record_export_lands_in_activity() {
         let store = demo_store();
         store.record_export(std::path::Path::new("some/dir/session.export.md"));
@@ -1635,6 +2017,228 @@ mod tests {
                 vec![OptionId::from("ot"), OptionId::from("crdt")],
             )
             .unwrap();
+    }
+
+    #[test]
+    fn removing_an_earlier_queued_change_replays_later_changes() {
+        let store = demo_store();
+        let node = store
+            .add_user_node("Widget".into(), NodeKind::Component, None)
+            .unwrap();
+        store
+            .edit_node(&node, "Renamed".into(), NodeKind::Service, "edited".into())
+            .unwrap();
+
+        store.remove_queued_change(1).unwrap();
+
+        assert!(store.snapshot_doc().node(&node).is_none());
+        let changes = store.queued_changes();
+        assert_eq!(changes.len(), 1);
+        assert!(
+            changes[0]
+                .blocked_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("node"))
+        );
+        assert!(
+            store.peek_undelivered().is_empty(),
+            "blocked events do not send"
+        );
+    }
+
+    #[test]
+    fn removing_a_choice_pick_reopens_that_choice_and_keeps_a_note() {
+        let store = demo_store();
+        pick_first_choice(&store);
+        store
+            .add_note(&NodeId::from("sync-engine"), "Need migration notes".into())
+            .unwrap();
+
+        let target = store.remove_queued_change(1).unwrap();
+
+        assert_eq!(target.node_id, Some(NodeId::from("sync-engine")));
+        assert_eq!(
+            target.choice_id,
+            Some(ChoiceId::from("conflict-resolution"))
+        );
+        let doc = store.snapshot_doc();
+        let choice = doc
+            .node(&NodeId::from("sync-engine"))
+            .unwrap()
+            .choice(&ChoiceId::from("conflict-resolution"))
+            .unwrap();
+        assert_eq!(choice.status, ChoiceStatus::Open);
+        assert_eq!(store.peek_undelivered().len(), 1);
+    }
+
+    #[test]
+    fn agent_update_marks_pending_changes_unavailable_for_replay() {
+        let store = demo_store();
+        pick_first_choice(&store);
+        store
+            .apply_update(vec![GraphOp::SetTitle {
+                title: "Agent title".into(),
+            }])
+            .unwrap();
+
+        let change = store.queued_changes().pop().unwrap();
+
+        assert!(
+            change
+                .interaction_error
+                .as_deref()
+                .is_some_and(|reason| reason.contains("agent graph update"))
+        );
+        assert!(matches!(
+            store.remove_queued_change(change.event.seq),
+            Err(StoreError::MissingQueuedBaseline)
+        ));
+        assert_eq!(store.snapshot_doc().title, "Agent title");
+    }
+
+    #[test]
+    fn legacy_pending_changes_explain_that_they_cannot_be_replayed() {
+        let store = Store::new(SessionState {
+            doc: demo_doc(),
+            decision_log: vec![DecisionEvent {
+                seq: 1,
+                at: Utc::now(),
+                kind: DecisionKind::FlushRequested {
+                    comment: Some("legacy queue".into()),
+                },
+            }],
+            ..SessionState::default()
+        });
+
+        let change = store.queued_changes().pop().unwrap();
+
+        assert!(
+            change
+                .interaction_error
+                .as_deref()
+                .is_some_and(|reason| reason.contains("saved before queue editing"))
+        );
+        assert!(matches!(
+            store.remove_queued_change(change.event.seq),
+            Err(StoreError::MissingQueuedBaseline)
+        ));
+    }
+
+    #[test]
+    fn blocked_changes_have_stable_unique_ids() {
+        let store = demo_store();
+        let first = store
+            .add_user_node("First".into(), NodeKind::Component, None)
+            .unwrap();
+        store
+            .edit_node(
+                &first,
+                "First edited".into(),
+                NodeKind::Component,
+                String::new(),
+            )
+            .unwrap();
+        store.remove_queued_change(1).unwrap();
+
+        let second = store
+            .add_user_node("Second".into(), NodeKind::Component, None)
+            .unwrap();
+        store
+            .edit_node(
+                &second,
+                "Second edited".into(),
+                NodeKind::Component,
+                String::new(),
+            )
+            .unwrap();
+        store.remove_queued_change(1).unwrap();
+
+        let blocked: Vec<_> = store
+            .queued_changes()
+            .into_iter()
+            .filter(|change| change.blocked_reason.is_some())
+            .collect();
+        assert_eq!(blocked.len(), 2);
+        assert_ne!(blocked[0].id, blocked[1].id);
+
+        store.remove_blocked_change(&blocked[1].id).unwrap();
+        let remaining = store.queued_changes();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, blocked[0].id);
+    }
+
+    #[test]
+    fn removed_queue_items_are_never_delivered() {
+        let store = demo_store();
+        pick_first_choice(&store);
+        store
+            .add_note(&NodeId::from("sync-engine"), "keep cache local".into())
+            .unwrap();
+        store.remove_queued_change(1).unwrap();
+        store.request_flush(None);
+
+        let delivered = store.try_deliver().unwrap();
+
+        assert_eq!(delivered.len(), 1);
+        assert!(matches!(delivered[0].kind, DecisionKind::NoteAdded { .. }));
+    }
+
+    #[test]
+    fn removing_after_autoflush_cancels_delivery_until_a_new_send() {
+        let store = demo_store();
+        pick_first_choice(&store);
+        store
+            .dismiss_choice(
+                &NodeId::from("ws-gateway"),
+                &ChoiceId::from("ws-deployment"),
+                None,
+            )
+            .unwrap(); // last open choice → autoflush
+
+        store.remove_queued_change(1).unwrap();
+
+        assert!(store.try_deliver().is_none(), "removal cancels autoflush");
+        store.request_flush(None);
+        let delivered = store.try_deliver().expect("fresh send delivers");
+        assert_eq!(delivered.len(), 1);
+        assert!(matches!(
+            delivered[0].kind,
+            DecisionKind::ChoiceDismissed { .. }
+        ));
+    }
+
+    #[test]
+    fn removing_a_queued_comment_cancels_delivery_until_a_new_send() {
+        let store = demo_store();
+        store.request_flush(Some("hold for review".into()));
+
+        store.remove_queued_change(1).unwrap();
+
+        assert!(
+            store.try_deliver().is_none(),
+            "removal cancels the comment send"
+        );
+        store.request_flush(None);
+        assert_eq!(store.try_deliver(), Some(vec![]));
+    }
+
+    #[test]
+    fn removing_a_queued_change_preserves_a_later_position_change() {
+        let store = demo_store();
+        pick_first_choice(&store);
+        let position = Point { x: 240.0, y: 120.0 };
+        store.set_position(&NodeId::from("redis"), position);
+
+        store.remove_queued_change(1).unwrap();
+
+        assert_eq!(
+            store
+                .snapshot_doc()
+                .node(&NodeId::from("redis"))
+                .unwrap()
+                .position,
+            Some(position)
+        );
     }
 
     #[test]

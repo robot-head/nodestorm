@@ -19,6 +19,7 @@ use super::activity::ActivityFeed;
 use super::canvas::Canvas;
 use super::choice_panel::ChoicePanel;
 use super::diff_panel::DiffPanel;
+use super::queued_changes::QueuedChangesPanel;
 use super::timeline::Timeline;
 use super::topbar::TopBar;
 
@@ -36,6 +37,10 @@ pub fn App() -> Element {
     use_context_provider(|| super::ZoomTarget(Signal::new(None)));
     let mut search = use_context_provider(|| super::SearchQuery(Signal::new(String::new()))).0;
     let mut compare_with = use_context_provider(|| super::CompareWith(Signal::new(None))).0;
+    use_context_provider(|| super::MessageComposer {
+        comment: Signal::new(String::new()),
+        open: Signal::new(false),
+    });
 
     // Theme preference: seeded from the file loaded in launch(); the CSS
     // reacts through data-theme/data-mode below, the native title bar
@@ -57,6 +62,7 @@ pub fn App() -> Element {
     let mut selected: Signal<Option<NodeId>> = use_signal(|| None);
     let hovered_affects: Signal<Vec<NodeId>> = use_signal(Vec::new);
     let mut timeline_open: Signal<bool> = use_signal(|| false);
+    let mut queued_changes_open: Signal<bool> = use_signal(|| false);
 
     // Store → UI bridge: revision changes re-snapshot; generation changes
     // re-subscribe to the new active store and reset per-session view state.
@@ -89,6 +95,7 @@ pub fn App() -> Element {
                                 connect_from.set(None);
                                 search.set(String::new());
                                 compare_with.set(None);
+                                queued_changes_open.set(false);
                                 break;
                             }
                         }
@@ -122,21 +129,11 @@ pub fn App() -> Element {
             class: "app",
             "data-theme": "{theme_prefs.read().theme}",
             "data-mode": "{theme_prefs.read().mode.as_str()}",
-            TopBar { doc, meta, selected, session_name, timeline_open }
+            TopBar { doc, meta, selected, session_name, timeline_open, queued_changes_open }
             div { class: "main",
                 if has_nodes {
                     Canvas { doc, layout, selected, hovered_affects }
                     ActivityFeed { meta }
-                    if let Some(node) = selected_node {
-                        // Keyed so switching nodes remounts the panel and its
-                        // edit-form drafts start from the new node's content.
-                        // Selection takes the right-panel slot over Timeline.
-                        ChoicePanel { key: "{node.id}", node, doc, selected, hovered_affects }
-                    } else if let Some(text) = compare_text {
-                        DiffPanel { text, on_close: move |()| compare_with.set(None) }
-                    } else if timeline_open() {
-                        Timeline { doc, meta, on_close: move |()| timeline_open.set(false) }
-                    }
                 } else {
                     div { class: "empty-state",
                         span { class: "empty-bolt", "ϟ" }
@@ -161,6 +158,23 @@ pub fn App() -> Element {
                             code { "claude mcp add --transport http nodestorm {mcp_url}" }
                             span { class: "empty-copy", "⧉" }
                         }
+                    }
+                }
+                if let Some(node) = selected_node {
+                    // Keyed so switching nodes remounts the panel and its
+                    // edit-form drafts start from the new node's content.
+                    // Selection takes the right-panel slot over Timeline.
+                    ChoicePanel { key: "{node.id}", node, doc, selected, hovered_affects }
+                } else if let Some(text) = compare_text {
+                    DiffPanel { text, on_close: move |()| compare_with.set(None) }
+                } else if timeline_open() {
+                    Timeline { doc, meta, on_close: move |()| timeline_open.set(false) }
+                } else if queued_changes_open() {
+                    QueuedChangesPanel {
+                        doc,
+                        meta,
+                        selected,
+                        on_close: move |()| queued_changes_open.set(false),
                     }
                 }
             }

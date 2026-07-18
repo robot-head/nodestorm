@@ -493,7 +493,7 @@ pub enum GraphOp {
 ///
 /// No `deny_unknown_fields` here: it is incompatible with `flatten`, and this
 /// type flows outward (store → agent) rather than being agent-authored.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct DecisionEvent {
     /// 1-based position in the session's append-only decision log.
     pub seq: u64,
@@ -522,7 +522,7 @@ pub enum DecisionKind {
     },
     NoteAdded {
         node_id: NodeId,
-        text: String,
+        note: Note,
     },
     /// The user pressed "Send to agent" (possibly with no other events —
     /// that means "reviewed, proceed").
@@ -532,11 +532,8 @@ pub enum DecisionKind {
     },
     /// The user created a node on the canvas. Enriching it via upsert adopts
     /// it — from then on the agent carries it forward like its own nodes.
-    /// (Field is `node_kind`, not `kind`: the envelope's tag owns that name.)
     NodeAdded {
-        node_id: NodeId,
-        label: String,
-        node_kind: NodeKind,
+        node: Node,
     },
     /// The user edited a card. Treat the new content as canonical.
     NodeEdited {
@@ -566,6 +563,93 @@ pub enum DecisionKind {
         to: NodeId,
         edge_kind: EdgeKind,
     },
+}
+
+#[derive(Deserialize)]
+struct CurrentDecisionEvent {
+    seq: u64,
+    at: DateTime<Utc>,
+    #[serde(flatten)]
+    kind: DecisionKind,
+}
+
+#[derive(Deserialize)]
+struct LegacyDecisionEvent {
+    seq: u64,
+    at: DateTime<Utc>,
+    #[serde(flatten)]
+    kind: LegacyDecisionKind,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum LegacyDecisionKind {
+    NoteAdded {
+        node_id: NodeId,
+        text: String,
+    },
+    NodeAdded {
+        node_id: NodeId,
+        label: String,
+        node_kind: NodeKind,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum DecisionEventWire {
+    Current(CurrentDecisionEvent),
+    Legacy(LegacyDecisionEvent),
+}
+
+impl<'de> Deserialize<'de> for DecisionEvent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        match DecisionEventWire::deserialize(deserializer)? {
+            DecisionEventWire::Current(event) => Ok(Self {
+                seq: event.seq,
+                at: event.at,
+                kind: event.kind,
+            }),
+            DecisionEventWire::Legacy(event) => {
+                let kind = match event.kind {
+                    LegacyDecisionKind::NoteAdded { node_id, text } => DecisionKind::NoteAdded {
+                        node_id,
+                        note: Note {
+                            id: NoteId::new(format!("legacy-note-{}", event.seq)),
+                            text,
+                            created_at: event.at,
+                        },
+                    },
+                    LegacyDecisionKind::NodeAdded {
+                        node_id,
+                        label,
+                        node_kind,
+                    } => DecisionKind::NodeAdded {
+                        node: Node {
+                            id: node_id,
+                            label,
+                            kind: node_kind,
+                            description: String::new(),
+                            status: ElementStatus::Proposed,
+                            group: None,
+                            choices: vec![],
+                            notes: vec![],
+                            position: None,
+                            origin: Origin::User,
+                        },
+                    },
+                };
+                Ok(Self {
+                    seq: event.seq,
+                    at: event.at,
+                    kind,
+                })
+            }
+        }
+    }
 }
 
 /// Entry in the UI activity feed.
@@ -693,9 +777,18 @@ mod tests {
                 seq: 1,
                 at,
                 kind: DecisionKind::NodeAdded {
-                    node_id: "rate-limiter".into(),
-                    label: "Rate Limiter".into(),
-                    node_kind: NodeKind::Component,
+                    node: Node {
+                        id: "rate-limiter".into(),
+                        label: "Rate Limiter".into(),
+                        kind: NodeKind::Component,
+                        description: String::new(),
+                        status: ElementStatus::Proposed,
+                        group: None,
+                        choices: vec![],
+                        notes: vec![],
+                        position: None,
+                        origin: Origin::User,
+                    },
                 },
             },
             DecisionEvent {
