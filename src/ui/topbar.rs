@@ -83,7 +83,10 @@ pub fn TopBar(
 
     rsx! {
         header { class: "topbar",
-            span { class: "topbar-brand", "nodestorm" }
+            span { class: "topbar-brand",
+                span { class: "topbar-bolt", "ϟ" }
+                span { class: "topbar-word", "nodestorm" }
+            }
             div { class: "export-menu",
                 button {
                     class: "btn",
@@ -254,7 +257,6 @@ pub fn TopBar(
                     }
                 }
             }
-            span { class: "topbar-title", "{title}" }
             input {
                 class: "search-box",
                 placeholder: "search components…",
@@ -285,19 +287,46 @@ pub fn TopBar(
                     }
                 },
             }
+            span { class: "topbar-title", "{title}" }
             span { class: "topbar-spacer" }
-            if m.waiting_agents > 0 {
-                span { class: "pill pill-waiting", "● agent is waiting for your decisions" }
-            }
-            if open > 0 {
-                span { class: "pill pill-open", "{open} open decision{plural}" }
-            }
-            if m.undelivered > 0 {
-                span { class: "pill pill-undelivered", "{m.undelivered} to send" }
+            if m.waiting_agents > 0 || open > 0 || m.undelivered > 0 {
+                span { class: "status-chip",
+                    if m.waiting_agents > 0 {
+                        span {
+                            class: "seg seg-waiting",
+                            role: "status",
+                            aria_label: "● agent is waiting for your decisions",
+                            title: "An agent is blocked in await_decisions",
+                            span { class: "seg-dot", "●" }
+                            span { class: "seg-word", "waiting" }
+                        }
+                    }
+                    if open > 0 {
+                        span {
+                            class: "seg seg-open",
+                            role: "status",
+                            aria_label: "{open} open decision{plural}",
+                            title: "Choices still waiting for a pick",
+                            "{open}"
+                            span { class: "seg-word", " open" }
+                        }
+                    }
+                    if m.undelivered > 0 {
+                        span {
+                            class: "seg seg-queued",
+                            role: "status",
+                            aria_label: "{m.undelivered} to send",
+                            title: "Decisions queued for the next Send",
+                            "{m.undelivered}"
+                            span { class: "seg-word", " queued" }
+                        }
+                    }
+                }
             }
             button {
-                class: "btn",
+                class: "btn pod-icon pod-undo",
                 disabled: !m.undo_available,
+                aria_label: "↶ Undo",
                 title: "Undo your last edit or undelivered decision (Ctrl+Z)",
                 onclick: {
                     let store = store.clone();
@@ -305,11 +334,12 @@ pub fn TopBar(
                         store.undo();
                     }
                 },
-                "↶ Undo"
+                "↶"
             }
             button {
-                class: "btn",
+                class: "btn pod-icon pod-redo",
                 disabled: !m.redo_available,
+                aria_label: "↷ Redo",
                 title: "Redo (Ctrl+Y)",
                 onclick: {
                     let store = store.clone();
@@ -317,10 +347,11 @@ pub fn TopBar(
                         store.redo();
                     }
                 },
-                "↷ Redo"
+                "↷"
             }
             button {
                 class: if timeline_open() { "btn btn-armed" } else { "btn" },
+                aria_label: "Timeline",
                 title: "Show the session log: every decision, note, and edit in order",
                 onclick: {
                     let mut selected = selected;
@@ -330,10 +361,12 @@ pub fn TopBar(
                         timeline_open.toggle();
                     }
                 },
-                "Timeline"
+                span { class: "pod-glyph", "◷" }
+                span { class: "pod-label", "Timeline" }
             }
             button {
                 class: "btn",
+                aria_label: "+ Component",
                 title: "Add a component you own to the canvas (agents adopt it if they enrich it)",
                 onclick: {
                     let store = store.clone();
@@ -349,7 +382,8 @@ pub fn TopBar(
                         }
                     }
                 },
-                "+ Component"
+                span { class: "pod-glyph", "+" }
+                span { class: "pod-label", "node" }
             }
             div { class: "export-menu",
                 button {
@@ -478,6 +512,7 @@ pub fn TopBar(
             button {
                 class: "btn btn-send",
                 disabled: !can_send,
+                aria_label: "Send to agent",
                 title: "Deliver your decisions and notes to the waiting agent",
                 onclick: {
                     let store = store.clone();
@@ -487,7 +522,8 @@ pub fn TopBar(
                         comment.set(String::new());
                     }
                 },
-                "Send to agent"
+                span { class: "send-bolt", "ϟ" }
+                "Send"
             }
         }
     }
