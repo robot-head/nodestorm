@@ -380,20 +380,26 @@ function Invoke-Segment2 {
     Click-Element $script:Hwnd ([string][char]0x2715)   # close panel
     Click-Element $script:Hwnd 'Notes Store'
     if (-not (Wait-Element 'Edit history storage' 10)) { Fail 'choice panel did not open on Notes Store' }
+    # Picking the LAST open choice triggers nodestorm's autoflush: decisions
+    # deliver immediately, no Send click needed, and demo_agent reacts right
+    # away (Sync Engine -> modified, Notes Store -> affected). The captions
+    # narrate that truthfully: announce the auto-delivery BEFORE the pick,
+    # then let the reaction land inside this caption's window.
+    Add-Caption 'Deciding the last open choice delivers automatically - watch the agent react' 3.5
     Click-Element $script:Hwnd 'Append-only event log'
+    # The status tag renders lowercase but CSS text-transform:uppercase
+    # changes the UIA-exposed name (see verify-windows.ps1), so wait on the
+    # uppercase tag.
+    if (-not (Wait-Element 'MODIFIED' 20)) { Fail 'agent did not react with a modified Sync Engine' }
+    Invoke-Dwell 3
+    # After the autoflush the agent re-enters await_decisions, so Send is
+    # live again and really does deliver the note on its own.
+    Add-Caption 'Notes ride along too - type a message and Send delivers it to the waiting agent' 3
     Click-Element $script:Hwnd ('optional message to the agent' + [char]0x2026)
     Type-Text $script:Hwnd 'prefer CRDTs - offline first'
-    Add-Caption 'Add a note for the agent and send your decisions' 3
-    # Show the typed note before Send whisks it away.
-    Invoke-Dwell 2
+    Invoke-Dwell 1.5
     Click-Element $script:Hwnd 'Send to agent'
-    # The agent reacts once per delivery: Sync Engine -> modified, Notes
-    # Store -> affected. The status tag renders lowercase but CSS
-    # text-transform:uppercase changes the UIA-exposed name (see
-    # verify-windows.ps1), so wait on the uppercase tag.
-    if (-not (Wait-Element 'MODIFIED' 20)) { Fail 'agent did not react with a modified Sync Engine' }
-    Add-Caption 'The agent wakes with your decisions and updates the graph' 3
-    Invoke-Dwell 3
+    Invoke-Dwell 2
     Save-Captions $seg
     Stop-Capture
 }
@@ -668,12 +674,25 @@ function Invoke-Segment8 {
     }
 
     # Merge captions.json, offsetting run2's timestamps by run1's duration
-    # (frame count / 10fps - same arithmetic Write-DemoSrt uses).
+    # (frame count / 10fps - same arithmetic Write-DemoSrt uses). Run1's
+    # captions are clamped to run1's frame-derived duration first:
+    # Save-Captions gives the last caption end = max(start+min, now), which
+    # can run a beat past run1's final captured frame - but run2's first
+    # caption starts exactly at the boundary ($offset), so an unclamped
+    # run1 tail would overlap it (double-rendered drawtext for the spill,
+    # overlapping SRT cues).
     $caps1 = Read-Captions $dir1
     $caps2 = Read-Captions $dir2
     $offset = $n / 10.0
     $mergedCaps = @()
-    foreach ($c in $caps1) { $mergedCaps += $c }
+    foreach ($c in $caps1) {
+        $mergedCaps += [pscustomobject]@{
+            start = [Math]::Min([double]$c.start, $offset)
+            end   = [Math]::Min([double]$c.end, $offset)
+            min   = $c.min
+            text  = $c.text
+        }
+    }
     foreach ($c in $caps2) {
         $mergedCaps += [pscustomobject]@{
             start = $c.start + $offset
@@ -742,13 +761,24 @@ function Write-DemoSrt([string[]]$Names, [string]$OutSrt) {
         $seg = Join-Path $WorkDir $n
         $caps = Read-Captions $seg
         $frameCount = (Get-ChildItem (Join-Path $seg 'frames') -Filter 'frame_*.png').Count
+        # Clamp each caption to the segment's frame-derived duration:
+        # Save-Captions gives the LAST caption end = max(start+min, now),
+        # which can run past the final captured frame (capture stops right
+        # after), while the next segment's cues start at offset+its own
+        # start. Without the clamp a segment's last cue can spill past the
+        # boundary and overlap the next segment's first cue in the SRT.
+        # (The burned-in captions are unaffected: each segment's video ends
+        # where its frames end, so the spill is invisible there.)
+        $segDur = $frameCount / 10.0
         foreach ($c in $caps) {
-            $fmt = { param($s) ([TimeSpan]::FromSeconds($s)).ToString('hh\:mm\:ss\,fff') }
+            $s = [Math]::Min([double]$c.start, $segDur)
+            $e = [Math]::Min([double]$c.end, $segDur)
+            $fmt = { param($t) ([TimeSpan]::FromSeconds($t)).ToString('hh\:mm\:ss\,fff') }
             $lines += $idx; $idx++
-            $lines += ('{0} --> {1}' -f (& $fmt ($offset + $c.start)), (& $fmt ($offset + $c.end)))
+            $lines += ('{0} --> {1}' -f (& $fmt ($offset + $s)), (& $fmt ($offset + $e)))
             $lines += $c.text; $lines += ''
         }
-        $offset += $frameCount / 10.0
+        $offset += $segDur
     }
     Write-Utf8NoBom $OutSrt (($lines -join "`r`n") + "`r`n")
 }
