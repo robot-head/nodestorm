@@ -36,7 +36,7 @@ HTTP).
   your components survive agent re-proposes.
 - **Everything leaves a record**: the agent pulls a Markdown decision record
   (with an embedded Mermaid diagram) over `export_markdown` and writes it
-  into your repo — or use the **Export ▾** menu (write next to the session
+  into your repo — or use **⋯ More → Export ▾** (write next to the session
   file, Save As…, copy Markdown/Mermaid to the clipboard, or a mermaid-only
   file).
 
@@ -113,7 +113,7 @@ Every edit flows back as a decision event with your next Send.
   immediately (with their edges); agent components are only marked
   `removed` — the agent gets a `removal_requested` event and applies it (or
   pushes back). Edges always delete immediately.
-- **Undo/Redo** (topbar buttons or `Ctrl+Z`/`Ctrl+Y`) covers every edit
+- **Undo/Redo** (topbar buttons — inside **⋯ More** on very narrow windows — or `Ctrl+Z`/`Ctrl+Y`) covers every edit
   and every not-yet-sent decision. Honest boundaries: once decisions are
   delivered to the agent, or the agent mutates the graph, the undo history
   clears — you can't unsend facts or silently clobber agent work.
@@ -171,7 +171,7 @@ you typed into the Send box.
 
 ## Theming
 
-The **Theme ▾** menu in the top bar picks a color palette and mode. Twelve
+**⋯ More → Theme ▾** in the top bar picks a color palette and mode. Twelve
 palette families, each with a dark **and** a light variant: Nodestorm (the
 default), Solarized, Gruvbox, Catppuccin (Mocha/Latte), Nord, Dracula,
 Tokyo Night, One, GitHub, Everforest, Rosé Pine, and Monokai. Each row
