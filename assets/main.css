@@ -1977,7 +1977,7 @@ button.empty-cmd code {
   }
 }
 
-@media (max-width: 320px) {
+@media (max-width: 519px) {
   .topbar {
     overflow-x: auto;
     scrollbar-width: none;

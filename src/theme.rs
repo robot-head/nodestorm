@@ -227,7 +227,7 @@ mod tests {
 
     #[test]
     fn minimum_viewport_keeps_topbar_and_menus_reachable() {
-        const MEDIA: &str = "@media (max-width: 320px) {";
+        const MEDIA: &str = "@media (max-width: 519px) {";
         let media_start = CSS
             .rfind(MEDIA)
             .unwrap_or_else(|| panic!("stylesheet must end with a {MEDIA} rule"));
