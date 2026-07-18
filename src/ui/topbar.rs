@@ -1,44 +1,12 @@
-//! Top bar: session title, agent status pill, Export, and the Send-to-agent
-//! control.
-
-use std::sync::Arc;
+//! Top bar: brand, session switcher, search, the fused status chip, the
+//! action pods, the ⋯ More menu mount, and the Send-to-agent control.
 
 use dioxus::prelude::*;
 
-use crate::cli::Cli;
 use crate::model::{NodeId, NodeKind, SessionDoc};
-use crate::store::{Store, UiMeta};
+use crate::store::UiMeta;
 
 use super::app::use_store;
-use super::theme_menu::ThemeMenu;
-
-/// Render the full decision record from current store state.
-fn render_markdown_now(store: &Arc<Store>) -> String {
-    store.read(|s| crate::export::render_markdown(&s.doc, &s.decision_log, chrono::Utc::now()))
-}
-
-/// Activity-feed receipt for an export outcome.
-fn report_export(store: &Arc<Store>, outcome: anyhow::Result<std::path::PathBuf>) {
-    match outcome {
-        Ok(path) => store.record_export(&path),
-        Err(err) => {
-            tracing::warn!(%err, "export failed");
-            store.record_export_failed(&err.to_string());
-        }
-    }
-}
-
-/// Clipboard write via the WebView's `navigator.clipboard` (no native
-/// clipboard dependency); the receipt lands in the activity feed.
-fn copy_to_clipboard(store: &Arc<Store>, text: String, receipt: &str) {
-    match serde_json::to_string(&text) {
-        Ok(js) => {
-            document::eval(&format!("navigator.clipboard.writeText({js});"));
-            store.record_user_action(receipt.to_owned());
-        }
-        Err(err) => tracing::warn!(%err, "clipboard serialization failed"),
-    }
-}
 
 #[component]
 pub fn TopBar(
@@ -49,9 +17,9 @@ pub fn TopBar(
     timeline_open: Signal<bool>,
 ) -> Element {
     let store = use_store();
-    let cli = use_context::<Cli>();
     let sessions = use_context::<std::sync::Arc<crate::sessions::Sessions>>();
     let mut comment = use_signal(String::new);
+    let mut compose_open = use_signal(|| false);
     let mut sessions_open = use_signal(|| false);
     let mut new_session_draft = use_signal(String::new);
     let mut rename_draft = use_signal(String::new);
@@ -67,7 +35,6 @@ pub fn TopBar(
         d.title.clone()
     };
     let can_send = m.undelivered > 0 || m.waiting_agents > 0;
-    let mut export_open = use_signal(|| false);
     let suggested_name = {
         let slug = if d.title.is_empty() {
             "brainstorm".to_owned()
@@ -83,10 +50,13 @@ pub fn TopBar(
 
     rsx! {
         header { class: "topbar",
-            span { class: "topbar-brand", "nodestorm" }
+            span { class: "topbar-brand",
+                span { class: "topbar-bolt", "ϟ" }
+                span { class: "topbar-word", "nodestorm" }
+            }
             div { class: "export-menu",
                 button {
-                    class: "btn",
+                    class: "btn sess-pod",
                     title: "Switch, create, or archive named sessions",
                     onclick: move |_| sessions_open.toggle(),
                     "{session_name} ▾"
@@ -254,50 +224,79 @@ pub fn TopBar(
                     }
                 }
             }
-            span { class: "topbar-title", "{title}" }
-            input {
-                class: "search-box",
-                placeholder: "search components…",
-                value: "{search}",
-                oninput: move |ev| {
-                    search.set(ev.value());
-                    search_cursor.set(0);
-                },
-                onkeydown: move |ev| {
-                    if ev.key() == Key::Enter {
-                        // Cycle through matches in document order, zooming to
-                        // each.
-                        let matches: Vec<_> = doc
-                            .read()
-                            .nodes
-                            .iter()
-                            .filter(|n| crate::ui::node_matches(n, &search.read()))
-                            .map(|n| n.id.clone())
-                            .collect();
-                        if !matches.is_empty() {
-                            let i = search_cursor() % matches.len();
-                            zoom_target.set(Some(matches[i].clone()));
-                            search_cursor.set(i + 1);
-                        }
-                    } else if ev.key() == Key::Escape {
-                        search.set(String::new());
+            span { class: "search-pod",
+                span { class: "search-glyph", "⌕" }
+                input {
+                    class: "search-box",
+                    placeholder: "search components…",
+                    value: "{search}",
+                    oninput: move |ev| {
+                        search.set(ev.value());
                         search_cursor.set(0);
-                    }
-                },
+                    },
+                    onkeydown: move |ev| {
+                        if ev.key() == Key::Enter {
+                            // Cycle through matches in document order, zooming to
+                            // each.
+                            let matches: Vec<_> = doc
+                                .read()
+                                .nodes
+                                .iter()
+                                .filter(|n| crate::ui::node_matches(n, &search.read()))
+                                .map(|n| n.id.clone())
+                                .collect();
+                            if !matches.is_empty() {
+                                let i = search_cursor() % matches.len();
+                                zoom_target.set(Some(matches[i].clone()));
+                                search_cursor.set(i + 1);
+                            }
+                        } else if ev.key() == Key::Escape {
+                            search.set(String::new());
+                            search_cursor.set(0);
+                        }
+                    },
+                }
             }
+            span { class: "topbar-title", "{title}" }
             span { class: "topbar-spacer" }
-            if m.waiting_agents > 0 {
-                span { class: "pill pill-waiting", "● agent is waiting for your decisions" }
-            }
-            if open > 0 {
-                span { class: "pill pill-open", "{open} open decision{plural}" }
-            }
-            if m.undelivered > 0 {
-                span { class: "pill pill-undelivered", "{m.undelivered} to send" }
+            if m.waiting_agents > 0 || open > 0 || m.undelivered > 0 {
+                span { class: "status-chip",
+                    if m.waiting_agents > 0 {
+                        span {
+                            class: "seg seg-waiting",
+                            role: "status",
+                            aria_label: "● agent is waiting for your decisions",
+                            title: "An agent is blocked in await_decisions",
+                            span { class: "seg-dot", "●" }
+                            span { class: "seg-word", "waiting" }
+                        }
+                    }
+                    if open > 0 {
+                        span {
+                            class: "seg seg-open",
+                            role: "status",
+                            aria_label: "{open} open decision{plural}",
+                            title: "Choices still waiting for a pick",
+                            "{open}"
+                            span { class: "seg-word", " open" }
+                        }
+                    }
+                    if m.undelivered > 0 {
+                        span {
+                            class: "seg seg-queued",
+                            role: "status",
+                            aria_label: "{m.undelivered} to send",
+                            title: "Decisions queued for the next Send",
+                            "{m.undelivered}"
+                            span { class: "seg-word", " queued" }
+                        }
+                    }
+                }
             }
             button {
-                class: "btn",
+                class: "btn pod-icon pod-undo",
                 disabled: !m.undo_available,
+                aria_label: "↶ Undo",
                 title: "Undo your last edit or undelivered decision (Ctrl+Z)",
                 onclick: {
                     let store = store.clone();
@@ -305,11 +304,12 @@ pub fn TopBar(
                         store.undo();
                     }
                 },
-                "↶ Undo"
+                "↶"
             }
             button {
-                class: "btn",
+                class: "btn pod-icon pod-redo",
                 disabled: !m.redo_available,
+                aria_label: "↷ Redo",
                 title: "Redo (Ctrl+Y)",
                 onclick: {
                     let store = store.clone();
@@ -317,10 +317,11 @@ pub fn TopBar(
                         store.redo();
                     }
                 },
-                "↷ Redo"
+                "↷"
             }
             button {
                 class: if timeline_open() { "btn btn-armed" } else { "btn" },
+                aria_label: "Timeline",
                 title: "Show the session log: every decision, note, and edit in order",
                 onclick: {
                     let mut selected = selected;
@@ -330,10 +331,12 @@ pub fn TopBar(
                         timeline_open.toggle();
                     }
                 },
-                "Timeline"
+                span { class: "pod-glyph", "◷" }
+                span { class: "pod-label", "Timeline" }
             }
             button {
                 class: "btn",
+                aria_label: "+ Component",
                 title: "Add a component you own to the canvas (agents adopt it if they enrich it)",
                 onclick: {
                     let store = store.clone();
@@ -349,126 +352,47 @@ pub fn TopBar(
                         }
                     }
                 },
-                "+ Component"
+                span { class: "pod-glyph", "+" }
+                span { class: "pod-label", "node" }
             }
-            div { class: "export-menu",
+            super::more_menu::MoreMenu { has_nodes, suggested_name: suggested_name.clone() }
+            div { class: "export-menu compose-menu",
                 button {
-                    class: "btn",
-                    disabled: !has_nodes,
-                    title: "Export the brainstorm as a decision record",
-                    onclick: move |_| export_open.toggle(),
-                    "Export ▾"
+                    class: "btn pod-icon pod-compose",
+                    aria_label: "Message to agent",
+                    title: "Attach an optional message to your next Send",
+                    onclick: move |_| compose_open.toggle(),
+                    "✎"
                 }
-                if export_open() {
+                if compose_open() {
                     div {
                         class: "menu-catcher",
-                        onclick: move |_| export_open.set(false),
+                        onclick: move |_| compose_open.set(false),
                     }
-                    div { class: "export-dropdown",
-                        button {
-                            title: "Write the Markdown record next to the session file",
-                            onclick: {
-                                let store = store.clone();
-                                let cli = cli.clone();
-                                move |_| {
-                                    export_open.set(false);
-                                    let outcome = cli.session_path().and_then(|session| {
-                                        let path = crate::persist::export_path(&session);
-                                        crate::persist::save_export(
-                                            &path,
-                                            &render_markdown_now(&store),
-                                        )?;
-                                        Ok(path)
-                                    });
-                                    report_export(&store, outcome);
-                                }
-                            },
-                            "Export"
+                    div { class: "export-dropdown compose-pop",
+                        textarea {
+                            class: "note-input compose-input",
+                            placeholder: "optional message to the agent…",
+                            value: "{comment}",
+                            oninput: move |ev| comment.set(ev.value()),
                         }
                         button {
-                            title: "Pick where the Markdown record is saved",
-                            onclick: {
-                                let store = store.clone();
-                                let suggested = suggested_name.clone();
-                                move |_| {
-                                    export_open.set(false);
-                                    let Some(path) = rfd::FileDialog::new()
-                                        .set_file_name(&suggested)
-                                        .save_file()
-                                    else {
-                                        return;
-                                    };
-                                    let outcome = crate::persist::save_export(
-                                        &path,
-                                        &render_markdown_now(&store),
-                                    )
-                                    .map(|()| path);
-                                    report_export(&store, outcome);
-                                }
-                            },
-                            "Export As…"
-                        }
-                        button {
-                            title: "Copy the Markdown record to the clipboard",
+                            class: "btn btn-send",
+                            disabled: !can_send,
                             onclick: {
                                 let store = store.clone();
                                 move |_| {
-                                    export_open.set(false);
-                                    copy_to_clipboard(
-                                        &store,
-                                        render_markdown_now(&store),
-                                        "copied the decision record to the clipboard",
-                                    );
+                                    let text = comment.read().trim().to_owned();
+                                    store.request_flush(if text.is_empty() { None } else { Some(text) });
+                                    comment.set(String::new());
+                                    compose_open.set(false);
                                 }
                             },
-                            "Copy Markdown"
-                        }
-                        button {
-                            title: "Copy just the Mermaid diagram to the clipboard",
-                            onclick: {
-                                let store = store.clone();
-                                move |_| {
-                                    export_open.set(false);
-                                    let text = format!(
-                                        "```mermaid\n{}```\n",
-                                        store.read(|s| crate::export::render_mermaid(&s.doc)),
-                                    );
-                                    copy_to_clipboard(
-                                        &store,
-                                        text,
-                                        "copied the Mermaid diagram to the clipboard",
-                                    );
-                                }
-                            },
-                            "Copy Mermaid"
-                        }
-                        button {
-                            title: "Write just the Mermaid diagram next to the session file",
-                            onclick: {
-                                let store = store.clone();
-                                let cli = cli.clone();
-                                move |_| {
-                                    export_open.set(false);
-                                    let outcome = cli.session_path().and_then(|session| {
-                                        let path =
-                                            crate::persist::mermaid_export_path(&session);
-                                        let body = store
-                                            .read(|s| crate::export::render_mermaid(&s.doc));
-                                        crate::persist::save_export(
-                                            &path,
-                                            &format!("```mermaid\n{body}```\n"),
-                                        )?;
-                                        Ok(path)
-                                    });
-                                    report_export(&store, outcome);
-                                }
-                            },
-                            "Export Mermaid only"
+                            "Send with message"
                         }
                     }
                 }
             }
-            ThemeMenu {}
             input {
                 class: "send-comment",
                 placeholder: "optional message to the agent…",
@@ -478,6 +402,7 @@ pub fn TopBar(
             button {
                 class: "btn btn-send",
                 disabled: !can_send,
+                aria_label: "Send to agent",
                 title: "Deliver your decisions and notes to the waiting agent",
                 onclick: {
                     let store = store.clone();
@@ -487,7 +412,8 @@ pub fn TopBar(
                         comment.set(String::new());
                     }
                 },
-                "Send to agent"
+                span { class: "send-bolt", "ϟ" }
+                "Send"
             }
         }
     }

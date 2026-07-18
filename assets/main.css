@@ -10,6 +10,11 @@
   --text-dim: #9aa1b5;
   --accent: #6c9ef8;
 
+  /* Storm identity: derived from the active palette, never per-theme. */
+  --glow: color-mix(in srgb, var(--accent) 55%, transparent);
+  --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
+  --font-display: "Space Grotesk", "Inter", "Segoe UI", system-ui, sans-serif;
+
   /* status palette */
   --status-existing: #566076;
   --status-proposed: #6c9ef8;
@@ -72,12 +77,33 @@ body {
   border-bottom: 1px solid var(--border);
   flex: 0 0 auto;
   z-index: 10;
+  container-type: inline-size;
+  container-name: topbar;
 }
 
 .topbar-brand {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
   font-weight: 700;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
+  font-size: 14px;
+}
+
+.topbar-bolt {
   color: var(--accent);
+  font-weight: 700;
+  text-shadow: 0 0 8px var(--glow);
+}
+
+.topbar-word {
+  color: var(--text);
+}
+
+.topbar-brand,
+.panel-head h2,
+.empty-state h1 {
+  font-family: var(--font-display);
 }
 
 .topbar-title {
@@ -112,23 +138,75 @@ body {
   animation: pulse 1.6s ease-in-out infinite;
 }
 
-.pill-undelivered {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-}
-
 @keyframes pulse {
   50% {
     opacity: 0.55;
   }
 }
 
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: 999px;
+  overflow: hidden;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.seg + .seg {
+  border-left: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+
+.seg-waiting {
+  color: var(--badge-decided);
+  background: color-mix(in srgb, var(--badge-decided) 10%, transparent);
+}
+
+.seg-waiting .seg-dot {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.seg-open {
+  color: var(--badge-open);
+  background: color-mix(in srgb, var(--badge-open) 10%, transparent);
+}
+
+.seg-queued {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.pod-icon {
+  padding: 6px 9px;
+}
+
+.pod-glyph {
+  color: var(--text-dim);
+}
+
+.btn:hover:not(:disabled) .pod-glyph {
+  color: var(--text);
+}
+
+.send-bolt {
+  font-weight: 700;
+}
+
 .send-comment {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 999px;
   color: var(--text);
-  padding: 6px 10px;
+  padding: 6px 12px;
   /* Shrinkable so the topbar fits narrow windows (basis 230px, floor 110px). */
   width: 230px;
   min-width: 110px;
@@ -140,21 +218,28 @@ body {
 .send-comment:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
 .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 999px;
   color: var(--text);
   padding: 6px 14px;
   font: inherit;
   font-size: 12.5px;
   cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
 }
 
 .btn:hover:not(:disabled) {
   border-color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .btn:disabled {
@@ -169,6 +254,11 @@ body {
   font-weight: 700;
 }
 
+.btn-send:hover:not(:disabled) {
+  background: var(--accent);
+  box-shadow: 0 0 12px var(--glow);
+}
+
 .btn-ghost {
   background: transparent;
   color: var(--text-dim);
@@ -177,7 +267,7 @@ body {
 .ctl-btn {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 999px;
   color: var(--text-dim);
   padding: 4px 10px;
   cursor: pointer;
@@ -201,15 +291,56 @@ body {
   gap: 12px;
 }
 
+.empty-bolt {
+  font-size: 56px;
+  color: var(--accent);
+  text-shadow: 0 0 24px var(--glow);
+  line-height: 1;
+}
+
 .empty-state h1 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: 0.06em;
   font-size: 28px;
-  letter-spacing: 0.04em;
   margin: 0;
 }
 
 .empty-state p {
   color: var(--text-dim);
   margin: 0;
+}
+
+.empty-cmd {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  padding: 8px 16px;
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.empty-cmd:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 10px var(--glow);
+}
+
+/* button.empty-cmd (0,1,2) outranks the later .empty-state code (0,1,1),
+   so the pod's command text stays flat — no nested box inside the pill. */
+button.empty-cmd code {
+  background: none;
+  border: none;
+  padding: 0;
+  user-select: all;
+}
+
+.empty-copy {
+  color: var(--text-dim);
 }
 
 .empty-state code {
@@ -261,7 +392,7 @@ body {
 .choice {
   margin-top: 16px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
   padding: 12px;
   background: var(--bg);
 }
@@ -310,7 +441,7 @@ body {
 
 .option {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 10px;
   padding: 8px 10px;
   cursor: pointer;
   background: var(--bg-card);
@@ -324,7 +455,8 @@ body {
 
 .option.picked {
   border-color: var(--badge-decided);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--badge-decided) 55%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--badge-decided) 55%, transparent),
+    0 0 10px color-mix(in srgb, var(--badge-decided) 30%, transparent);
 }
 
 .option-head {
@@ -534,17 +666,35 @@ body {
   flex: 0 1 auto;
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 999px;
   color: var(--text);
   font: inherit;
   font-size: 12.5px;
-  padding: 6px 10px;
-  margin-left: 12px;
+  padding: 6px 12px;
 }
 
 .search-box:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.search-pod {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 12px;
+}
+
+.search-glyph {
+  color: var(--text-dim);
+  margin-right: -24px;
+  padding-left: 10px;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.search-pod .search-box {
+  padding-left: 30px;
 }
 
 .node-card.search-hit {
@@ -567,10 +717,11 @@ body {
   z-index: 41;
   min-width: 190px;
   background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 4px;
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--shadow) 45%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+  border-radius: 12px;
+  padding: 6px;
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--shadow) 45%, transparent),
+    0 0 0 1px var(--accent-soft);
 }
 
 .export-dropdown button {
@@ -587,8 +738,13 @@ body {
   cursor: pointer;
 }
 
-.export-dropdown button:hover {
-  background: var(--bg-card-hover);
+.export-dropdown button:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.export-dropdown button:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .sessions-dropdown {
@@ -598,6 +754,26 @@ body {
      names. */
   left: 0;
   right: auto;
+}
+
+.more-dropdown {
+  min-width: 230px;
+}
+
+.more-dropdown .accordion-head {
+  font-weight: 500;
+}
+
+.accordion-body {
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  margin: 4px 0;
+  padding: 4px 0 4px 8px;
+}
+
+.more-dropdown .row-undo,
+.more-dropdown .row-redo {
+  display: none;
 }
 
 .session-row {
@@ -625,7 +801,7 @@ body {
 }
 
 .sess-switch:hover {
-  background: var(--bg-card-hover);
+  background: var(--accent-soft);
 }
 
 .archived-list {
@@ -673,16 +849,17 @@ body {
   min-width: 0;
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 999px;
   color: var(--text);
   font: inherit;
   font-size: 12.5px;
-  padding: 5px 8px;
+  padding: 5px 10px;
 }
 
 .session-name-input:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
 .session-archive {
@@ -737,10 +914,15 @@ body {
   bottom: 12px;
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 10px;
   opacity: 0.92;
   z-index: 15;
   cursor: pointer;
+}
+
+.minimap:hover {
+  opacity: 1;
+  box-shadow: 0 0 10px var(--glow);
 }
 
 .mini-node {
@@ -762,8 +944,8 @@ body {
 
 .connect-handle {
   position: absolute;
-  top: -8px;
-  right: -8px;
+  top: 6px;
+  right: 6px;
   width: 18px;
   height: 18px;
   display: flex;
@@ -803,10 +985,11 @@ body {
   z-index: 41;
   min-width: 160px;
   background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 4px;
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--shadow) 45%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+  border-radius: 12px;
+  padding: 6px;
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--shadow) 45%, transparent),
+    0 0 0 1px var(--accent-soft);
 }
 
 .context-menu button {
@@ -824,7 +1007,7 @@ body {
 }
 
 .context-menu button:hover {
-  background: var(--bg-card-hover);
+  background: var(--accent-soft);
 }
 
 /* ---------- activity feed ---------- */
@@ -836,7 +1019,7 @@ body {
   max-width: 420px;
   background: color-mix(in srgb, var(--bg-panel) 88%, transparent);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 12px;
   padding: 6px 10px;
   z-index: 5;
   font-size: 12px;
@@ -900,6 +1083,8 @@ body {
   flex: 1;
   overflow: hidden;
   background:
+    radial-gradient(ellipse at center, transparent 55%,
+      color-mix(in srgb, var(--shadow) 7%, transparent) 100%),
     radial-gradient(circle at 1px 1px, var(--dot-grid) 1px, transparent 0) 0 0 / 28px 28px,
     var(--bg);
   cursor: grab;
@@ -995,28 +1180,41 @@ body {
 
 /* ---------- node cards ---------- */
 /* Geometry must stay in sync with layout::estimate_height:
-   card width 260, padding 10, head row ~24px, meta row ~20px,
-   18px line-height text, description clamped to 4 lines, badge row 28px. */
+   card width 260, border 1px, padding 13px horizontal (text width 232),
+   head row ~24px, meta row ~20px, 18px line-height text, description
+   clamped to 4 lines, badge row 28px. The 3px status rail is an absolute
+   ::before overlay and adds no height. */
 
 .node-card {
   position: absolute;
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--status-existing);
-  border-radius: 10px;
-  padding: 8px 12px 10px;
+  border-radius: 12px;
+  padding: 8px 13px 10px;
   cursor: pointer;
-  transition: box-shadow 120ms ease, border-color 120ms ease, background 120ms ease;
+  overflow: hidden;
+  transition: box-shadow 120ms ease, border-color 120ms ease,
+    background 120ms ease, transform 120ms ease;
   box-shadow: 0 2px 10px color-mix(in srgb, var(--shadow) 35%, transparent);
+}
+
+.node-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: var(--status-existing);
 }
 
 .node-card:hover {
   background: var(--bg-card-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--shadow) 40%, transparent);
 }
 
 .node-card.selected {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
+  box-shadow: 0 0 0 2px var(--glow), 0 0 16px var(--glow);
 }
 
 .node-card.ripple {
@@ -1025,20 +1223,12 @@ body {
     0 0 18px color-mix(in srgb, var(--status-affected) 45%, transparent);
 }
 
-.node-card.status-proposed {
-  border-left-color: var(--status-proposed);
-}
-
-.node-card.status-modified {
-  border-left-color: var(--status-modified);
-}
-
-.node-card.status-affected {
-  border-left-color: var(--status-affected);
-}
+.node-card.status-proposed::before { background: var(--status-proposed); }
+.node-card.status-modified::before { background: var(--status-modified); }
+.node-card.status-affected::before { background: var(--status-affected); }
+.node-card.status-removed::before { background: var(--status-removed); }
 
 .node-card.status-removed {
-  border-left-color: var(--status-removed);
   opacity: 0.65;
 }
 
@@ -1055,7 +1245,10 @@ body {
 }
 
 .node-label {
-  font-weight: 600;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 13.5px;
+  letter-spacing: -0.01em;
   line-height: 18px;
 }
 
@@ -1069,31 +1262,29 @@ body {
 }
 
 .node-status-tag {
-  padding: 0 6px;
-  border-radius: 4px;
+  padding: 0;
+  border-radius: 0;
   font-size: 10px;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.08em;
+  background: none;
 }
 
 .tag-proposed {
   color: var(--status-proposed);
-  background: color-mix(in srgb, var(--status-proposed) 15%, transparent);
 }
 
 .tag-modified {
   color: var(--status-modified);
-  background: color-mix(in srgb, var(--status-modified) 15%, transparent);
 }
 
 .tag-affected {
   color: var(--status-affected);
-  background: color-mix(in srgb, var(--status-affected) 15%, transparent);
 }
 
 .tag-removed {
   color: var(--status-removed);
-  background: color-mix(in srgb, var(--status-removed) 15%, transparent);
 }
 
 .node-group {
@@ -1165,12 +1356,12 @@ body {
   color: var(--text-dim);
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 999px;
   cursor: pointer;
 }
 
 .mode-btn:hover {
-  background: var(--bg-card-hover);
+  background: var(--accent-soft);
   color: var(--text);
 }
 
@@ -1499,5 +1690,103 @@ body {
     --on-badge: light-dark(#ffffff, #272822);
     --shadow: light-dark(#2c2d2459, #000000);
     --dot-grid: light-dark(#e6e6da, #2e2f28);
+  }
+}
+
+/* ---------- responsive topbar (container queries; old engines keep the
+   wide layout — same as pre-v0.8 behavior). Kept LAST in the file on
+   purpose: several rules here override same-specificity base rules above
+   (e.g. the More-menu .row-undo/.row-redo reveal vs. their display:none
+   base), and on a specificity tie CSS resolves by source order. ---------- */
+
+.compose-menu {
+  display: none;
+}
+
+.pod-compose {
+  display: none;
+}
+
+.compose-pop {
+  min-width: 260px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.compose-pop .compose-input {
+  margin-bottom: 0;
+}
+
+.topbar-title {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+@container topbar (max-width: 1080px) {
+  .pod-label {
+    display: none;
+  }
+}
+
+@container topbar (max-width: 900px) {
+  .topbar-title {
+    display: none;
+  }
+}
+
+@container topbar (max-width: 780px) {
+  .send-comment {
+    display: none;
+  }
+
+  .compose-menu {
+    display: block;
+  }
+
+  .pod-compose {
+    display: inline-flex;
+  }
+
+  .search-pod .search-box {
+    width: 34px;
+    min-width: 34px;
+    padding-left: 30px;
+    transition: width 140ms ease, min-width 140ms ease;
+  }
+
+  .search-pod:focus-within .search-box {
+    width: 190px;
+    min-width: 150px;
+  }
+}
+
+@container topbar (max-width: 600px) {
+  .seg-word {
+    display: none;
+  }
+
+  .topbar-word {
+    display: none;
+  }
+
+  .sess-pod {
+    display: block;
+    max-width: 90px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+@container topbar (max-width: 560px) {
+  .pod-undo,
+  .pod-redo {
+    display: none;
+  }
+
+  .more-dropdown .row-undo,
+  .more-dropdown .row-redo {
+    display: block;
   }
 }

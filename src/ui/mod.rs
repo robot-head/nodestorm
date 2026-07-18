@@ -9,6 +9,7 @@ mod context_menu;
 mod diff_panel;
 mod edge_layer;
 mod minimap;
+mod more_menu;
 mod node_card;
 mod theme_menu;
 mod timeline;
@@ -30,6 +31,7 @@ use dioxus::prelude::*;
 
 use crate::cli::Cli;
 use crate::model::{Node, NodeId};
+use crate::store::Store;
 
 // Context wrappers: distinct types so same-shaped signals can coexist in
 // Dioxus's type-keyed context.
@@ -81,6 +83,18 @@ pub(crate) fn node_matches(node: &Node, query: &str) -> bool {
             .is_some_and(|g| g.to_lowercase().contains(&q))
 }
 
+/// Clipboard write via the WebView's `navigator.clipboard` (no native
+/// clipboard dependency); the receipt lands in the activity feed.
+pub(crate) fn copy_to_clipboard(store: &Arc<Store>, text: String, receipt: &str) {
+    match serde_json::to_string(&text) {
+        Ok(js) => {
+            document::eval(&format!("navigator.clipboard.writeText({js});"));
+            store.record_user_action(receipt.to_owned());
+        }
+        Err(err) => tracing::warn!(%err, "clipboard serialization failed"),
+    }
+}
+
 /// Shared view-transform for the pan/zoom plane.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ViewTransform {
@@ -128,7 +142,10 @@ pub fn launch(sessions: Arc<crate::sessions::Sessions>, cli: Cli) {
         .unwrap_or_default();
     let window = WindowBuilder::new()
         .with_title("nodestorm")
-        .with_inner_size(dioxus::desktop::tao::dpi::LogicalSize::new(1280.0, 840.0))
+        .with_inner_size({
+            let (w, h) = cli.window_size.unwrap_or((1280.0, 840.0));
+            dioxus::desktop::tao::dpi::LogicalSize::new(w, h)
+        })
         .with_theme(tao_theme(prefs.mode));
     dioxus::LaunchBuilder::new()
         .with_cfg(Config::new().with_window(window).with_menu(None))

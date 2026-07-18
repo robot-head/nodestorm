@@ -41,6 +41,12 @@ pub struct Cli {
     /// Run the MCP server without opening a window (for CI and agent-only use).
     #[arg(long)]
     pub headless: bool,
+
+    /// Initial window size in logical pixels, `WIDTHxHEIGHT` (default
+    /// 1280x840). Lets demo recordings and E2E runs launch at a target
+    /// size instead of resizing a running window.
+    #[arg(long, value_name = "WxH", value_parser = parse_window_size)]
+    pub window_size: Option<(f64, f64)>,
 }
 
 impl Cli {
@@ -82,6 +88,25 @@ impl Cli {
     }
 }
 
+/// Parse `760x840` into logical (width, height); both in 200..=10000.
+fn parse_window_size(s: &str) -> Result<(f64, f64), String> {
+    let (w, h) = s
+        .split_once(['x', 'X'])
+        .ok_or_else(|| format!("expected WIDTHxHEIGHT, e.g. 760x840, got '{s}'"))?;
+    let dim = |v: &str, name: &str| -> Result<f64, String> {
+        let n: f64 = v
+            .trim()
+            .parse()
+            .map_err(|_| format!("{name} is not a number in '{s}'"))?;
+        if (200.0..=10_000.0).contains(&n) {
+            Ok(n)
+        } else {
+            Err(format!("{name} out of range 200..=10000 in '{s}'"))
+        }
+    };
+    Ok((dim(w, "width")?, dim(h, "height")?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,5 +137,15 @@ mod tests {
             cli.prefs_path().unwrap(),
             crate::prefs::default_prefs_path().unwrap()
         );
+    }
+
+    #[test]
+    fn window_size_parses_and_validates() {
+        let cli = Cli::parse_from(["nodestorm", "--window-size", "760x840"]);
+        assert_eq!(cli.window_size, Some((760.0, 840.0)));
+        assert_eq!(Cli::parse_from(["nodestorm"]).window_size, None);
+        assert!(Cli::try_parse_from(["nodestorm", "--window-size", "760"]).is_err());
+        assert!(Cli::try_parse_from(["nodestorm", "--window-size", "10x840"]).is_err());
+        assert!(Cli::try_parse_from(["nodestorm", "--window-size", "axb"]).is_err());
     }
 }

@@ -116,6 +116,7 @@ pub fn App() -> Element {
     });
 
     rsx! {
+        document::Style { {include_str!("../../assets/fonts.css")} }
         document::Style { {include_str!("../../assets/main.css")} }
         div {
             class: "app",
@@ -138,9 +139,28 @@ pub fn App() -> Element {
                     }
                 } else {
                     div { class: "empty-state",
+                        span { class: "empty-bolt", "ϟ" }
                         h1 { "nodestorm" }
                         p { "Waiting for an agent to connect." }
-                        code { "claude mcp add --transport http nodestorm {mcp_url}" }
+                        button {
+                            class: "empty-cmd",
+                            title: "Copy the connect command",
+                            onclick: {
+                                let sessions = sessions.clone();
+                                let cmd = format!(
+                                    "claude mcp add --transport http nodestorm {mcp_url}"
+                                );
+                                move |_| {
+                                    super::copy_to_clipboard(
+                                        &sessions.active_store(),
+                                        cmd.clone(),
+                                        "copied the connect command",
+                                    );
+                                }
+                            },
+                            code { "claude mcp add --transport http nodestorm {mcp_url}" }
+                            span { class: "empty-copy", "⧉" }
+                        }
                     }
                 }
             }

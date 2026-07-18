@@ -80,6 +80,15 @@ tight, make its results durable, then make the canvas scale.
       persists globally in `preferences.json` (new `--prefs` flag), never
       touching sessions, undo, agents, or exports
 
+## Done — v0.8
+
+- [x] Storm UI: derived glow/soft tokens over every palette, pill pods,
+      fused status chip, node-card status rails, Space Grotesk display
+      face, storm empty state
+- [x] Responsive top bar: container-query breakpoints, ⋯ More menu
+      (Export/Theme accordions), compose popover for the narrow-width
+      agent message, narrow-fit E2E assertion
+
 ## Later
 
 - [ ] Minimap virtualization for very large graphs

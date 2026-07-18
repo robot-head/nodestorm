@@ -41,216 +41,7 @@ $SessionsDir = Join-Path $env:TEMP "nodestorm-verify-sessions-$Port"
 # preferences.json.
 $PrefsFile = Join-Path $env:TEMP "nodestorm-verify-prefs-$Port.json"
 
-Add-Type -AssemblyName System.Drawing
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
-Add-Type -Namespace NodestormVerify -Name Native -MemberDefinition @'
-[DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
-[DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr h, uint msg, IntPtr wp, IntPtr lp);
-[DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr h, EnumProc cb, IntPtr lp);
-[DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h, System.Text.StringBuilder s, int n);
-[DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
-[DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
-[DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int w, int ht, uint flags);
-[DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int attr, out int val, int size);
-public delegate bool EnumProc(IntPtr h, IntPtr lp);
-public struct RECT { public int Left, Top, Right, Bottom; }
-'@
-[void][NodestormVerify.Native]::SetProcessDPIAware()
-
-function Log([string]$msg) {
-    Write-Host ("[{0:HH:mm:ss}] {1}" -f (Get-Date), $msg)
-}
-
-function Fail([string]$msg) {
-    Write-Host "FAIL: $msg" -ForegroundColor Red
-    exit 1
-}
-
-# ---------- UIA helpers ----------
-
-$script:AppWindow = $null   # cached UIA element for the app's top-level window
-
-function Get-AppWindow([int]$ProcessId, [int]$TimeoutSec = 30) {
-    # The process owns two top-level windows: the real one ("nodestorm") and
-    # tao's hidden "Tao Thread Event Target". Enumeration order is not
-    # guaranteed, so pick by name instead of taking the first match.
-    $root = [System.Windows.Automation.AutomationElement]::RootElement
-    $cond = New-Object System.Windows.Automation.PropertyCondition(
-        [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $ProcessId)
-    $deadline = (Get-Date).AddSeconds($TimeoutSec)
-    while ((Get-Date) -lt $deadline) {
-        foreach ($win in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)) {
-            if ($win.Current.Name -eq 'nodestorm') { return $win }
-        }
-        Start-Sleep -Milliseconds 300
-    }
-    return $null
-}
-
-function Find-Element([string]$Name) {
-    $cond = New-Object System.Windows.Automation.PropertyCondition(
-        [System.Windows.Automation.AutomationElement]::NameProperty, $Name)
-    try {
-        return $script:AppWindow.FindFirst(
-            [System.Windows.Automation.TreeScope]::Descendants, $cond)
-    } catch {
-        return $null
-    }
-}
-
-function Wait-Element([string]$Name, [int]$TimeoutSec = 15) {
-    $deadline = (Get-Date).AddSeconds($TimeoutSec)
-    while ((Get-Date) -lt $deadline) {
-        $el = Find-Element $Name
-        if ($el) { return $el }
-        Start-Sleep -Milliseconds 250
-    }
-    return $null
-}
-
-function Wait-ElementGone([string]$Name, [int]$TimeoutSec = 15) {
-    $deadline = (Get-Date).AddSeconds($TimeoutSec)
-    while ((Get-Date) -lt $deadline) {
-        if (-not (Find-Element $Name)) { return $true }
-        Start-Sleep -Milliseconds 250
-    }
-    return $false
-}
-
-# ---------- input + capture helpers ----------
-
-function Get-RenderWidget([IntPtr]$TopHwnd) {
-    # The WebView2 child window that receives mouse input.
-    $script:rwHwnd = [IntPtr]::Zero
-    $cb = [NodestormVerify.Native+EnumProc]{ param($h, $lp)
-        $c = New-Object System.Text.StringBuilder 256
-        [void][NodestormVerify.Native]::GetClassName($h, $c, 256)
-        if ($c.ToString() -eq 'Chrome_RenderWidgetHostHWND') {
-            $script:rwHwnd = $h
-            return $false
-        }
-        $true
-    }
-    [void][NodestormVerify.Native]::EnumChildWindows($TopHwnd, $cb, [IntPtr]::Zero)
-    return $script:rwHwnd
-}
-
-function Click-Element([IntPtr]$TopHwnd, [string]$Name) {
-    # Click = WM_MOUSEMOVE + WM_LBUTTONDOWN/UP posted to the render widget at
-    # the element's center (client coordinates). Coordinates travel inside the
-    # messages, so a human moving the real mouse cannot deflect the click.
-    $el = Find-Element $Name
-    if (-not $el) { Fail "element to click not found: '$Name'" }
-    $r = $el.Current.BoundingRectangle
-    $rw = Get-RenderWidget $TopHwnd
-    if ($rw -eq [IntPtr]::Zero) { Fail 'WebView2 render widget window not found' }
-    $rwRect = New-Object NodestormVerify.Native+RECT
-    [void][NodestormVerify.Native]::GetWindowRect($rw, [ref]$rwRect)
-    $cx = [int]($r.X + $r.Width / 2) - $rwRect.Left
-    $cy = [int]($r.Y + $r.Height / 2) - $rwRect.Top
-    $lp = [IntPtr](($cy -shl 16) -bor ($cx -band 0xFFFF))
-    [void][NodestormVerify.Native]::PostMessageW($rw, 0x0200, [IntPtr]::Zero, $lp) # WM_MOUSEMOVE
-    Start-Sleep -Milliseconds 50
-    [void][NodestormVerify.Native]::PostMessageW($rw, 0x0201, [IntPtr]1, $lp)      # WM_LBUTTONDOWN
-    Start-Sleep -Milliseconds 50
-    [void][NodestormVerify.Native]::PostMessageW($rw, 0x0202, [IntPtr]::Zero, $lp) # WM_LBUTTONUP
-    Log "clicked '$Name' (client $cx,$cy)"
-}
-
-function Click-Point([IntPtr]$TopHwnd, [double]$ScreenX, [double]$ScreenY) {
-    # Click at absolute screen coordinates (for elements UIA can't name,
-    # e.g. text inputs) — same window-targeted WM_LBUTTON* posting.
-    $rw = Get-RenderWidget $TopHwnd
-    if ($rw -eq [IntPtr]::Zero) { Fail 'WebView2 render widget window not found' }
-    $rwRect = New-Object NodestormVerify.Native+RECT
-    [void][NodestormVerify.Native]::GetWindowRect($rw, [ref]$rwRect)
-    $cx = [int]$ScreenX - $rwRect.Left
-    $cy = [int]$ScreenY - $rwRect.Top
-    $lp = [IntPtr](($cy -shl 16) -bor ($cx -band 0xFFFF))
-    [void][NodestormVerify.Native]::PostMessageW($rw, 0x0200, [IntPtr]::Zero, $lp)
-    Start-Sleep -Milliseconds 50
-    [void][NodestormVerify.Native]::PostMessageW($rw, 0x0201, [IntPtr]1, $lp)
-    Start-Sleep -Milliseconds 50
-    [void][NodestormVerify.Native]::PostMessageW($rw, 0x0202, [IntPtr]::Zero, $lp)
-    Log "clicked point (client $cx,$cy)"
-}
-
-function Send-Key([IntPtr]$TopHwnd, [int]$VirtualKey) {
-    # WM_KEYDOWN/WM_KEYUP posted to the render widget — never the real
-    # keyboard, so a human typing elsewhere is unaffected.
-    $rw = Get-RenderWidget $TopHwnd
-    [void][NodestormVerify.Native]::PostMessageW($rw, 0x0100, [IntPtr]$VirtualKey, [IntPtr]::Zero)
-    Start-Sleep -Milliseconds 30
-    [void][NodestormVerify.Native]::PostMessageW($rw, 0x0101, [IntPtr]$VirtualKey, [IntPtr]::Zero)
-    Start-Sleep -Milliseconds 30
-}
-
-function Type-Text([IntPtr]$TopHwnd, [string]$Text) {
-    # One WM_CHAR per character to the focused element in the render widget.
-    $rw = Get-RenderWidget $TopHwnd
-    foreach ($ch in $Text.ToCharArray()) {
-        [void][NodestormVerify.Native]::PostMessageW($rw, 0x0102, [IntPtr][int]$ch, [IntPtr]::Zero)
-        Start-Sleep -Milliseconds 15
-    }
-    Log "typed '$Text'"
-}
-
-function Save-WindowPng([IntPtr]$TopHwnd, [string]$Path) {
-    $r = New-Object NodestormVerify.Native+RECT
-    [void][NodestormVerify.Native]::GetWindowRect($TopHwnd, [ref]$r)
-    $w = $r.Right - $r.Left
-    $h = $r.Bottom - $r.Top
-    if ($w -le 0 -or $h -le 0) { Fail 'window has empty rect; cannot capture' }
-
-    function Capture {
-        $bmp = New-Object System.Drawing.Bitmap $w, $h
-        $g = [System.Drawing.Graphics]::FromImage($bmp)
-        $hdc = $g.GetHdc()
-        # PW_RENDERFULLCONTENT (2): forces the DirectComposition/WebView2
-        # content to render even when the window is occluded.
-        [void][NodestormVerify.Native]::PrintWindow($TopHwnd, $hdc, 2)
-        $g.ReleaseHdc($hdc)
-        $g.Dispose()
-        return $bmp
-    }
-
-    $bmp = Capture
-    # Occlusion fallback: if the frame is uniform (all sample pixels equal the
-    # corner pixel), raise the window without activating it and recapture.
-    $p0 = $bmp.GetPixel(5, 5)
-    $uniform = $true
-    foreach ($pt in @(@(($w / 2), ($h / 2)), @(($w / 3), ($h / 3)), @(($w - 10), ($h - 10)), @(($w / 2), 60))) {
-        if ($bmp.GetPixel([int]$pt[0], [int]$pt[1]) -ne $p0) { $uniform = $false; break }
-    }
-    if ($uniform) {
-        Log 'capture looked blank; raising window (no activate) and retrying'
-        # SWP_NOMOVE|NOSIZE|NOACTIVATE = 0x0013, insert after HWND_TOP (0)
-        [void][NodestormVerify.Native]::SetWindowPos($TopHwnd, [IntPtr]::Zero, 0, 0, 0, 0, 0x0013)
-        Start-Sleep -Milliseconds 500
-        $bmp.Dispose()
-        $bmp = Capture
-    }
-    $bmp.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
-    $bmp.Dispose()
-    Log "captured $Path"
-}
-
-function Wait-Tcp([int]$TcpPort, [int]$TimeoutSec = 60) {
-    $deadline = (Get-Date).AddSeconds($TimeoutSec)
-    while ((Get-Date) -lt $deadline) {
-        $client = New-Object System.Net.Sockets.TcpClient
-        try {
-            $client.Connect('127.0.0.1', $TcpPort)
-            $client.Close()
-            return $true
-        } catch {
-            $client.Close()
-            Start-Sleep -Milliseconds 300
-        }
-    }
-    return $false
-}
+. (Join-Path $PSScriptRoot 'uia-lib.ps1')
 
 # ---------- run ----------
 
@@ -455,6 +246,8 @@ try {
     Click-Element $hwnd 'Timeline'
 
     # Export via the menu: the record must include the user edits.
+    Click-Element $hwnd 'More'
+    if (-not (Wait-Element ('Export ' + [char]0x25BE) 5)) { Fail 'More menu did not open' }
     Click-Element $hwnd ('Export ' + [char]0x25BE)
     if (-not (Wait-Element 'Copy Markdown' 5)) { Fail 'export menu did not open' }
     Click-Element $hwnd 'Export'
@@ -472,6 +265,8 @@ try {
 
     # Open the picker; a non-active family row's UIA name is its plain
     # display name (the active row flattens to "<Name> ✓").
+    Click-Element $hwnd 'More'
+    if (-not (Wait-Element ('Theme ' + [char]0x25BE) 5)) { Fail 'More menu did not open' }
     Click-Element $hwnd ('Theme ' + [char]0x25BE)
     if (-not (Wait-Element 'Gruvbox' 5)) { Fail 'theme menu did not open' }
     # Mode clicks keep the menu open; family clicks close it.
@@ -505,6 +300,49 @@ try {
     $avg = $sum / $n
     if ($avg -le 0.5) { Fail ("content did not switch to a light palette (mean brightness {0:N2})" -f $avg) }
     Log ("gruvbox-light content verified (mean brightness {0:N2})" -f $avg)
+
+    # ---- v0.8: at a narrow window nothing in the topbar overflows ----
+    # 760 physical px: hits the <=780px (logical) compose breakpoint at 100%
+    # DPI and deeper folds on scaled displays; either way Send must fit.
+    [void][NodestormVerify.Native]::SetWindowPos($hwnd, [IntPtr]1, 0, 0, 760, 840, 0x0012)
+    Start-Sleep -Milliseconds 800
+    $send = Wait-Element 'Send to agent' 5
+    if (-not $send) { Fail 'Send to agent missing from UIA at 760px' }
+    $sr = $send.Current.BoundingRectangle
+    $wr = $script:AppWindow.Current.BoundingRectangle
+    if ($sr.Right -gt $wr.Right) {
+        Fail "Send button overflows the window at 760px (send.Right=$($sr.Right) window.Right=$($wr.Right))"
+    }
+    if (-not (Wait-Element 'Message to agent' 5)) { Fail 'compose pod did not appear at 760px' }
+    Save-WindowPng $hwnd (Join-Path $OutDir '07-narrow-760.png')
+    Log 'narrow-window topbar fit verified (760px)'
+
+    # At <=560px (logical) the Undo/Redo pods fold into the More menu.
+    [void][NodestormVerify.Native]::SetWindowPos($hwnd, [IntPtr]1, 0, 0, 520, 840, 0x0012)
+    Start-Sleep -Milliseconds 800
+    # An occluded (bottom z-order) WebView2 commits at most one out-of-band
+    # resize per app lifetime: this second one shrinks the native windows but
+    # the page keeps the 760px layout, so UIA rect centers can lie beyond the
+    # shrunken render widget, where posted clicks are dropped unseen. Clamp
+    # the click x into the widget - the More pod straddles the stale edge, so
+    # the clamped point still lands on it (and is a no-op on fresh layouts).
+    $more = Wait-Element 'More' 5
+    if (-not $more) { Fail 'More pod missing from UIA at 520px' }
+    $mr = $more.Current.BoundingRectangle
+    $rwh = Get-RenderWidget $hwnd
+    if ($rwh -eq [IntPtr]::Zero) { Fail 'WebView2 render widget window not found' }
+    $rwr = New-Object NodestormVerify.Native+RECT
+    [void][NodestormVerify.Native]::GetWindowRect($rwh, [ref]$rwr)
+    $mx = [Math]::Min($mr.X + $mr.Width / 2, $rwr.Right - 12)
+    $my = $mr.Y + $mr.Height / 2
+    Click-Point $hwnd $mx $my
+    if (-not (Wait-Element ([string][char]0x21B6 + ' Undo') 5)) { Fail 'Undo row missing from More menu at 520px' }
+    Save-WindowPng $hwnd (Join-Path $OutDir '08-narrow-520-more.png')
+    Click-Point $hwnd $mx $my
+    Log 'narrow-window More-menu undo/redo fallback verified (520px)'
+
+    [void][NodestormVerify.Native]::SetWindowPos($hwnd, [IntPtr]1, 0, 0, 1280, 840, 0x0012)
+    Start-Sleep -Milliseconds 400
 
     # Native title bar follows the mode: after clicking Light the DWM
     # immersive-dark flag must be off. (Pixel checks are unreliable here —
