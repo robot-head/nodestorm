@@ -5,6 +5,7 @@
   <key>CFBundleDevelopmentRegion</key><string>en</string>
   <key>CFBundleDisplayName</key><string>Nodestorm</string>
   <key>CFBundleExecutable</key><string>nodestorm</string>
+  <key>CFBundleIconFile</key><string>Nodestorm.icns</string>
   <key>CFBundleIdentifier</key><string>com.robot-head.nodestorm</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>Nodestorm</string>
