@@ -383,6 +383,29 @@ button.empty-cmd code {
   font-size: 17px;
 }
 
+.panel-meta {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 10px;
+  font-size: 11.5px;
+}
+
+.panel-meta-row {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.panel-meta dt {
+  color: var(--text-dim);
+}
+
+.panel-meta dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .panel-desc {
   color: var(--text-dim);
   font-size: 13px;
@@ -646,13 +669,45 @@ button.empty-cmd code {
 
 .conn-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 6px;
   padding: 4px 0;
   border-bottom: 1px solid var(--border);
   font-size: 12px;
   color: var(--text-dim);
+}
+
+.conn-content {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.conn-primary {
+  display: flex;
+  gap: 4px;
+}
+
+.conn-direction,
+.conn-meta {
+  color: var(--text-dim);
+}
+
+.conn-endpoint {
+  min-width: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.conn-meta,
+.conn-label {
+  margin-top: 2px;
+  font-size: 11.5px;
+}
+
+.conn-row > .ctl-btn {
+  flex: 0 0 auto;
 }
 
 .canvas-viewport.connecting {
