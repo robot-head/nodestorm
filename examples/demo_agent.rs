@@ -121,16 +121,20 @@ async fn main() -> anyhow::Result<()> {
             .map(|t| t.text.clone())
             .unwrap_or_default();
         let v: serde_json::Value = serde_json::from_str(&text)?;
+        if v["status"] == "timeout" {
+            eprintln!("timeout — re-calling await_decisions…");
+        }
         if v["status"] == "delivered" && !reacted {
             reacted = true;
             client
                 .call_tool(
                     CallToolRequestParams::new("update_graph").with_arguments(
                         json!({
-                            "announce": "Applied your decisions — CRDTs it is; storage feels it.",
                             "ops": [
                                 {"op": "set_status", "id": "sync-engine", "status": "modified"},
-                                {"op": "set_status", "id": "storage", "status": "affected"}
+                                {"op": "set_status", "id": "storage", "status": "affected"},
+                                {"op": "announce",
+                                 "message": "Applied your decisions — CRDTs it is; storage feels it."}
                             ]
                         })
                         .as_object()
