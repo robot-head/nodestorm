@@ -367,6 +367,22 @@ mod tests {
     }
 
     #[test]
+    fn session_menu_discloses_management_and_confirms_delete() {
+        for markup in [
+            "let mut manage_open = use_signal(|| false);",
+            "let mut delete_pending = use_signal(|| false);",
+            "if !info.active {",
+            "Manage session",
+            "Rename current session",
+            "Create new session",
+            "Confirm delete",
+            "Cancel",
+        ] {
+            assert!(TOPBAR_SOURCE.contains(markup), "missing `{markup}`");
+        }
+    }
+
+    #[test]
     fn family_ids_are_unique_and_slug_safe() {
         let mut seen = std::collections::BTreeSet::new();
         for f in FAMILIES {
