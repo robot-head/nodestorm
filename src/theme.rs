@@ -387,6 +387,7 @@ mod tests {
         assert_block_contains(".session-manage", "border-top: 1px solid var(--border)");
         assert_block_contains(".session-form", "display: grid");
         assert_block_contains(".session-form-row", "display: flex");
+        assert_block_contains(".session-form-row .btn", "width: auto");
         assert_block_contains(".session-name-input", "border-radius: 7px");
         assert_block_contains(".session-name-input", "width: 100%");
         assert_block_contains(".session-danger", "border-top: 1px solid var(--border)");

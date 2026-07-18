@@ -1100,6 +1100,7 @@ button.empty-cmd code {
 
 .session-form-row .btn {
   flex: 0 0 auto;
+  width: auto;
 }
 
 .session-name-input:focus {
