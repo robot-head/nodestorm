@@ -21,6 +21,8 @@ pub(crate) const TOPBAR_H: f64 = 48.0;
 /// keeps the off-screen rest out of the DOM).
 pub(crate) const MIN_FIT_SCALE: f64 = 0.15;
 
+const APP_ICON_PNG: &[u8] = include_bytes!("../../assets/nodestorm-icon.png");
+
 /// Live canvas content-box geometry. The fallback is used only until the
 /// viewport's first ResizeObserver measurement arrives.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -162,6 +164,15 @@ impl ViewTransform {
     }
 }
 
+fn app_icon() -> dioxus::desktop::tao::window::Icon {
+    let image = image::load_from_memory_with_format(APP_ICON_PNG, image::ImageFormat::Png)
+        .expect("embedded app icon must be a valid PNG")
+        .into_rgba8();
+    let (width, height) = image.dimensions();
+    dioxus::desktop::tao::window::Icon::from_rgba(image.into_raw(), width, height)
+        .expect("embedded app icon must have valid RGBA dimensions")
+}
+
 /// Launch the desktop window. Must be called on the main thread.
 pub fn launch(sessions: Arc<crate::sessions::Sessions>, cli: Cli) {
     // Load preferences before the window exists so the native title bar is
@@ -176,6 +187,7 @@ pub fn launch(sessions: Arc<crate::sessions::Sessions>, cli: Cli) {
             let (w, h) = cli.window_size.unwrap_or((1280.0, 840.0));
             dioxus::desktop::tao::dpi::LogicalSize::new(w, h)
         })
+        .with_window_icon(Some(app_icon()))
         .with_theme(tao_theme(prefs.mode));
     dioxus::LaunchBuilder::new()
         .with_cfg(Config::new().with_window(window).with_menu(None))
@@ -188,6 +200,19 @@ pub fn launch(sessions: Arc<crate::sessions::Sessions>, cli: Cli) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn embedded_app_icon_is_a_256px_rgba_png() {
+        let image = image::load_from_memory_with_format(APP_ICON_PNG, image::ImageFormat::Png)
+            .expect("embedded app icon must be a valid PNG");
+        assert_eq!((image.width(), image.height()), (256, 256));
+        assert_eq!(image.color(), image::ColorType::Rgba8);
+    }
+
+    #[test]
+    fn embedded_app_icon_builds_a_tao_icon() {
+        let _icon = app_icon();
+    }
 
     #[test]
     fn tao_theme_maps_modes() {

@@ -3100,6 +3100,7 @@ dependencies = [
  "clap",
  "dioxus",
  "directories",
+ "image",
  "rfd",
  "rmcp",
  "schemars",
