@@ -383,6 +383,28 @@ mod tests {
     }
 
     #[test]
+    fn active_session_statuses_stay_in_the_session_menu_header() {
+        assert!(
+            TOPBAR_SOURCE.contains(
+                r#"div { class: "session-doc-heading",
+                                strong { "{title}" }
+                                span { class: "sess-badges",
+                                    if open > 0 {"#
+            ),
+            "session header must retain the active session's open-choice badge"
+        );
+        assert!(
+            TOPBAR_SOURCE.contains(
+                r#"if m.waiting_agents > 0 {
+                                        span { class: "pill pill-waiting", "●" }"#
+            ),
+            "session header must retain the active session's waiting badge"
+        );
+        assert_block_contains(".session-doc-heading", "display: flex");
+        assert_block_contains(".session-doc-title > span", "text-transform: uppercase");
+    }
+
+    #[test]
     fn session_management_forms_and_danger_zone_are_distinct() {
         assert_block_contains(".session-manage", "border-top: 1px solid var(--border)");
         assert_block_contains(".session-form", "display: grid");

@@ -87,7 +87,17 @@ pub fn TopBar(
                     div { class: "export-dropdown sessions-dropdown",
                         div { class: "session-doc-title", title: "{title}",
                             span { "Brainstorm" }
-                            strong { "{title}" }
+                            div { class: "session-doc-heading",
+                                strong { "{title}" }
+                                span { class: "sess-badges",
+                                    if open > 0 {
+                                        span { class: "pill pill-open", "{open}" }
+                                    }
+                                    if m.waiting_agents > 0 {
+                                        span { class: "pill pill-waiting", "●" }
+                                    }
+                                }
+                            }
                         }
                         for info in sessions.list() {
                             if !info.active {
