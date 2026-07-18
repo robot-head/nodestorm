@@ -834,6 +834,13 @@ impl Store {
                     }),
                 }
             }
+            // Positions are canvas-only state: they do not generate decision
+            // events, so rebase them from the live document after replay.
+            for node in &mut replayed_doc.nodes {
+                if let Some(current) = s.doc.node(&node.id) {
+                    node.position = current.position;
+                }
+            }
             replayed_doc.revision = revision;
             s.doc = replayed_doc;
             s.decision_log.truncate(s.delivery_cursor);
@@ -1950,6 +1957,25 @@ mod tests {
             .unwrap();
         assert_eq!(choice.status, ChoiceStatus::Open);
         assert_eq!(store.peek_undelivered().len(), 1);
+    }
+
+    #[test]
+    fn removing_a_queued_change_preserves_a_later_position_change() {
+        let store = demo_store();
+        pick_first_choice(&store);
+        let position = Point { x: 240.0, y: 120.0 };
+        store.set_position(&NodeId::from("redis"), position);
+
+        store.remove_queued_change(1).unwrap();
+
+        assert_eq!(
+            store
+                .snapshot_doc()
+                .node(&NodeId::from("redis"))
+                .unwrap()
+                .position,
+            Some(position)
+        );
     }
 
     #[test]
