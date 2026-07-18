@@ -11,6 +11,7 @@ mod edge_layer;
 mod minimap;
 mod more_menu;
 mod node_card;
+mod queued_changes;
 mod theme_menu;
 mod timeline;
 mod topbar;

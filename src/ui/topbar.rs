@@ -15,6 +15,7 @@ pub fn TopBar(
     selected: Signal<Option<NodeId>>,
     session_name: Signal<String>,
     timeline_open: Signal<bool>,
+    queued_changes_open: Signal<bool>,
 ) -> Element {
     let store = use_store();
     let sessions = use_context::<std::sync::Arc<crate::sessions::Sessions>>();
@@ -37,6 +38,9 @@ pub fn TopBar(
         d.title.clone()
     };
     let can_send = m.undelivered > 0 || m.waiting_agents > 0;
+    // Blocked replay entries are also actionable queued changes, even though
+    // they cannot be sent; retain access to their remove/edit controls.
+    let queued_count = store.queued_changes().len();
     let suggested_name = {
         let slug = if d.title.is_empty() {
             "brainstorm".to_owned()
@@ -356,7 +360,7 @@ pub fn TopBar(
                 span { class: "topbar-title-text", title: "{title}", "{title}" }
             }
             span { class: "topbar-spacer" }
-            if m.waiting_agents > 0 || open > 0 || m.undelivered > 0 {
+            if m.waiting_agents > 0 || open > 0 || queued_count > 0 {
                 span { class: "status-chip",
                     if m.waiting_agents > 0 {
                         span {
@@ -378,13 +382,24 @@ pub fn TopBar(
                             span { class: "seg-word", " open" }
                         }
                     }
-                    if m.undelivered > 0 {
-                        span {
-                            class: "seg seg-queued",
-                            role: "status",
-                            aria_label: "{m.undelivered} to send",
-                            title: "Decisions queued for the next Send",
-                            "{m.undelivered}"
+                    if queued_count > 0 {
+                        button {
+                            class: if queued_changes_open() { "seg seg-queued btn-armed" } else { "seg seg-queued" },
+                            aria_label: "{queued_count} queued changes",
+                            title: "Review, edit, or remove queued changes",
+                            onclick: {
+                                let mut selected = selected;
+                                let mut timeline_open = timeline_open;
+                                let mut queued_changes_open = queued_changes_open;
+                                move |_| {
+                                    if !queued_changes_open() {
+                                        selected.set(None);
+                                        timeline_open.set(false);
+                                    }
+                                    queued_changes_open.toggle();
+                                }
+                            },
+                            "{queued_count}"
                             span { class: "seg-word", " queued" }
                         }
                     }
@@ -423,8 +438,10 @@ pub fn TopBar(
                 onclick: {
                     let mut selected = selected;
                     let mut timeline_open = timeline_open;
+                    let mut queued_changes_open = queued_changes_open;
                     move |_| {
                         selected.set(None);
+                        queued_changes_open.set(false);
                         timeline_open.toggle();
                     }
                 },

@@ -1207,6 +1207,34 @@ button.empty-cmd code {
   overflow-wrap: anywhere;
 }
 
+/* ---------- queued changes panel ---------- */
+
+.queue-row {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+
+.queue-blocked {
+  color: var(--status-removed);
+  background: color-mix(in srgb, var(--status-removed) 8%, transparent);
+}
+
+.queue-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.queue-row .ctl-btn {
+  padding: 3px 7px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 /* ---------- minimap ---------- */
 
 .minimap {
