@@ -9,6 +9,37 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  windows-installer-contracts:
+    name: Windows installer failure contracts
+    runs-on: windows-2025
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Execute Store-not-live failure path
+        shell: pwsh
+        run: ./tests/windows_installer.ps1
+
+  package-contracts:
+    name: Plugin package contracts
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Validate package and host adapters
+        run: |
+          node scripts/validate-release.mjs
+          node --test tests/plugin_contract.mjs tests/host_adapters.mjs tests/installers.mjs tests/release_gates.mjs
+
+      - name: Validate npm package contents
+        run: node scripts/validate-npm-pack.mjs
+
   build-and-test:
     name: Build & Test
     runs-on: ubuntu-latest
@@ -37,5 +68,20 @@ jobs:
       - name: Build
         run: cargo build --all-targets --locked --verbose
 
+      - name: Install Pi proxy runtime dependencies
+        working-directory: plugins/nodestorm
+        run: npm ci --ignore-scripts
+
+      - name: Run Pi proxy against the real headless server
+        env:
+          NODESTORM_BINARY: ${{ github.workspace }}/target/debug/nodestorm
+        run: node --test tests/pi_headless_roundtrip.mjs
+
       - name: Run tests
         run: cargo test --all-targets --locked --verbose
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --locked -- -D warnings

@@ -1,0 +1,13 @@
+interface:
+  display_name: "Nodestorm"
+  short_description: "Design systems on a shared visual canvas"
+  default_prompt: "Use $nodestorm to propose the system as a graph, collect my decisions, update the design, and export the result."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "nodestorm"
+      description: "Local Nodestorm visual architecture canvas"
+      transport: "streamable_http"
+      url: "http://127.0.0.1:4747/mcp"
+policy:
+  allow_implicit_invocation: true

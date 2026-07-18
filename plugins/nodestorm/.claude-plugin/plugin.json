@@ -1,0 +1,13 @@
+{
+  "name": "nodestorm",
+  "version": "0.9.0",
+  "description": "Visual architecture brainstorming with human decisions over MCP.",
+  "author": {
+    "name": "robot-head",
+    "url": "https://github.com/robot-head"
+  },
+  "homepage": "https://github.com/robot-head/nodestorm",
+  "repository": "https://github.com/robot-head/nodestorm",
+  "license": "MIT OR Apache-2.0",
+  "keywords": ["mcp", "architecture", "brainstorming", "planning"]
+}

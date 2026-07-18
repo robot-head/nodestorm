@@ -1,0 +1,66 @@
+{
+  "name": "nodestorm",
+  "version": "0.9.0",
+  "description": "Nodestorm plugin for Claude Code, Codex, OpenCode, and Pi",
+  "type": "module",
+  "exports": {
+    ".": "./opencode.js",
+    "./opencode": "./opencode.js",
+    "./pi": "./pi.js"
+  },
+  "files": [
+    ".claude-plugin/plugin.json",
+    ".codex-plugin/plugin.json",
+    ".mcp.json",
+    "agents/openai.yaml",
+    "opencode.js",
+    "pi.js",
+    "LICENSE-APACHE",
+    "LICENSE-MIT",
+    "VERSION",
+    "README.md",
+    "skills/nodestorm/SKILL.md",
+    "skills/nodestorm/agents/openai.yaml",
+    "skills/nodestorm/scripts/store.json",
+    "skills/nodestorm/scripts/setup.sh",
+    "skills/nodestorm/scripts/setup.ps1"
+  ],
+  "scripts": {
+    "test": "node --test ../../tests/host_adapters.mjs ../../tests/installers.mjs ../../tests/plugin_contract.mjs ../../tests/release_gates.mjs"
+  },
+  "pi": {
+    "extensions": ["./pi.js"],
+    "skills": ["./skills"]
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.1"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  },
+  "keywords": [
+    "nodestorm",
+    "mcp",
+    "claude-code-plugin",
+    "codex-plugin",
+    "opencode-plugin",
+    "pi-package",
+    "architecture"
+  ],
+  "homepage": "https://github.com/robot-head/nodestorm#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/robot-head/nodestorm.git",
+    "directory": "plugins/nodestorm"
+  },
+  "bugs": "https://github.com/robot-head/nodestorm/issues",
+  "license": "MIT OR Apache-2.0",
+  "engines": {
+    "node": ">=20"
+  }
+}

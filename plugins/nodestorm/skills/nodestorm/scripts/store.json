@@ -1,0 +1,8 @@
+{
+  "identityName": "REPLACE_AFTER_PARTNER_CENTER_RESERVATION",
+  "publisher": "REPLACE_AFTER_PARTNER_CENTER_RESERVATION",
+  "productId": "REPLACE_AFTER_PARTNER_CENTER_RESERVATION",
+  "executionAlias": "nodestorm.exe",
+  "msixVersion": "0.9.0.0",
+  "version": "0.9.0"
+}
