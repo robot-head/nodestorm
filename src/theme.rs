@@ -226,6 +226,11 @@ mod tests {
     }
 
     #[test]
+    fn status_chip_keeps_its_complete_wide_layout_label() {
+        assert_block_contains(".status-chip", "flex-shrink: 0");
+    }
+
+    #[test]
     fn minimum_viewport_keeps_topbar_and_menus_reachable() {
         const MEDIA: &str = "@media (max-width: 519px) {";
         let media_start = CSS

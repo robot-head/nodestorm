@@ -146,6 +146,7 @@ body {
 
 .status-chip {
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
   border-radius: 999px;
