@@ -261,7 +261,9 @@ pub fn TopBar(
                     },
                 }
             }
-            span { class: "topbar-title", title: "{title}", "{title}" }
+            span { class: "topbar-title", "data-full-title": "{title}",
+                span { class: "topbar-title-text", title: "{title}", "{title}" }
+            }
             span { class: "topbar-spacer" }
             if m.waiting_agents > 0 || open > 0 || m.undelivered > 0 {
                 span { class: "status-chip",
