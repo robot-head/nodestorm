@@ -29,6 +29,13 @@ if (-not $script:Ffmpeg) {
 }
 if (-not $script:Ffmpeg) { Fail 'ffmpeg not found (winget install Gyan.FFmpeg first)' }
 
+# BOM-less UTF-8 writer: Set-Content -Encoding utf8NoBOM is PS7+ only and
+# this host runs Windows PowerShell 5.1, so go through .NET.
+$script:Utf8NoBom = New-Object System.Text.UTF8Encoding $false
+function Write-Utf8NoBom([string]$Path, [string]$Content) {
+    [System.IO.File]::WriteAllText($Path, $Content, $script:Utf8NoBom)
+}
+
 $script:App = $null
 $script:AgentProc = $null
 $script:Hwnd = [IntPtr]::Zero
@@ -107,11 +114,18 @@ function Stop-Capture {
 }
 
 function Add-Caption([string]$Text, [double]$MinSeconds = 2.5) {
-    $t = ((Get-Date) - $script:CaptureStart).TotalSeconds
     if ($script:Captions.Count -gt 0) {
         $prev = $script:Captions[$script:Captions.Count - 1]
-        $prev.end = [Math]::Max($prev.start + $prev.min, $t)   # close previous caption
+        # Pacing: the previous caption gets its full minimum on screen
+        # before the next one starts — sleep out any remainder. This keeps
+        # the drawtext enable-windows strictly non-overlapping
+        # (prev.end == next.start), so two captions never render at once.
+        $due = $prev.start + $prev.min
+        $now = ((Get-Date) - $script:CaptureStart).TotalSeconds
+        if ($now -lt $due) { Start-Sleep -Milliseconds (1000 * ($due - $now)) }
+        $prev.end = ((Get-Date) - $script:CaptureStart).TotalSeconds
     }
+    $t = ((Get-Date) - $script:CaptureStart).TotalSeconds
     $script:Captions.Add(@{ start = $t; end = 0; min = $MinSeconds; text = $Text })
 }
 
@@ -123,16 +137,23 @@ function Save-Captions([string]$SegDir) {
         $last = $script:Captions[$script:Captions.Count - 1]
         $last.end = [Math]::Max($last.start + $last.min, $t)
     }
-    $script:Captions | ConvertTo-Json | Set-Content (Join-Path $SegDir 'captions.json')
+    Write-Utf8NoBom (Join-Path $SegDir 'captions.json') ($script:Captions | ConvertTo-Json)
 }
 
 function Convert-SegmentGif([string]$SegDir, [string]$OutGif, [int]$Fps = 10, [int]$Width = 800) {
     $caps = Get-Content (Join-Path $SegDir 'captions.json') | ConvertFrom-Json
     $font = 'C\:/Windows/Fonts/segoeui.ttf'
+    # Caption text goes through per-caption textfiles rather than inline
+    # text='...': no filtergraph escaping to get wrong (apostrophes, colons,
+    # commas, whatever future captions hold).
+    $i = 0
     $draw = foreach ($c in $caps) {
-        $txt = ($c.text -replace "'", "\\'" -replace ':', '\:')
-        "drawtext=fontfile='$font':text='$txt':fontsize=22:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=10:x=(w-text_w)/2:y=h-th-16:enable='between(t,{0},{1})'" -f
+        $capFile = Join-Path $SegDir "cap_$i.txt"
+        Write-Utf8NoBom $capFile $c.text
+        $capPath = ($capFile -replace '\\', '/') -replace ':', '\:'
+        "drawtext=fontfile='$font':textfile='$capPath':fontsize=22:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=10:x=(w-text_w)/2:y=h-th-16:enable='between(t,{0},{1})'" -f
             [Math]::Round($c.start, 2), [Math]::Round($c.end, 2)
+        $i++
     }
     $vf = "fps=$Fps,scale=${Width}:-1:flags=lanczos," + ($draw -join ',') +
         ",split[s0][s1];[s0]palettegen=max_colors=128[p];[s1][p]paletteuse=dither=bayer"
@@ -162,19 +183,21 @@ function Invoke-Segment1 {
 }
 
 New-Item -ItemType Directory -Force $WorkDir | Out-Null
-if (-not $NoBuild) {
-    Push-Location $RepoRoot
-    cargo build --bins --examples
-    if ($LASTEXITCODE -ne 0) { Fail 'cargo build failed' }
-    Pop-Location
+# finally runs even when Fail's `exit 1` fires inside try, so a mid-segment
+# timeout can't orphan nodestorm.exe/demo_agent.exe holding port 4801.
+try {
+    if (-not $NoBuild) {
+        Push-Location $RepoRoot
+        cargo build --bins --examples
+        if ($LASTEXITCODE -ne 0) { Fail 'cargo build failed' }
+        Pop-Location
+    }
+    $all = -not $Segment
+    if ($all -or $Segment -contains 1) { Invoke-Segment1 }
+    # segments 2..8 appended in the next task
+    if ($all -or $Segment -contains 1) {
+        Convert-SegmentGif (Join-Path $WorkDir '01-propose') (Join-Path $WorkDir '01-propose.gif')
+    }
+} finally {
+    Stop-DemoApp
 }
-$all = -not $Segment
-if ($all -or $Segment -contains 1) { Invoke-Segment1 }
-# segments 2..8 appended in the next task
-if ($all -or $Segment -contains 1) {
-    Convert-SegmentGif (Join-Path $WorkDir '01-propose') (Join-Path $WorkDir '01-propose.gif')
-}
-# Only segment 1 exists so far (segments 2-8 land in the next task, which
-# will restore app-stays-running-between-segments chaining); for now every
-# invocation of this script — whole-run or single-segment — stops the app.
-Stop-DemoApp
