@@ -1,40 +1,58 @@
-# App icon and titlebar branding design
+# App icon and launcher branding design
 
 ## Goal
 
-Give Nodestorm one recognisable, neutral app mark and use it consistently in
-the native window titlebar and the in-app topbar.
+Replace the current letter-like icon with one recognisable Nodestorm mark and
+use it consistently in the in-app topbar, native window chrome, and packaged
+desktop launchers.
 
 ## Mark
 
-The mark is a compact monochrome graph: three connected circular nodes around
-a lightning-bolt cutout. It uses no fixed colour so it works against light and
-dark system titlebars and remains readable at small sizes.
+The mark is a bold, right-leaning lightning path made from three thick
+connected segments. Circular nodes are fused to both endpoints and the main
+bend. The open zigzag must read as a lightning bolt first and must not form a
+triangle, enclosure, or letter-like silhouette.
 
-The topbar renders this geometry as self-contained inline SVG, so it has no
-runtime asset lookup. A transparent PNG rendition supplies the native Tao
-window icon.
+The geometry is monochrome and uses generous negative space. It must remain
+recognisable at 16-17 px without glow, fine outlines, internal holes, or
+decorative detail.
+
+## Variants
+
+The in-app variant is the standalone transparent mark. It inherits the active
+theme accent through `currentColor` and has no background tile.
+
+The OS-facing variant centers the same mark in white on a neutral charcoal
+rounded tile with generous padding. This variant supplies the native window
+icon and every packaged launcher icon. It uses no glow, border ornament, or
+platform-specific redraw.
 
 ## Integration
 
-- Render the decorative topbar SVG inline, using the theme accent through
-  `currentColor` and a document-unique bolt-cutout mask id.
-- Keep the PNG asset under `assets/`.
-- Configure the Dioxus/Tao `WindowBuilder` with the PNG icon so supported
-  native titlebars and window switchers display it.
-- Replace the topbar's standalone `ϟ` text glyph with the SVG mark while
-  retaining the existing `nodestorm` wordmark and layout.
+- Keep one canonical SVG geometry for the bolt-and-nodes mark.
+- Render the decorative topbar variant inline with `currentColor`, preserving
+  the existing 17 px footprint, `nodestorm` wordmark, and responsive behavior.
+- Generate the rounded-tile raster assets deterministically from the canonical
+  geometry rather than maintaining unrelated hand-drawn variants.
+- Embed the PNG used by Dioxus/Tao so the native window icon has no runtime
+  filesystem dependency.
+- Generate and package Windows launcher/Store sizes, macOS `.icns` sizes, and
+  Linux hicolor PNGs from the same rounded-tile source.
+- Install a Linux desktop entry that references the packaged hicolor icon.
 
 ## Scope and constraints
 
-No app behaviour, menus, window sizing, or packaging tile artwork changes.
-The native icon must load without a runtime filesystem dependency. The topbar
-mark must be decorative (`aria-hidden`) and self-contained, with no runtime
-filesystem asset dependency.
+No app behavior, menus, or window sizing changes. The topbar mark must be
+decorative (`aria-hidden`) and self-contained. Launcher generation must be
+repeatable and must not require network access. Windows, macOS, and Linux
+packages must each contain the icon format their launcher uses.
 
 ## Verification
 
-- Add focused coverage for icon construction/loading where practical.
-- Run the Rust test suite and formatting checks.
-- Manually launch the desktop app to confirm the native window icon and the
-  topbar mark render correctly.
+- Validate the canonical geometry does not regress into an enclosed or
+  letter-like form and that the topbar uses the standalone variant.
+- Validate raster dimensions, alpha, native Tao icon construction, and package
+  references for Windows, macOS, and Linux.
+- Run Rust, packaging, formatting, and build checks.
+- Manually inspect the topbar at wide and narrow widths and inspect the
+  launcher/titlebar icon against light and dark system chrome.
