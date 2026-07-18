@@ -391,10 +391,12 @@ pub fn TopBar(
                                 let mut selected = selected;
                                 let mut timeline_open = timeline_open;
                                 let mut queued_changes_open = queued_changes_open;
+                                let mut compare_with = compare_with;
                                 move |_| {
                                     if !queued_changes_open() {
                                         selected.set(None);
                                         timeline_open.set(false);
+                                        compare_with.set(None);
                                     }
                                     queued_changes_open.toggle();
                                 }

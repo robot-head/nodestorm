@@ -259,6 +259,29 @@ mod tests {
     }
 
     #[test]
+    fn opening_the_queue_closes_an_active_comparison() {
+        let queue_button = TOPBAR_SOURCE
+            .find("title: \"Review, edit, or remove queued changes\"")
+            .expect("TopBar must provide a queue button");
+        let queue_handler = &TOPBAR_SOURCE[queue_button..];
+        let handler_end = queue_handler
+            .find("},\n                            \"{queued_count}\"")
+            .expect("queue button must have an onclick handler");
+        let handler = &queue_handler[..handler_end];
+
+        for reset in [
+            "selected.set(None);",
+            "timeline_open.set(false);",
+            "compare_with.set(None);",
+        ] {
+            assert!(
+                handler.contains(reset),
+                "opening the queue must reset `{reset}` so it owns the right-panel slot"
+            );
+        }
+    }
+
+    #[test]
     fn minimum_viewport_keeps_topbar_and_menus_reachable() {
         const MEDIA: &str = "@media (max-width: 519px) {";
         let media_start = CSS
