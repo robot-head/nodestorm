@@ -1,0 +1,92 @@
+1
+00:00:00,013 --> 00:00:03,032
+nodestorm: a live canvas your agent draws on while you decide
+
+2
+00:00:03,033 --> 00:00:06,033
+Claude Code (any MCP agent) proposes an architecture...
+
+3
+00:00:06,033 --> 00:00:09,037
+Components become cards, dependencies become edges
+
+4
+00:00:09,037 --> 00:00:12,545
+Status rails: existing, proposed - and the agent is now waiting on YOU
+
+5
+00:00:13,044 --> 00:00:16,053
+Every open choice is pinned to its component
+
+6
+00:00:16,053 --> 00:00:19,181
+Hover an option - the components it would ripple into light up
+
+7
+00:00:19,181 --> 00:00:21,696
+Picked - with the trade-offs recorded
+
+8
+00:00:21,696 --> 00:00:24,698
+Add a note for the agent and send your decisions
+
+9
+00:00:24,698 --> 00:00:27,705
+The agent wakes with your decisions and updates the graph
+
+10
+00:00:27,833 --> 00:00:30,968
+The canvas is yours too - add your own components
+
+11
+00:00:30,968 --> 00:00:33,971
+Rename, connect, delete - your edits flow back to the agent
+
+12
+00:00:33,971 --> 00:00:36,977
+Deleting an agent's component asks the agent politely
+
+13
+00:00:36,977 --> 00:00:39,477
+Undo covers every edit until decisions are delivered
+
+14
+00:00:39,500 --> 00:00:44,528
+The minimap pans big graphs - groups collapse into one card
+
+15
+00:00:44,528 --> 00:00:47,536
+Search highlights matches...
+
+16
+00:00:47,536 --> 00:00:50,536
+...and Enter zoom-cycles through them
+
+17
+00:00:50,044 --> 00:00:53,548
+Sessions are parallel brainstorms - agents can wait on one while you work in another
+
+18
+00:00:53,548 --> 00:00:56,553
+Compare shows how two sessions drifted
+
+19
+00:00:56,553 --> 00:00:59,197
+The timeline is the session's full decision log
+
+20
+00:01:00,055 --> 00:01:03,235
+Export writes a Markdown decision record - pros, cons, and the trail
+
+21
+00:01:04,058 --> 00:01:12,294
+Twelve palettes, light and dark, live-switching
+
+22
+00:01:12,301 --> 00:01:15,301
+Narrow window? The bar folds - message the agent from the compose pod
+
+23
+00:01:15,200 --> 00:01:18,260
+Even tiny windows keep every control reachable via More
+
