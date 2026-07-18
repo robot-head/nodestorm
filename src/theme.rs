@@ -129,6 +129,7 @@ mod tests {
     use super::*;
 
     const CSS: &str = include_str!("../assets/main.css");
+    const TOPBAR_SOURCE: &str = include_str!("ui/topbar.rs");
 
     /// Tokens that can never share a value between light and dark variants,
     /// so every family block must define them via `light-dark()`. Accent-ish
@@ -145,14 +146,27 @@ mod tests {
     ];
 
     /// The declaration body of the first CSS block for `selector`.
-    /// Token blocks are flat (no nested braces), so a naive brace scan works.
-    fn block_for(selector: &str) -> &'static str {
-        let start = CSS
-            .find(selector)
+    /// Contract rules are flat with one exact selector per line.
+    fn block_for_in<'a>(css: &'a str, selector: &str) -> &'a str {
+        let mut offset = 0;
+        let start = css
+            .split_inclusive('\n')
+            .find_map(|line| {
+                let start = offset;
+                offset += line.len();
+                let rest = line.trim_start().strip_prefix(selector)?;
+                rest.find('{')
+                    .filter(|open| rest[..*open].trim().is_empty())
+                    .map(|_| start)
+            })
             .unwrap_or_else(|| panic!("no CSS block for selector {selector}"));
-        let open = CSS[start..].find('{').expect("opening brace") + start;
-        let close = CSS[open..].find('}').expect("closing brace") + open;
-        &CSS[open + 1..close]
+        let open = css[start..].find('{').expect("opening brace") + start;
+        let close = css[open..].find('}').expect("closing brace") + open;
+        &css[open + 1..close]
+    }
+
+    fn block_for(selector: &str) -> &'static str {
+        block_for_in(CSS, selector)
     }
 
     fn assert_block_contains(selector: &str, declaration: &str) {
@@ -164,21 +178,46 @@ mod tests {
     }
 
     #[test]
+    fn exact_selector_lookup_ignores_longer_selector() {
+        let css = ".session-row.active .sess-name {\n\
+                     color: red;\n\
+                   }\n\
+                   .sess-name {\n\
+                     flex: 1 1 auto;\n\
+                   }\n";
+
+        assert_eq!(block_for_in(css, ".sess-name").trim(), "flex: 1 1 auto;");
+    }
+
+    #[test]
     fn long_content_surfaces_have_overflow_contracts() {
-        assert_block_contains(".panel {", "width: min(360px, 100vw)");
-        assert_block_contains(".panel {", "overflow-x: hidden");
-        assert_block_contains(".panel-head h2 {", "overflow-wrap: anywhere");
-        assert_block_contains(".option-label {", "overflow-wrap: anywhere");
-        assert_block_contains(".export-dropdown {", "max-height: calc(100vh - 64px)");
-        assert_block_contains(".export-dropdown {", "overflow-y: auto");
-        assert_block_contains(".activity.expanded {", "overflow-y: auto");
-        assert_block_contains(".activity-text {", "overflow-wrap: anywhere");
-        assert_block_contains(".diff-text {", "overflow-wrap: anywhere");
-        assert_block_contains(".empty-cmd {", "max-width: 100%");
-        assert_block_contains(".session-row > .sess-switch {", "width: auto");
-        assert_block_contains(".session-row > .sess-switch {", "flex: 1 1 0");
-        assert_block_contains(".session-row > .sess-switch {", "min-width: 0");
-        assert_block_contains(".sess-name {", "flex: 1 1 auto");
+        assert_block_contains(".panel", "width: min(360px, 100vw)");
+        assert_block_contains(".panel", "overflow-x: hidden");
+        assert_block_contains(".panel-head h2", "overflow-wrap: anywhere");
+        assert_block_contains(".option-label", "overflow-wrap: anywhere");
+        assert_block_contains(".export-dropdown", "max-height: calc(100vh - 64px)");
+        assert_block_contains(".export-dropdown", "overflow-y: auto");
+        assert_block_contains(".activity.expanded", "overflow-y: auto");
+        assert_block_contains(".activity-text", "overflow-wrap: anywhere");
+        assert_block_contains(".diff-text", "overflow-wrap: anywhere");
+        assert_block_contains(".empty-cmd", "max-width: 100%");
+    }
+
+    #[test]
+    fn session_row_keeps_names_badges_and_actions_discoverable() {
+        assert_block_contains(".session-row > .sess-switch", "width: auto");
+        assert_block_contains(".session-row > .sess-switch", "flex: 1 1 0");
+        assert_block_contains(".session-row > .sess-switch", "min-width: 0");
+        assert_block_contains(".sess-name", "flex: 1 1 auto");
+        assert_block_contains(".sess-name", "min-width: 0");
+        assert_block_contains(".sess-name", "overflow-wrap: anywhere");
+        assert_block_contains(".sess-badges", "flex: 0 0 auto");
+        assert_block_contains(".session-row > .ctl-btn", "flex: 0 0 auto");
+        assert!(
+            TOPBAR_SOURCE
+                .contains(r#"span { class: "sess-name", title: "{info.name}", "{info.name}" }"#),
+            "session name markup must expose the complete name as a native title"
+        );
     }
 
     #[test]
