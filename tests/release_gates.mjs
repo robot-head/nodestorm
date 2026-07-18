@@ -64,3 +64,12 @@ test("Windows setup aborts unavailable Store, version, port, and readiness paths
   ]) assert.match(script, pattern);
   assert.doesNotMatch(script, /releases\/download|https?:\/\/[^\s"']+\.msix(?:bundle)?/i);
 });
+
+test("Windows package assets use the redesigned square icon without distortion", async () => {
+  const script = await readFile(path.join(root, "packaging", "windows", "prepare-layout.ps1"), "utf8");
+
+  assert.match(script, /assets[\\\/]icons[\\\/]nodestorm-1024\.png/i);
+  assert.doesNotMatch(script, /docs[\\\/]demo[\\\/]poster\.png/i);
+  assert.match(script, /Wide310x150Logo\.png/);
+  assert.match(script, /\$x\s*=\s*\(\$asset\.Width\s*-\s*\$side\)\s*\/\s*2/i);
+});
