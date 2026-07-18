@@ -77,15 +77,27 @@ test("Windows package assets use the redesigned square icon without distortion",
 test("macOS app bundle packages the redesigned icon", async () => {
   const plist = await readFile(path.join(root, "packaging", "macos", "Info.plist"), "utf8");
   const workflow = await readFile(path.join(root, ".github", "workflows", "release-build.yml"), "utf8");
+  const macosWorkflow = workflow.slice(workflow.indexOf("\n  macos:"), workflow.indexOf("\n  windows:"));
 
   assert.match(plist, /<key>CFBundleIconFile<\/key><string>Nodestorm\.icns<\/string>/);
-  for (const name of [
-    "icon_16x16.png", "icon_16x16@2x.png",
-    "icon_32x32.png", "icon_32x32@2x.png",
-    "icon_128x128.png", "icon_128x128@2x.png",
-    "icon_256x256.png", "icon_256x256@2x.png",
-    "icon_512x512.png", "icon_512x512@2x.png",
-  ]) assert.match(workflow, new RegExp(name.replaceAll(".", "\\.")));
-  assert.match(workflow, /iconutil -c icns/);
-  assert.match(workflow, /Contents\/Resources\/Nodestorm\.icns/);
+  for (const command of [
+    'cp assets/icons/nodestorm-16.png "$ICONSET/icon_16x16.png"',
+    'cp assets/icons/nodestorm-32.png "$ICONSET/icon_16x16@2x.png"',
+    'cp assets/icons/nodestorm-32.png "$ICONSET/icon_32x32.png"',
+    'cp assets/icons/nodestorm-64.png "$ICONSET/icon_32x32@2x.png"',
+    'cp assets/icons/nodestorm-128.png "$ICONSET/icon_128x128.png"',
+    'cp assets/icons/nodestorm-256.png "$ICONSET/icon_128x128@2x.png"',
+    'cp assets/icons/nodestorm-256.png "$ICONSET/icon_256x256.png"',
+    'cp assets/icons/nodestorm-512.png "$ICONSET/icon_256x256@2x.png"',
+    'cp assets/icons/nodestorm-512.png "$ICONSET/icon_512x512.png"',
+    'cp assets/icons/nodestorm-1024.png "$ICONSET/icon_512x512@2x.png"',
+  ]) assert.ok(macosWorkflow.includes(command), `missing macOS icon mapping: ${command}`);
+
+  const iconGeneration = macosWorkflow.indexOf('iconutil -c icns -o "$APP/Contents/Resources/Nodestorm.icns" "$ICONSET"');
+  const iconCheck = macosWorkflow.indexOf('test -s "$APP/Contents/Resources/Nodestorm.icns"');
+  const firstCodesign = macosWorkflow.indexOf("codesign");
+  assert.notEqual(iconGeneration, -1);
+  assert.notEqual(iconCheck, -1);
+  assert.notEqual(firstCodesign, -1);
+  assert.ok(iconGeneration < iconCheck && iconCheck < firstCodesign, "macOS icon must be generated and checked before codesign");
 });
