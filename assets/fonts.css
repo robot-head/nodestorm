@@ -1,6 +1,10 @@
 /* Space Grotesk (SIL OFL 1.1 — see assets/fonts/OFL.txt), variable 300-700,
-   embedded so the desktop app needs no network. Source file:
-   assets/fonts/SpaceGrotesk.woff2 (regenerate this file from it). */
+   embedded as a data URI so the desktop app needs no network. Source:
+   assets/fonts/SpaceGrotesk.woff2. Google Fonts css2 serves per-script
+   subsets: regenerate ONLY from the block Google labels "latin"
+   (unicode-range U+0000-00FF). The other blocks (vietnamese, latin-ext)
+   contain no A-Z glyphs and embed as a silent no-op. Sanity check: the
+   latin woff2 is well over 10 KB. */
 @font-face {
   font-family: "Space Grotesk";
   font-style: normal;
