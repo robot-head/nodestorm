@@ -524,9 +524,34 @@ try {
     }
     if (-not (Wait-Element 'Message to agent' 5)) { Fail 'compose pod did not appear at 760px' }
     Save-WindowPng $hwnd (Join-Path $OutDir '07-narrow-760.png')
+    Log 'narrow-window topbar fit verified (760px)'
+
+    # At <=560px (logical) the Undo/Redo pods fold into the More menu.
+    [void][NodestormVerify.Native]::SetWindowPos($hwnd, [IntPtr]1, 0, 0, 520, 840, 0x0012)
+    Start-Sleep -Milliseconds 800
+    # An occluded (bottom z-order) WebView2 commits at most one out-of-band
+    # resize per app lifetime: this second one shrinks the native windows but
+    # the page keeps the 760px layout, so UIA rect centers can lie beyond the
+    # shrunken render widget, where posted clicks are dropped unseen. Clamp
+    # the click x into the widget - the More pod straddles the stale edge, so
+    # the clamped point still lands on it (and is a no-op on fresh layouts).
+    $more = Wait-Element 'More' 5
+    if (-not $more) { Fail 'More pod missing from UIA at 520px' }
+    $mr = $more.Current.BoundingRectangle
+    $rwh = Get-RenderWidget $hwnd
+    if ($rwh -eq [IntPtr]::Zero) { Fail 'WebView2 render widget window not found' }
+    $rwr = New-Object NodestormVerify.Native+RECT
+    [void][NodestormVerify.Native]::GetWindowRect($rwh, [ref]$rwr)
+    $mx = [Math]::Min($mr.X + $mr.Width / 2, $rwr.Right - 12)
+    $my = $mr.Y + $mr.Height / 2
+    Click-Point $hwnd $mx $my
+    if (-not (Wait-Element ([string][char]0x21B6 + ' Undo') 5)) { Fail 'Undo row missing from More menu at 520px' }
+    Save-WindowPng $hwnd (Join-Path $OutDir '08-narrow-520-more.png')
+    Click-Point $hwnd $mx $my
+    Log 'narrow-window More-menu undo/redo fallback verified (520px)'
+
     [void][NodestormVerify.Native]::SetWindowPos($hwnd, [IntPtr]1, 0, 0, 1280, 840, 0x0012)
     Start-Sleep -Milliseconds 400
-    Log 'narrow-window topbar fit verified (760px)'
 
     # Native title bar follows the mode: after clicking Light the DWM
     # immersive-dark flag must be off. (Pixel checks are unreliable here —

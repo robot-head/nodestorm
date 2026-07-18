@@ -285,92 +285,6 @@ body {
   border-color: var(--accent);
 }
 
-/* ---------- responsive topbar (container queries; old engines keep the
-   wide layout — same as pre-v0.8 behavior) ---------- */
-
-.pod-compose {
-  display: none;
-}
-
-.compose-pop {
-  min-width: 260px;
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.compose-input {
-  margin-bottom: 0;
-}
-
-.topbar-title {
-  flex: 0 1 auto;
-  min-width: 0;
-}
-
-@container topbar (max-width: 1080px) {
-  .pod-label {
-    display: none;
-  }
-}
-
-@container topbar (max-width: 900px) {
-  .topbar-title {
-    display: none;
-  }
-}
-
-@container topbar (max-width: 780px) {
-  .send-comment {
-    display: none;
-  }
-
-  .pod-compose {
-    display: inline-flex;
-  }
-
-  .search-pod .search-box {
-    width: 34px;
-    min-width: 34px;
-    padding-left: 30px;
-    transition: width 140ms ease, min-width 140ms ease;
-  }
-
-  .search-pod:focus-within .search-box {
-    width: 190px;
-    min-width: 150px;
-  }
-}
-
-@container topbar (max-width: 600px) {
-  .seg-word {
-    display: none;
-  }
-
-  .topbar-word {
-    display: none;
-  }
-
-  .sess-pod {
-    max-width: 90px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-}
-
-@container topbar (max-width: 560px) {
-  .pod-undo,
-  .pod-redo {
-    display: none;
-  }
-
-  .more-dropdown .row-undo,
-  .more-dropdown .row-redo {
-    display: block;
-  }
-}
-
 /* ---------- empty state ---------- */
 
 .empty-state {
@@ -1728,5 +1642,102 @@ body {
     --on-badge: light-dark(#ffffff, #272822);
     --shadow: light-dark(#2c2d2459, #000000);
     --dot-grid: light-dark(#e6e6da, #2e2f28);
+  }
+}
+
+/* ---------- responsive topbar (container queries; old engines keep the
+   wide layout — same as pre-v0.8 behavior). Kept LAST in the file on
+   purpose: several rules here override same-specificity base rules above
+   (e.g. the More-menu .row-undo/.row-redo reveal vs. their display:none
+   base), and on a specificity tie CSS resolves by source order. ---------- */
+
+.compose-menu {
+  display: none;
+}
+
+.pod-compose {
+  display: none;
+}
+
+.compose-pop {
+  min-width: 260px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.compose-pop .compose-input {
+  margin-bottom: 0;
+}
+
+.topbar-title {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+@container topbar (max-width: 1080px) {
+  .pod-label {
+    display: none;
+  }
+}
+
+@container topbar (max-width: 900px) {
+  .topbar-title {
+    display: none;
+  }
+}
+
+@container topbar (max-width: 780px) {
+  .send-comment {
+    display: none;
+  }
+
+  .compose-menu {
+    display: block;
+  }
+
+  .pod-compose {
+    display: inline-flex;
+  }
+
+  .search-pod .search-box {
+    width: 34px;
+    min-width: 34px;
+    padding-left: 30px;
+    transition: width 140ms ease, min-width 140ms ease;
+  }
+
+  .search-pod:focus-within .search-box {
+    width: 190px;
+    min-width: 150px;
+  }
+}
+
+@container topbar (max-width: 600px) {
+  .seg-word {
+    display: none;
+  }
+
+  .topbar-word {
+    display: none;
+  }
+
+  .sess-pod {
+    max-width: 90px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+@container topbar (max-width: 560px) {
+  .pod-undo,
+  .pod-redo {
+    display: none;
+  }
+
+  .more-dropdown .row-undo,
+  .more-dropdown .row-redo {
+    display: block;
   }
 }
