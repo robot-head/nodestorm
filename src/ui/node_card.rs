@@ -18,7 +18,7 @@ fn kind_glyph(kind: NodeKind) -> &'static str {
     }
 }
 
-fn kind_label(kind: NodeKind) -> &'static str {
+pub(crate) fn kind_label(kind: NodeKind) -> &'static str {
     match kind {
         NodeKind::Service => "service",
         NodeKind::Module => "module",
@@ -101,7 +101,11 @@ pub fn NodeCard(
             }
             div { class: "node-head",
                 span { class: "node-glyph", "{kind_glyph(node.kind)}" }
-                span { class: "node-label", "{node.label}" }
+                span {
+                    class: "node-label",
+                    title: "{node.label}",
+                    "{node.label}"
+                }
             }
             div { class: "node-meta",
                 span { class: "node-kind", "{kind_label(node.kind)}" }
@@ -111,7 +115,7 @@ pub fn NodeCard(
                 if let Some(group) = &node.group {
                     span {
                         class: "node-group",
-                        title: "Collapse this group into one card",
+                        title: "{group} — collapse this group into one card",
                         onclick: move |ev| {
                             ev.stop_propagation();
                             on_toggle_group.call(ev);
@@ -121,7 +125,11 @@ pub fn NodeCard(
                 }
             }
             if !node.description.is_empty() {
-                p { class: "node-desc", "{node.description}" }
+                p {
+                    class: "node-desc",
+                    title: "{node.description}",
+                    "{node.description}"
+                }
             }
             if open > 0 || decided > 0 || notes > 0 {
                 div { class: "node-badges",

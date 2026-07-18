@@ -1181,9 +1181,9 @@ button.empty-cmd code {
 /* ---------- node cards ---------- */
 /* Geometry must stay in sync with layout::estimate_height:
    card width 260, border 1px, padding 13px horizontal (text width 232),
-   head row ~24px, meta row ~20px, 18px line-height text, description
-   clamped to 4 lines, badge row 28px. The 3px status rail is an absolute
-   ::before overlay and adds no height. */
+   head row ~24px, meta row ~20px, 18px line-height text, labels clamped to
+   3 lines, descriptions clamped to 4 lines, badge row 28px. The 3px status
+   rail is an absolute ::before overlay and adds no height. */
 
 .node-card {
   position: absolute;
@@ -1244,7 +1244,19 @@ button.empty-cmd code {
   font-size: 13px;
 }
 
+.node-glyph,
+.node-kind,
+.node-status-tag {
+  flex: 0 0 auto;
+}
+
 .node-label {
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
   font-family: var(--font-display);
   font-weight: 500;
   font-size: 13.5px;
@@ -1253,6 +1265,7 @@ button.empty-cmd code {
 }
 
 .node-meta {
+  min-width: 0;
   display: flex;
   gap: 8px;
   align-items: center;
@@ -1288,12 +1301,17 @@ button.empty-cmd code {
 }
 
 .node-group {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 0 6px;
 }
 
 .node-desc {
+  overflow-wrap: anywhere;
   margin: 4px 0 0;
   color: var(--text-dim);
   line-height: 18px;

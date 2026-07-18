@@ -29,7 +29,7 @@ pub fn ClusterCard(
             },
             div { class: "node-head",
                 span { class: "node-glyph", "▣" }
-                span { class: "node-label", "{group}" }
+                span { class: "node-label", title: "{group}", "{group}" }
             }
             div { class: "node-meta",
                 span { class: "node-kind", "{member_count} components" }
