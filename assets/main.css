@@ -335,7 +335,9 @@ body {
   box-shadow: 0 0 10px var(--glow);
 }
 
-.empty-cmd code {
+/* button.empty-cmd (0,1,2) outranks the later .empty-state code (0,1,1),
+   so the pod's command text stays flat — no nested box inside the pill. */
+button.empty-cmd code {
   background: none;
   border: none;
   padding: 0;
