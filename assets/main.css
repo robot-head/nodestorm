@@ -814,7 +814,8 @@ button.empty-cmd code {
   top: calc(100% + 4px);
   right: 0;
   z-index: 41;
-  min-width: 190px;
+  min-width: min(190px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
   max-height: calc(100vh - 64px);
   background: var(--bg-panel);
   border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
@@ -850,7 +851,8 @@ button.empty-cmd code {
 }
 
 .sessions-dropdown {
-  min-width: 230px;
+  min-width: min(230px, calc(100vw - 64px));
+  max-width: calc(100vw - 64px);
   /* The sessions menu sits near the window's LEFT edge; right-anchoring
      (the Export menu's default) would push it off-window for short session
      names. */
@@ -859,7 +861,8 @@ button.empty-cmd code {
 }
 
 .more-dropdown {
-  min-width: 230px;
+  min-width: min(230px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
 }
 
 .more-dropdown .accordion-head {

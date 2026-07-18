@@ -80,6 +80,10 @@ fn connection_display(selected: &NodeId, edge: &Edge, doc: &SessionDoc) -> Conne
     }
 }
 
+fn visible_group(group: Option<&str>) -> Option<&str> {
+    group.filter(|value| !value.trim().is_empty())
+}
+
 #[component]
 pub fn ChoicePanel(
     node: Node,
@@ -135,7 +139,7 @@ pub fn ChoicePanel(
                     dt { "Status" }
                     dd { "{super::node_card::status_class(node.status)}" }
                 }
-                if let Some(group) = &node.group {
+                if let Some(group) = visible_group(node.group.as_deref()) {
                     div { class: "panel-meta-row",
                         dt { "Group" }
                         dd { "{group}" }
@@ -499,5 +503,13 @@ mod tests {
 
         assert_eq!(display.direction, "Incoming from");
         assert_eq!(display.endpoint, "Public API");
+    }
+
+    #[test]
+    fn group_metadata_omits_empty_values_without_rewriting_content() {
+        assert_eq!(visible_group(None), None);
+        assert_eq!(visible_group(Some("")), None);
+        assert_eq!(visible_group(Some("   ")), None);
+        assert_eq!(visible_group(Some(" Platform ")), Some(" Platform "));
     }
 }

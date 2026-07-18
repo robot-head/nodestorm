@@ -205,6 +205,25 @@ mod tests {
     }
 
     #[test]
+    fn dropdowns_fit_the_supported_viewport() {
+        assert_block_contains(
+            ".export-dropdown",
+            "min-width: min(190px, calc(100vw - 32px))",
+        );
+        assert_block_contains(".export-dropdown", "max-width: calc(100vw - 32px)");
+        assert_block_contains(
+            ".sessions-dropdown",
+            "min-width: min(230px, calc(100vw - 64px))",
+        );
+        assert_block_contains(".sessions-dropdown", "max-width: calc(100vw - 64px)");
+        assert_block_contains(
+            ".more-dropdown",
+            "min-width: min(230px, calc(100vw - 32px))",
+        );
+        assert_block_contains(".more-dropdown", "max-width: calc(100vw - 32px)");
+    }
+
+    #[test]
     fn collapsed_activity_preview_is_bounded() {
         assert_block_contains(
             ".activity:not(.expanded) .activity-text",
