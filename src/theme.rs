@@ -198,6 +198,7 @@ mod tests {
         assert_block_contains(".export-dropdown", "max-height: calc(100vh - 64px)");
         assert_block_contains(".export-dropdown", "overflow-y: auto");
         assert_block_contains(".activity.expanded", "overflow-y: auto");
+        assert_block_contains(".activity.expanded", "z-index: 16");
         assert_block_contains(".activity-text", "overflow-wrap: anywhere");
         assert_block_contains(".diff-text", "overflow-wrap: anywhere");
         assert_block_contains(".empty-cmd", "max-width: 100%");

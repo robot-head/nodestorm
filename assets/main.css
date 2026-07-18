@@ -1171,6 +1171,7 @@ button.empty-cmd code {
   max-height: min(60vh, 520px);
   overflow-x: hidden;
   overflow-y: auto;
+  z-index: 16;
 }
 
 .activity-head {
