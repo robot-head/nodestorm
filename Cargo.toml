@@ -5,6 +5,7 @@ edition = "2024"
 description = "Visual brainstorming canvas for agentic AI planning — architecture graphs with human-in-the-loop decisions over MCP"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/robot-head/nodestorm"
+rust-version = "1.97.1"
 
 [dependencies]
 dioxus = { version = "0.7.9", features = ["desktop"] }
@@ -24,6 +25,7 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 tokio-util = "0.7"
 rfd = "0.17.2"
+webkit2gtk = "2.0.2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
