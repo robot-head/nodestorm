@@ -383,6 +383,18 @@ mod tests {
     }
 
     #[test]
+    fn session_management_forms_and_danger_zone_are_distinct() {
+        assert_block_contains(".session-manage", "border-top: 1px solid var(--border)");
+        assert_block_contains(".session-form", "display: grid");
+        assert_block_contains(".session-form-row", "display: flex");
+        assert_block_contains(".session-name-input", "border-radius: 7px");
+        assert_block_contains(".session-name-input", "width: 100%");
+        assert_block_contains(".session-danger", "border-top: 1px solid var(--border)");
+        assert_block_contains(".session-delete", "color: var(--status-removed)");
+        assert_block_contains(".delete-confirm", "background: var(--accent-soft)");
+    }
+
+    #[test]
     fn family_ids_are_unique_and_slug_safe() {
         let mut seen = std::collections::BTreeSet::new();
         for f in FAMILIES {
