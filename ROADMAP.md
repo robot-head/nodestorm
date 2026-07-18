@@ -89,7 +89,52 @@ tight, make its results durable, then make the canvas scale.
       (Export/Theme accordions), compose popover for the narrow-width
       agent message, narrow-fit E2E assertion
 
-## Later
+## Next
+
+Organized as themes, priority-ordered inside each (leverage-first:
+features that extend existing machinery and unlock later ones come
+first). Versions get assigned when work starts.
+
+### Deepen the agent loop
+
+- [ ] Free-form agent questions: an `ask` op on `update_graph` — the
+      agent attaches an open question (optionally to a node); the user
+      answers with text in the panel. Answers ride the decision queue
+      with exactly-once delivery; unanswered questions export under
+      *Open questions*, answered ones alongside decided choices.
+- [ ] Implementation tracking: a build lifecycle on node status
+      (`planned → building → built → verified`) the agent sets via
+      `update_graph` as it implements. Status rails + a topbar progress
+      summary make the canvas a live progress board; exports gain an
+      implementation-status column — the record says what was decided
+      *and* what shipped.
+- [ ] Choice dependencies: choices declare `depends_on` other choices;
+      dependents render locked with a "waiting on X" hint until the
+      parent is decided (re-scoping the dependent stays the agent's
+      job). Reopening a parent flags decided dependents for review;
+      cycles rejected at the API.
+- [ ] Multi-agent sessions (sketch — needs its own brainstorm):
+      per-agent identity at the MCP layer, color/badge attribution on
+      nodes, choices, and the feed; `await_decisions` returns only
+      decisions addressed to (or unclaimed by) that agent; concurrent
+      awaits on the *same* session become legal.
+
+### Canvas & visualization power
+
+- [ ] Semantic zoom: zoom-tiered rendering on top of viewport culling —
+      far out, cards collapse to labeled chips and group outlines
+      dominate; mid, title + status; close, the full card. Legibility
+      on big graphs without manual collapsing.
+- [ ] Swimlanes & layers: an optional `lane` on nodes
+      (agent-assignable, user-overridable) constraining the layered
+      layout to labeled horizontal lanes; plus toggleable edge-kind
+      layers (e.g. data-flow only) to declutter dense graphs.
+- [ ] Freehand annotations: sticky notes, arrows, and highlight regions
+      drawn on the canvas — deliberately *not* graph structure.
+      Origin-tracked like user nodes (survive agent proposes),
+      delivered as note events, exported in an *Annotations* section.
+
+### Scale & records
 
 - [ ] Minimap virtualization for very large graphs
 - [ ] Diff against exported record files (session-vs-session shipped in
