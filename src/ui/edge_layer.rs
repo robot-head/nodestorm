@@ -5,6 +5,19 @@ use dioxus::prelude::*;
 use crate::layout::Layout;
 use crate::model::{EdgeKind, ElementStatus};
 
+const MAX_EDGE_LABEL_CHARS: usize = 32;
+
+fn edge_label_preview(label: &str) -> String {
+    if label.chars().count() <= MAX_EDGE_LABEL_CHARS {
+        return label.to_owned();
+    }
+    label
+        .chars()
+        .take(MAX_EDGE_LABEL_CHARS - 1)
+        .chain(std::iter::once('…'))
+        .collect()
+}
+
 fn status_class(status: ElementStatus) -> &'static str {
     match status {
         ElementStatus::Existing => "existing",
@@ -96,7 +109,8 @@ pub fn EdgeLayer(
                         x: "{e.label_pos.x}",
                         y: "{e.label_pos.y}",
                         text_anchor: "middle",
-                        "{label}"
+                        title { "{label}" }
+                        {edge_label_preview(label)}
                     }
                 }
             }
@@ -110,5 +124,24 @@ pub fn EdgeLayer(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_edge_labels_are_unchanged() {
+        assert_eq!(edge_label_preview("read/write"), "read/write");
+    }
+
+    #[test]
+    fn long_edge_labels_are_unicode_safe_and_32_chars() {
+        let label = format!("{}éé", "a".repeat(31));
+        let preview = edge_label_preview(&label);
+
+        assert_eq!(preview.chars().count(), 32);
+        assert_eq!(preview, format!("{}…", "a".repeat(31)));
     }
 }

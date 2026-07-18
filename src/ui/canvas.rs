@@ -20,7 +20,7 @@ use super::edge_layer::EdgeLayer;
 use super::minimap::Minimap;
 use super::node_card::NodeCard;
 
-use super::{TOPBAR_H, VIEW_H, VIEW_W};
+use super::{TOPBAR_H, ViewportSize};
 
 const MIN_SCALE: f64 = 0.15;
 const MAX_SCALE: f64 = 2.5;
@@ -53,7 +53,10 @@ pub fn Canvas(
     hovered_affects: Signal<Vec<NodeId>>,
 ) -> Element {
     let store = use_store();
-    let mut transform = use_signal(|| ViewTransform::fit(&layout.read().bounds, VIEW_W, VIEW_H));
+    let mut viewport = use_signal(|| ViewportSize::FALLBACK);
+    let fallback = ViewportSize::FALLBACK;
+    let mut transform =
+        use_signal(|| ViewTransform::fit(&layout.read().bounds, fallback.width, fallback.height));
     let mut gesture: Signal<GestureState> = use_signal(GestureState::default);
     let mut connect_from = use_context::<super::ConnectFrom>().0;
     let mut zoom_target = use_context::<super::ZoomTarget>().0;
@@ -70,10 +73,11 @@ pub fn Canvas(
     };
     // Center the view on a node and zoom in a step (double-click a card).
     let mut zoom_to = move |rect: crate::layout::Rect| {
+        let viewport = viewport();
         transform.with_mut(|t| {
             t.scale = t.scale.max(1.2).clamp(MIN_SCALE, MAX_SCALE);
-            t.tx = VIEW_W / 2.0 - (rect.x + rect.w / 2.0) * t.scale;
-            t.ty = VIEW_H / 2.0 - (rect.y + rect.h / 2.0) * t.scale;
+            t.tx = viewport.width / 2.0 - (rect.x + rect.w / 2.0) * t.scale;
+            t.ty = viewport.height / 2.0 - (rect.y + rect.h / 2.0) * t.scale;
         });
     };
     // One-shot zoom requests (search Enter-cycling).
@@ -88,8 +92,9 @@ pub fn Canvas(
     });
     // Zoom about the viewport center (keyboard +/-).
     let mut zoom_step = move |factor: f64| {
+        let viewport = viewport();
         transform.with_mut(|t| {
-            let (cx, cy) = (VIEW_W / 2.0, VIEW_H / 2.0);
+            let (cx, cy) = (viewport.width / 2.0, viewport.height / 2.0);
             let new_scale = (t.scale * factor).clamp(MIN_SCALE, MAX_SCALE);
             let real = new_scale / t.scale;
             t.tx = cx - (cx - t.tx) * real;
@@ -157,20 +162,29 @@ pub fn Canvas(
             if let Some(id) = focus
                 && let Some(rect) = layout.read().rects.get(&id)
             {
+                let viewport = viewport();
                 transform.with_mut(|t| {
-                    t.tx = VIEW_W / 2.0 - (rect.x + rect.w / 2.0) * t.scale;
-                    t.ty = VIEW_H / 2.0 - (rect.y + rect.h / 2.0) * t.scale;
+                    t.tx = viewport.width / 2.0 - (rect.x + rect.w / 2.0) * t.scale;
+                    t.ty = viewport.height / 2.0 - (rect.y + rect.h / 2.0) * t.scale;
                 });
             }
         }
     });
 
     let t = transform();
+    let viewport_size = viewport();
     let l = layout.read();
     let d = doc.read();
     // Viewport culling: only on-screen(±margin) cards, clusters, and edges
     // hit the DOM — the difference between 30 and 300 components.
-    let vis = crate::layout::visible_set(&l, t.tx, t.ty, t.scale, VIEW_W, VIEW_H);
+    let vis = crate::layout::visible_set(
+        &l,
+        t.tx,
+        t.ty,
+        t.scale,
+        viewport_size.width,
+        viewport_size.height,
+    );
     let panning = matches!(gesture.read().gesture, Some(Gesture::Pan { .. }));
     let viewport_class = match (panning, connect_from().is_some()) {
         (true, _) => "canvas-viewport panning",
@@ -182,6 +196,19 @@ pub fn Canvas(
         div {
             class: "{viewport_class}",
             tabindex: "0",
+            onresize: move |ev: ResizeEvent| {
+                let Ok(size) = ev.data().get_content_box_size() else {
+                    return;
+                };
+                let Some(next) = ViewportSize::observed(size.width, size.height) else {
+                    return;
+                };
+                let old = viewport();
+                if next != old {
+                    transform.with_mut(|t| t.reframe(old, next));
+                    viewport.set(next);
+                }
+            },
             onkeydown: {
                 let store = store.clone();
                 move |ev: KeyboardEvent| {
@@ -239,15 +266,19 @@ pub fn Canvas(
                         Key::Character(c) => match c.as_str() {
                             "+" | "=" => zoom_step(1.25),
                             "-" => zoom_step(0.8),
-                            "0" => transform.set(ViewTransform::fit(
-                                &layout.read().bounds,
-                                VIEW_W,
-                                VIEW_H,
-                            )),
+                            "0" => {
+                                let viewport = viewport();
+                                transform.set(ViewTransform::fit(
+                                    &layout.read().bounds,
+                                    viewport.width,
+                                    viewport.height,
+                                ));
+                            }
                             "n" => {
                                 let t = transform();
-                                let px = (VIEW_W / 2.0 - t.tx) / t.scale;
-                                let py = (VIEW_H / 2.0 - t.ty) / t.scale;
+                                let viewport = viewport();
+                                let px = (viewport.width / 2.0 - t.tx) / t.scale;
+                                let py = (viewport.height / 2.0 - t.ty) / t.scale;
                                 match store.add_user_node(
                                     "New component".into(),
                                     NodeKind::Component,
@@ -570,12 +601,17 @@ pub fn Canvas(
                     class: "ctl-btn",
                     title: "Zoom to fit",
                     onclick: move |_| {
-                        transform.set(ViewTransform::fit(&layout.read().bounds, VIEW_W, VIEW_H));
+                        let viewport = viewport();
+                        transform.set(ViewTransform::fit(
+                            &layout.read().bounds,
+                            viewport.width,
+                            viewport.height,
+                        ));
                     },
                     "⤢ fit"
                 }
             }
-            Minimap { doc, layout, transform }
+            Minimap { doc, layout, transform, viewport: viewport_size }
         }
     }
 }

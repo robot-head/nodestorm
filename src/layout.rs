@@ -129,12 +129,13 @@ pub fn visible_set(
 
 /// Estimated card height in px. Must stay consistent with `assets/main.css`
 /// (card width 260, 13px horizontal padding → 232px text width, 18px line
-/// height, description clamped to 4 lines; the 3px status rail is an
-/// absolute overlay and adds no height).
+/// height, labels clamped to 3 lines, descriptions clamped to 4 lines; the
+/// 3px status rail is an absolute overlay and adds no height).
 pub fn estimate_height(node: &Node) -> f64 {
     const BASE: f64 = 54.0; // padding + kind row + first label line
     const LINE_H: f64 = 18.0;
-    let label_extra = wrap_lines(&node.label, 22).saturating_sub(1);
+    let label_lines = wrap_lines(&node.label, 22).min(3);
+    let label_extra = label_lines.saturating_sub(1);
     let desc_lines = if node.description.is_empty() {
         0
     } else {
@@ -989,6 +990,16 @@ mod tests {
         rich.description =
             "A long description that certainly wraps across multiple lines of card text".into();
         assert!(estimate_height(&rich) > estimate_height(&plain));
+    }
+
+    #[test]
+    fn height_caps_long_labels_at_three_lines() {
+        let mut three_lines = node("three-lines");
+        three_lines.label = "x".repeat(66);
+        let mut ten_lines = node("ten-lines");
+        ten_lines.label = "x".repeat(220);
+
+        assert_eq!(estimate_height(&three_lines), estimate_height(&ten_lines));
     }
 
     #[test]

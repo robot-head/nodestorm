@@ -67,6 +67,10 @@ pub fn TopBar(
                         onclick: move |_| sessions_open.set(false),
                     }
                     div { class: "export-dropdown sessions-dropdown",
+                        div { class: "session-doc-title", title: "{title}",
+                            span { "Brainstorm" }
+                            strong { "{title}" }
+                        }
                         for info in sessions.list() {
                             div {
                                 key: "{info.name}",
@@ -83,7 +87,7 @@ pub fn TopBar(
                                             sessions_open.set(false);
                                         }
                                     },
-                                    span { class: "sess-name", "{info.name}" }
+                                    span { class: "sess-name", title: "{info.name}", "{info.name}" }
                                     span { class: "sess-badges",
                                         if info.open_choices > 0 {
                                             span { class: "pill pill-open", "{info.open_choices}" }
@@ -203,7 +207,7 @@ pub fn TopBar(
                                             button {
                                                 key: "{name}",
                                                 class: "sess-switch",
-                                                title: "Bring this archived session back",
+                                                title: "Restore archived session {name}",
                                                 onclick: {
                                                     let sessions = sessions.clone();
                                                     let name = name.clone();
@@ -257,7 +261,7 @@ pub fn TopBar(
                     },
                 }
             }
-            span { class: "topbar-title", "{title}" }
+            span { class: "topbar-title", title: "{title}", "{title}" }
             span { class: "topbar-spacer" }
             if m.waiting_agents > 0 || open > 0 || m.undelivered > 0 {
                 span { class: "status-chip",

@@ -129,6 +129,7 @@ mod tests {
     use super::*;
 
     const CSS: &str = include_str!("../assets/main.css");
+    const TOPBAR_SOURCE: &str = include_str!("ui/topbar.rs");
 
     /// Tokens that can never share a value between light and dark variants,
     /// so every family block must define them via `light-dark()`. Accent-ish
@@ -145,14 +146,200 @@ mod tests {
     ];
 
     /// The declaration body of the first CSS block for `selector`.
-    /// Token blocks are flat (no nested braces), so a naive brace scan works.
-    fn block_for(selector: &str) -> &'static str {
-        let start = CSS
-            .find(selector)
+    /// Contract rules are flat with one exact selector per line.
+    fn block_for_in<'a>(css: &'a str, selector: &str) -> &'a str {
+        let mut offset = 0;
+        let start = css
+            .split_inclusive('\n')
+            .find_map(|line| {
+                let start = offset;
+                offset += line.len();
+                let rest = line.trim_start().strip_prefix(selector)?;
+                rest.find('{')
+                    .filter(|open| rest[..*open].trim().is_empty())
+                    .map(|_| start)
+            })
             .unwrap_or_else(|| panic!("no CSS block for selector {selector}"));
-        let open = CSS[start..].find('{').expect("opening brace") + start;
-        let close = CSS[open..].find('}').expect("closing brace") + open;
-        &CSS[open + 1..close]
+        let open = css[start..].find('{').expect("opening brace") + start;
+        let close = css[open..].find('}').expect("closing brace") + open;
+        &css[open + 1..close]
+    }
+
+    fn block_for(selector: &str) -> &'static str {
+        block_for_in(CSS, selector)
+    }
+
+    fn assert_block_contains(selector: &str, declaration: &str) {
+        let block = block_for(selector);
+        assert!(
+            block.contains(declaration),
+            "{selector} must contain `{declaration}`, got: {block}"
+        );
+    }
+
+    #[test]
+    fn exact_selector_lookup_ignores_longer_selector() {
+        let css = ".session-row.active .sess-name {\n\
+                     color: red;\n\
+                   }\n\
+                   .sess-name {\n\
+                     flex: 1 1 auto;\n\
+                   }\n";
+
+        assert_eq!(block_for_in(css, ".sess-name").trim(), "flex: 1 1 auto;");
+    }
+
+    #[test]
+    fn long_content_surfaces_have_overflow_contracts() {
+        assert_block_contains(".panel", "width: min(360px, 100vw)");
+        assert_block_contains(".panel", "overflow-x: hidden");
+        assert_block_contains(".panel-head h2", "overflow-wrap: anywhere");
+        assert_block_contains(".option-label", "overflow-wrap: anywhere");
+        assert_block_contains(".export-dropdown", "max-height: calc(100vh - 64px)");
+        assert_block_contains(".export-dropdown", "overflow-y: auto");
+        assert_block_contains(".activity.expanded", "overflow-y: auto");
+        assert_block_contains(".activity.expanded", "z-index: 16");
+        assert_block_contains(".activity-text", "overflow-wrap: anywhere");
+        assert_block_contains(".diff-text", "overflow-wrap: anywhere");
+        assert_block_contains(".empty-cmd", "max-width: 100%");
+    }
+
+    #[test]
+    fn dropdowns_fit_the_supported_viewport() {
+        assert_block_contains(
+            ".export-dropdown",
+            "min-width: min(190px, calc(100vw - 32px))",
+        );
+        assert_block_contains(".export-dropdown", "max-width: calc(100vw - 32px)");
+        assert_block_contains(
+            ".sessions-dropdown",
+            "min-width: min(230px, calc(100vw - 64px))",
+        );
+        assert_block_contains(".sessions-dropdown", "max-width: calc(100vw - 64px)");
+        assert_block_contains(
+            ".more-dropdown",
+            "min-width: min(230px, calc(100vw - 32px))",
+        );
+        assert_block_contains(".more-dropdown", "max-width: calc(100vw - 32px)");
+        assert_block_contains(".theme-dropdown", "min-width: 0");
+        assert_block_contains(".compose-pop", "min-width: min(260px, calc(100vw - 32px))");
+    }
+
+    #[test]
+    fn status_chip_keeps_its_complete_wide_layout_label() {
+        assert_block_contains(".status-chip", "flex-shrink: 0");
+    }
+
+    #[test]
+    fn minimum_viewport_keeps_topbar_and_menus_reachable() {
+        const MEDIA: &str = "@media (max-width: 519px) {";
+        let media_start = CSS
+            .rfind(MEDIA)
+            .unwrap_or_else(|| panic!("stylesheet must end with a {MEDIA} rule"));
+        let rule = &CSS[media_start..];
+
+        for base_selector in [".compose-pop {", ".theme-dropdown {"] {
+            let base_start = CSS
+                .find(base_selector)
+                .unwrap_or_else(|| panic!("missing base {base_selector} rule"));
+            assert!(
+                media_start > base_start,
+                "minimum-viewport rule must appear after base {base_selector} rule"
+            );
+        }
+
+        let topbar = block_for_in(rule, ".topbar");
+        for declaration in ["overflow-x: auto;", "scrollbar-width: none;"] {
+            assert!(
+                topbar.contains(declaration),
+                "minimum-viewport .topbar must contain `{declaration}`"
+            );
+        }
+        assert!(
+            block_for_in(rule, ".topbar::-webkit-scrollbar").contains("display: none;"),
+            "minimum-viewport topbar must hide the WebKit scrollbar"
+        );
+
+        let dropdown = block_for_in(rule, ".export-dropdown");
+        for declaration in [
+            "position: fixed;",
+            "top: 52px;",
+            "left: 8px;",
+            "right: 8px;",
+            "width: auto;",
+            "min-width: 0;",
+            "max-width: none;",
+            "max-height: calc(100vh - 60px);",
+        ] {
+            assert!(
+                dropdown.contains(declaration),
+                "minimum-viewport .export-dropdown must contain `{declaration}`"
+            );
+        }
+
+        let session_row = block_for_in(rule, ".session-row");
+        for declaration in ["flex-direction: column;", "align-items: stretch;"] {
+            assert!(
+                session_row.contains(declaration),
+                "minimum-viewport .session-row must contain `{declaration}`"
+            );
+        }
+        for selector in [".session-row > .sess-switch", ".session-row > .ctl-btn"] {
+            assert!(
+                block_for_in(rule, selector).contains("width: 100%;"),
+                "minimum-viewport {selector} must span the full row"
+            );
+        }
+    }
+
+    #[test]
+    fn collapsed_activity_preview_is_bounded() {
+        assert_block_contains(
+            ".activity:not(.expanded) .activity-text",
+            "display: -webkit-box",
+        );
+        assert_block_contains(
+            ".activity:not(.expanded) .activity-text",
+            "-webkit-line-clamp: 2",
+        );
+        assert_block_contains(
+            ".activity:not(.expanded) .activity-text",
+            "-webkit-box-orient: vertical",
+        );
+        assert_block_contains(
+            ".activity:not(.expanded) .activity-text",
+            "overflow: hidden",
+        );
+    }
+
+    #[test]
+    fn narrow_panel_clears_activity_overlay() {
+        const CLEARANCE_RULE: &str =
+            "@media (max-width: 600px) {\n  .panel {\n    padding-bottom: 104px;\n  }\n}";
+
+        assert_eq!(
+            CSS.matches(CLEARANCE_RULE).count(),
+            1,
+            "stylesheet must contain one exact narrow panel clearance rule"
+        );
+    }
+
+    #[test]
+    fn session_row_keeps_names_badges_and_actions_discoverable() {
+        assert_block_contains(".session-row > .sess-switch", "width: auto");
+        assert_block_contains(".session-row > .sess-switch", "flex: 1 1 0");
+        assert_block_contains(".session-row > .sess-switch", "min-width: 0");
+        assert_block_contains(".sess-name", "flex: 1 1 auto");
+        assert_block_contains(".sess-name", "min-width: 0");
+        assert_block_contains(".sess-name", "overflow-wrap: anywhere");
+        assert_block_contains(".sess-badges", "flex: 0 0 auto");
+        assert_block_contains(".session-row > .ctl-btn", "flex: 0 0 auto");
+        assert_block_contains(".session-row > .ctl-btn", "width: auto");
+        assert!(
+            TOPBAR_SOURCE
+                .contains(r#"span { class: "sess-name", title: "{info.name}", "{info.name}" }"#),
+            "session name markup must expose the complete name as a native title"
+        );
     }
 
     #[test]

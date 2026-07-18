@@ -11,7 +11,8 @@ use std::collections::HashMap;
 use dioxus::prelude::*;
 
 use crate::model::{
-    Choice, ChoiceId, ChoiceStatus, EdgeKind, Node, NodeId, NodeKind, OptionId, Origin, SessionDoc,
+    Choice, ChoiceId, ChoiceStatus, Edge, EdgeKind, Node, NodeId, NodeKind, OptionId, Origin,
+    SessionDoc,
 };
 
 use super::app::use_store;
@@ -53,6 +54,36 @@ fn edge_kind_phrase(kind: EdgeKind) -> &'static str {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConnectionDisplay {
+    direction: &'static str,
+    endpoint: String,
+    kind: &'static str,
+    status: &'static str,
+    label: Option<String>,
+}
+
+fn connection_display(selected: &NodeId, edge: &Edge, doc: &SessionDoc) -> ConnectionDisplay {
+    let (direction, endpoint_id) = if &edge.from == selected {
+        ("Outgoing to", &edge.to)
+    } else {
+        ("Incoming from", &edge.from)
+    };
+    ConnectionDisplay {
+        direction,
+        endpoint: doc
+            .node(endpoint_id)
+            .map_or_else(|| endpoint_id.to_string(), |node| node.label.clone()),
+        kind: edge_kind_phrase(edge.kind),
+        status: crate::export::status_name_pub(edge.status),
+        label: edge.label.clone(),
+    }
+}
+
+fn visible_group(group: Option<&str>) -> Option<&str> {
+    group.filter(|value| !value.trim().is_empty())
+}
+
 #[component]
 pub fn ChoicePanel(
     node: Node,
@@ -75,22 +106,12 @@ pub fn ChoicePanel(
     } else {
         "Mark removed and ask the agent to apply the removal"
     };
-    // Edges touching this node, with the far end's label for display.
-    let incident: Vec<(NodeId, NodeId, EdgeKind, String)> = {
+    let incident: Vec<(Edge, ConnectionDisplay)> = {
         let d = doc.read();
         d.edges
             .iter()
-            .filter(|e| e.from == node.id || e.to == node.id)
-            .map(|e| {
-                let text = format!(
-                    "{} —{}→ {}",
-                    d.node(&e.from)
-                        .map_or(e.from.to_string(), |n| n.label.clone()),
-                    edge_kind_phrase(e.kind),
-                    d.node(&e.to).map_or(e.to.to_string(), |n| n.label.clone()),
-                );
-                (e.from.clone(), e.to.clone(), e.kind, text)
-            })
+            .filter(|edge| edge.from == node.id || edge.to == node.id)
+            .map(|edge| (edge.clone(), connection_display(&node.id, edge, &d)))
             .collect()
     };
 
@@ -103,6 +124,26 @@ pub fn ChoicePanel(
                     title: "Close",
                     onclick: move |_| selected.set(None),
                     "✕"
+                }
+            }
+            dl { class: "panel-meta",
+                div { class: "panel-meta-row",
+                    dt { "ID" }
+                    dd { code { "{node.id}" } }
+                }
+                div { class: "panel-meta-row",
+                    dt { "Kind" }
+                    dd { "{super::node_card::kind_label(node.kind)}" }
+                }
+                div { class: "panel-meta-row",
+                    dt { "Status" }
+                    dd { "{super::node_card::status_class(node.status)}" }
+                }
+                if let Some(group) = visible_group(node.group.as_deref()) {
+                    div { class: "panel-meta-row",
+                        dt { "Group" }
+                        dd { "{group}" }
+                    }
                 }
             }
             if !node.description.is_empty() {
@@ -203,14 +244,26 @@ pub fn ChoicePanel(
             if !incident.is_empty() {
                 div { class: "connections",
                     h3 { "Connections" }
-                    for (from, to, kind, text) in incident {
-                        div { class: "conn-row", key: "{from}-{to}-{kind:?}",
-                            span { "{text}" }
+                    for (edge, display) in incident {
+                        div { class: "conn-row", key: "{edge.from}-{edge.to}-{edge.kind:?}",
+                            div { class: "conn-content",
+                                div { class: "conn-primary",
+                                    span { class: "conn-direction", "{display.direction}" }
+                                    span { class: "conn-endpoint", "{display.endpoint}" }
+                                }
+                                div { class: "conn-meta", "{display.kind} · {display.status}" }
+                                if let Some(label) = &display.label {
+                                    div { class: "conn-label", "{label}" }
+                                }
+                            }
                             button {
                                 class: "ctl-btn",
                                 title: "Delete this edge",
                                 onclick: {
                                     let store = store.clone();
+                                    let from = edge.from.clone();
+                                    let to = edge.to.clone();
+                                    let kind = edge.kind;
                                     move |_| {
                                         if let Err(err) = store.delete_edge(&from, &to, kind) {
                                             tracing::warn!(%err, "delete_edge failed");
@@ -386,5 +439,77 @@ fn ChoiceBlock(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{ElementStatus, Origin};
+
+    fn test_node(id: &str, label: &str) -> Node {
+        Node {
+            id: NodeId::from(id),
+            label: label.into(),
+            kind: NodeKind::Component,
+            description: String::new(),
+            status: ElementStatus::Existing,
+            group: None,
+            choices: vec![],
+            notes: vec![],
+            position: None,
+            origin: Origin::Agent,
+        }
+    }
+
+    fn test_doc() -> SessionDoc {
+        SessionDoc {
+            nodes: vec![
+                test_node("api", "Public API"),
+                test_node("queue", "Job Queue"),
+            ],
+            ..Default::default()
+        }
+    }
+
+    fn test_edge() -> Edge {
+        Edge {
+            from: NodeId::from("api"),
+            to: NodeId::from("queue"),
+            kind: EdgeKind::DataFlow,
+            label: Some("CompleteSecurityAuditEnvelopeIdentifier".into()),
+            status: ElementStatus::Modified,
+            origin: Origin::Agent,
+        }
+    }
+
+    #[test]
+    fn connection_display_exposes_complete_outgoing_edge() {
+        let display = connection_display(&NodeId::from("api"), &test_edge(), &test_doc());
+
+        assert_eq!(display.direction, "Outgoing to");
+        assert_eq!(display.endpoint, "Job Queue");
+        assert_eq!(display.kind, "data flow");
+        assert_eq!(display.status, "modified");
+        assert_eq!(
+            display.label.as_deref(),
+            Some("CompleteSecurityAuditEnvelopeIdentifier")
+        );
+    }
+
+    #[test]
+    fn connection_display_exposes_incoming_direction() {
+        let display = connection_display(&NodeId::from("queue"), &test_edge(), &test_doc());
+
+        assert_eq!(display.direction, "Incoming from");
+        assert_eq!(display.endpoint, "Public API");
+    }
+
+    #[test]
+    fn group_metadata_omits_empty_values_without_rewriting_content() {
+        assert_eq!(visible_group(None), None);
+        assert_eq!(visible_group(Some("")), None);
+        assert_eq!(visible_group(Some("   ")), None);
+        assert_eq!(visible_group(Some(" Platform ")), Some(" Platform "));
     }
 }

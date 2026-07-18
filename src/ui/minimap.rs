@@ -7,7 +7,7 @@ use crate::layout::Layout;
 use crate::model::SessionDoc;
 
 use super::node_card::status_class;
-use super::{VIEW_H, VIEW_W, ViewTransform};
+use super::{ViewTransform, ViewportSize};
 
 /// Maximum minimap size in px; the actual svg keeps the bounds' aspect.
 const MINI_MAX_W: f64 = 168.0;
@@ -18,6 +18,7 @@ pub fn Minimap(
     doc: Signal<SessionDoc>,
     layout: Memo<Layout>,
     transform: Signal<ViewTransform>,
+    viewport: ViewportSize,
 ) -> Element {
     let l = layout.read();
     let b = l.bounds;
@@ -30,15 +31,15 @@ pub fn Minimap(
     let t = transform();
     // The viewport window in plane coordinates.
     let (vx, vy) = (-t.tx / t.scale, -t.ty / t.scale);
-    let (vw, vh) = (VIEW_W / t.scale, VIEW_H / t.scale);
+    let (vw, vh) = (viewport.width / t.scale, viewport.height / t.scale);
     let mut dragging = use_signal(|| false);
 
     let mut pan_to = move |ex: f64, ey: f64| {
         let px = b.x + ex / scale;
         let py = b.y + ey / scale;
         transform.with_mut(|t| {
-            t.tx = VIEW_W / 2.0 - px * t.scale;
-            t.ty = VIEW_H / 2.0 - py * t.scale;
+            t.tx = viewport.width / 2.0 - px * t.scale;
+            t.ty = viewport.height / 2.0 - py * t.scale;
         });
     };
 
