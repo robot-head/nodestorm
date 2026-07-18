@@ -302,10 +302,12 @@ async fn main() -> anyhow::Result<()> {
                 .call_tool(
                     CallToolRequestParams::new("update_graph").with_arguments(
                         json!({
-                            "announce": "Applied your decisions — CRDTs it is; storage feels it.",
+                            // announce is a GraphOp, not a top-level param:
+                            // UpdateGraphParams is deny_unknown_fields.
                             "ops": [
                                 {"op": "set_status", "id": "sync-engine", "status": "modified"},
-                                {"op": "set_status", "id": "storage", "status": "affected"}
+                                {"op": "set_status", "id": "storage", "status": "affected"},
+                                {"op": "announce", "message": "Applied your decisions — CRDTs it is; storage feels it."}
                             ]
                         })
                         .as_object()
