@@ -77,6 +77,8 @@ body {
   border-bottom: 1px solid var(--border);
   flex: 0 0 auto;
   z-index: 10;
+  container-type: inline-size;
+  container-name: topbar;
 }
 
 .topbar-brand {
@@ -281,6 +283,92 @@ body {
 .ctl-btn:hover {
   color: var(--text);
   border-color: var(--accent);
+}
+
+/* ---------- responsive topbar (container queries; old engines keep the
+   wide layout — same as pre-v0.8 behavior) ---------- */
+
+.pod-compose {
+  display: none;
+}
+
+.compose-pop {
+  min-width: 260px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.compose-input {
+  margin-bottom: 0;
+}
+
+.topbar-title {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+@container topbar (max-width: 1080px) {
+  .pod-label {
+    display: none;
+  }
+}
+
+@container topbar (max-width: 900px) {
+  .topbar-title {
+    display: none;
+  }
+}
+
+@container topbar (max-width: 780px) {
+  .send-comment {
+    display: none;
+  }
+
+  .pod-compose {
+    display: inline-flex;
+  }
+
+  .search-pod .search-box {
+    width: 34px;
+    min-width: 34px;
+    padding-left: 30px;
+    transition: width 140ms ease, min-width 140ms ease;
+  }
+
+  .search-pod:focus-within .search-box {
+    width: 190px;
+    min-width: 150px;
+  }
+}
+
+@container topbar (max-width: 600px) {
+  .seg-word {
+    display: none;
+  }
+
+  .topbar-word {
+    display: none;
+  }
+
+  .sess-pod {
+    max-width: 90px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+@container topbar (max-width: 560px) {
+  .pod-undo,
+  .pod-redo {
+    display: none;
+  }
+
+  .more-dropdown .row-undo,
+  .more-dropdown .row-redo {
+    display: block;
+  }
 }
 
 /* ---------- empty state ---------- */
@@ -633,13 +721,30 @@ body {
   font: inherit;
   font-size: 12.5px;
   padding: 6px 12px;
-  margin-left: 12px;
 }
 
 .search-box:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.search-pod {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 12px;
+}
+
+.search-glyph {
+  color: var(--text-dim);
+  margin-right: -24px;
+  padding-left: 10px;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.search-pod .search-box {
+  padding-left: 30px;
 }
 
 .node-card.search-hit {

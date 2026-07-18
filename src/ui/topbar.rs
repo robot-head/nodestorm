@@ -19,6 +19,7 @@ pub fn TopBar(
     let store = use_store();
     let sessions = use_context::<std::sync::Arc<crate::sessions::Sessions>>();
     let mut comment = use_signal(String::new);
+    let mut compose_open = use_signal(|| false);
     let mut sessions_open = use_signal(|| false);
     let mut new_session_draft = use_signal(String::new);
     let mut rename_draft = use_signal(String::new);
@@ -55,7 +56,7 @@ pub fn TopBar(
             }
             div { class: "export-menu",
                 button {
-                    class: "btn",
+                    class: "btn sess-pod",
                     title: "Switch, create, or archive named sessions",
                     onclick: move |_| sessions_open.toggle(),
                     "{session_name} ▾"
@@ -223,35 +224,38 @@ pub fn TopBar(
                     }
                 }
             }
-            input {
-                class: "search-box",
-                placeholder: "search components…",
-                value: "{search}",
-                oninput: move |ev| {
-                    search.set(ev.value());
-                    search_cursor.set(0);
-                },
-                onkeydown: move |ev| {
-                    if ev.key() == Key::Enter {
-                        // Cycle through matches in document order, zooming to
-                        // each.
-                        let matches: Vec<_> = doc
-                            .read()
-                            .nodes
-                            .iter()
-                            .filter(|n| crate::ui::node_matches(n, &search.read()))
-                            .map(|n| n.id.clone())
-                            .collect();
-                        if !matches.is_empty() {
-                            let i = search_cursor() % matches.len();
-                            zoom_target.set(Some(matches[i].clone()));
-                            search_cursor.set(i + 1);
-                        }
-                    } else if ev.key() == Key::Escape {
-                        search.set(String::new());
+            span { class: "search-pod",
+                span { class: "search-glyph", "⌕" }
+                input {
+                    class: "search-box",
+                    placeholder: "search components…",
+                    value: "{search}",
+                    oninput: move |ev| {
+                        search.set(ev.value());
                         search_cursor.set(0);
-                    }
-                },
+                    },
+                    onkeydown: move |ev| {
+                        if ev.key() == Key::Enter {
+                            // Cycle through matches in document order, zooming to
+                            // each.
+                            let matches: Vec<_> = doc
+                                .read()
+                                .nodes
+                                .iter()
+                                .filter(|n| crate::ui::node_matches(n, &search.read()))
+                                .map(|n| n.id.clone())
+                                .collect();
+                            if !matches.is_empty() {
+                                let i = search_cursor() % matches.len();
+                                zoom_target.set(Some(matches[i].clone()));
+                                search_cursor.set(i + 1);
+                            }
+                        } else if ev.key() == Key::Escape {
+                            search.set(String::new());
+                            search_cursor.set(0);
+                        }
+                    },
+                }
             }
             span { class: "topbar-title", "{title}" }
             span { class: "topbar-spacer" }
@@ -352,6 +356,43 @@ pub fn TopBar(
                 span { class: "pod-label", "node" }
             }
             super::more_menu::MoreMenu { has_nodes, suggested_name: suggested_name.clone() }
+            div { class: "export-menu compose-menu",
+                button {
+                    class: "btn pod-icon pod-compose",
+                    aria_label: "Message to agent",
+                    title: "Attach an optional message to your next Send",
+                    onclick: move |_| compose_open.toggle(),
+                    "✎"
+                }
+                if compose_open() {
+                    div {
+                        class: "menu-catcher",
+                        onclick: move |_| compose_open.set(false),
+                    }
+                    div { class: "export-dropdown compose-pop",
+                        textarea {
+                            class: "note-input compose-input",
+                            placeholder: "optional message to the agent…",
+                            value: "{comment}",
+                            oninput: move |ev| comment.set(ev.value()),
+                        }
+                        button {
+                            class: "btn btn-send",
+                            disabled: !can_send,
+                            onclick: {
+                                let store = store.clone();
+                                move |_| {
+                                    let text = comment.read().trim().to_owned();
+                                    store.request_flush(if text.is_empty() { None } else { Some(text) });
+                                    comment.set(String::new());
+                                    compose_open.set(false);
+                                }
+                            },
+                            "Send with message"
+                        }
+                    }
+                }
+            }
             input {
                 class: "send-comment",
                 placeholder: "optional message to the agent…",

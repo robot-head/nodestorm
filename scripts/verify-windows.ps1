@@ -510,6 +510,24 @@ try {
     if ($avg -le 0.5) { Fail ("content did not switch to a light palette (mean brightness {0:N2})" -f $avg) }
     Log ("gruvbox-light content verified (mean brightness {0:N2})" -f $avg)
 
+    # ---- v0.8: at a narrow window nothing in the topbar overflows ----
+    # 760 physical px: hits the <=780px (logical) compose breakpoint at 100%
+    # DPI and deeper folds on scaled displays; either way Send must fit.
+    [void][NodestormVerify.Native]::SetWindowPos($hwnd, [IntPtr]1, 0, 0, 760, 840, 0x0012)
+    Start-Sleep -Milliseconds 800
+    $send = Wait-Element 'Send to agent' 5
+    if (-not $send) { Fail 'Send to agent missing from UIA at 760px' }
+    $sr = $send.Current.BoundingRectangle
+    $wr = $script:AppWindow.Current.BoundingRectangle
+    if ($sr.Right -gt $wr.Right) {
+        Fail "Send button overflows the window at 760px (send.Right=$($sr.Right) window.Right=$($wr.Right))"
+    }
+    if (-not (Wait-Element 'Message to agent' 5)) { Fail 'compose pod did not appear at 760px' }
+    Save-WindowPng $hwnd (Join-Path $OutDir '07-narrow-760.png')
+    [void][NodestormVerify.Native]::SetWindowPos($hwnd, [IntPtr]1, 0, 0, 1280, 840, 0x0012)
+    Start-Sleep -Milliseconds 400
+    Log 'narrow-window topbar fit verified (760px)'
+
     # Native title bar follows the mode: after clicking Light the DWM
     # immersive-dark flag must be off. (Pixel checks are unreliable here —
     # accent-on-title-bars paints active bars the accent color either way.)
