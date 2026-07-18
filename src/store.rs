@@ -2010,6 +2010,22 @@ mod tests {
     }
 
     #[test]
+    fn removed_queue_items_are_never_delivered() {
+        let store = demo_store();
+        pick_first_choice(&store);
+        store
+            .add_note(&NodeId::from("sync-engine"), "keep cache local".into())
+            .unwrap();
+        store.remove_queued_change(1).unwrap();
+        store.request_flush(None);
+
+        let delivered = store.try_deliver().unwrap();
+
+        assert_eq!(delivered.len(), 1);
+        assert!(matches!(delivered[0].kind, DecisionKind::NoteAdded { .. }));
+    }
+
+    #[test]
     fn removing_a_queued_change_preserves_a_later_position_change() {
         let store = demo_store();
         pick_first_choice(&store);
