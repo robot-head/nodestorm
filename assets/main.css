@@ -904,6 +904,12 @@ button.empty-cmd code {
   flex: 0 0 auto;
 }
 
+.session-row > .sess-switch {
+  width: auto;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
 .sess-switch {
   display: flex !important;
   flex: 1;
@@ -950,10 +956,6 @@ button.empty-cmd code {
   overflow-wrap: anywhere;
 }
 
-.session-row.active .sess-name {
-  color: var(--accent);
-}
-
 .sess-badges {
   display: flex;
   flex: 0 0 auto;
@@ -961,8 +963,13 @@ button.empty-cmd code {
 }
 
 .sess-name {
+  flex: 1 1 auto;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.session-row.active .sess-name {
+  color: var(--accent);
 }
 
 .session-create {

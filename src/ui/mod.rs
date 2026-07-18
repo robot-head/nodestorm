@@ -15,14 +15,31 @@ mod theme_menu;
 mod timeline;
 mod topbar;
 
-/// Nominal viewport for zoom math (the topbar is 48px tall).
-pub(crate) const VIEW_W: f64 = 1280.0;
-pub(crate) const VIEW_H: f64 = 780.0;
 pub(crate) const TOPBAR_H: f64 = 48.0;
 /// Zoom-to-fit never goes below this: past ~100 nodes a full fit would make
 /// cards invisible, so show a readable centered subset instead (culling
 /// keeps the off-screen rest out of the DOM).
 pub(crate) const MIN_FIT_SCALE: f64 = 0.15;
+
+/// Live canvas content-box geometry. The fallback is used only until the
+/// viewport's first ResizeObserver measurement arrives.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ViewportSize {
+    pub width: f64,
+    pub height: f64,
+}
+
+impl ViewportSize {
+    pub const FALLBACK: Self = Self {
+        width: 1280.0,
+        height: 780.0,
+    };
+
+    pub fn observed(width: f64, height: f64) -> Option<Self> {
+        (width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0)
+            .then_some(Self { width, height })
+    }
+}
 
 use std::sync::Arc;
 
@@ -130,6 +147,19 @@ impl ViewTransform {
             scale,
         }
     }
+
+    pub(crate) fn plane_center(self, viewport: ViewportSize) -> (f64, f64) {
+        (
+            (viewport.width / 2.0 - self.tx) / self.scale,
+            (viewport.height / 2.0 - self.ty) / self.scale,
+        )
+    }
+
+    pub(crate) fn reframe(&mut self, old: ViewportSize, new: ViewportSize) {
+        let (plane_x, plane_y) = self.plane_center(old);
+        self.tx = new.width / 2.0 - plane_x * self.scale;
+        self.ty = new.height / 2.0 - plane_y * self.scale;
+    }
 }
 
 /// Launch the desktop window. Must be called on the main thread.
@@ -192,5 +222,28 @@ mod tests {
             h: 300.0,
         };
         assert_eq!(ViewTransform::fit(&small, 1280.0, 780.0).scale, 1.0);
+    }
+
+    #[test]
+    fn viewport_reframe_preserves_plane_center() {
+        let old = ViewportSize::FALLBACK;
+        let new = ViewportSize::observed(520.0, 792.0).expect("positive viewport");
+        let mut transform = ViewTransform {
+            tx: 140.0,
+            ty: -60.0,
+            scale: 0.8,
+        };
+        let plane_center = transform.plane_center(old);
+
+        transform.reframe(old, new);
+
+        assert_eq!(transform.plane_center(new), plane_center);
+    }
+
+    #[test]
+    fn viewport_size_rejects_invalid_observations() {
+        assert!(ViewportSize::observed(0.0, 780.0).is_none());
+        assert!(ViewportSize::observed(520.0, -1.0).is_none());
+        assert!(ViewportSize::observed(f64::NAN, 780.0).is_none());
     }
 }

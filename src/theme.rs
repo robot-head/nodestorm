@@ -175,6 +175,10 @@ mod tests {
         assert_block_contains(".activity-text {", "overflow-wrap: anywhere");
         assert_block_contains(".diff-text {", "overflow-wrap: anywhere");
         assert_block_contains(".empty-cmd {", "max-width: 100%");
+        assert_block_contains(".session-row > .sess-switch {", "width: auto");
+        assert_block_contains(".session-row > .sess-switch {", "flex: 1 1 0");
+        assert_block_contains(".session-row > .sess-switch {", "min-width: 0");
+        assert_block_contains(".sess-name {", "flex: 1 1 auto");
     }
 
     #[test]
