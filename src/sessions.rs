@@ -9,11 +9,37 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use tokio::sync::watch;
 
-use crate::store::{SessionState, Store, slugify};
+use crate::store::{ConnectionId, SessionState, Store, slugify};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectionState {
+    Connected,
+    Waiting {
+        session: String,
+        agent: Option<String>,
+    },
+    Receiving {
+        session: String,
+        agent: Option<String>,
+    },
+    Reconnecting {
+        session: String,
+        agent: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectionInfo {
+    pub id: ConnectionId,
+    pub client_name: String,
+    pub version: String,
+    pub state: ConnectionState,
+}
 
 /// One row of [`Sessions::list`] — what the switcher and `list_sessions`
 /// tool show per session.
@@ -37,12 +63,20 @@ struct Inner {
     active: String,
 }
 
+struct RegistryEntry {
+    info: ConnectionInfo,
+    live: bool,
+}
+
 pub struct Sessions {
     inner: Mutex<Inner>,
     dir: PathBuf,
     /// Bumped whenever the session list or the active session changes; the
     /// UI re-subscribes its store bridge on it.
     generation: watch::Sender<u64>,
+    connections: Mutex<BTreeMap<ConnectionId, RegistryEntry>>,
+    connection_generation: watch::Sender<u64>,
+    next_connection: AtomicU64,
     /// Set by [`Sessions::spawn_autosaves`]; later `create()` calls use it
     /// to give new sessions their own autosave task.
     runtime: Mutex<Option<tokio::runtime::Handle>>,
@@ -117,10 +151,14 @@ impl Sessions {
         }
 
         let (generation, _) = watch::channel(0);
+        let (connection_generation, _) = watch::channel(0);
         Ok(Arc::new(Self {
             inner: Mutex::new(Inner { map, active }),
             dir,
             generation,
+            connections: Mutex::new(BTreeMap::new()),
+            connection_generation,
+            next_connection: AtomicU64::new(1),
             runtime: Mutex::new(None),
         }))
     }
@@ -142,6 +180,7 @@ impl Sessions {
             },
         );
         let (generation, _) = watch::channel(0);
+        let (connection_generation, _) = watch::channel(0);
         Arc::new(Self {
             inner: Mutex::new(Inner {
                 map,
@@ -149,6 +188,9 @@ impl Sessions {
             }),
             dir,
             generation,
+            connections: Mutex::new(BTreeMap::new()),
+            connection_generation,
+            next_connection: AtomicU64::new(1),
             runtime: Mutex::new(None),
         })
     }
@@ -165,6 +207,126 @@ impl Sessions {
 
     fn bump(&self) {
         self.generation.send_modify(|g| *g += 1);
+    }
+
+    fn bump_connections(&self) {
+        self.connection_generation.send_modify(|g| *g += 1);
+    }
+
+    pub fn next_connection_id(&self) -> ConnectionId {
+        ConnectionId(self.next_connection.fetch_add(1, Ordering::Relaxed))
+    }
+
+    pub fn connect_client(&self, id: ConnectionId, client_name: String, version: String) {
+        self.connections
+            .lock()
+            .expect("connections mutex poisoned")
+            .insert(
+                id,
+                RegistryEntry {
+                    info: ConnectionInfo {
+                        id,
+                        client_name,
+                        version,
+                        state: ConnectionState::Connected,
+                    },
+                    live: true,
+                },
+            );
+        self.bump_connections();
+    }
+
+    fn set_connection_state(&self, id: ConnectionId, state: ConnectionState) {
+        let changed = self
+            .connections
+            .lock()
+            .expect("connections mutex poisoned")
+            .get_mut(&id)
+            .is_some_and(|entry| {
+                entry.info.state = state;
+                true
+            });
+        if changed {
+            self.bump_connections();
+        }
+    }
+
+    pub fn set_connection_waiting(&self, id: ConnectionId, session: String, agent: Option<String>) {
+        self.set_connection_state(id, ConnectionState::Waiting { session, agent });
+    }
+
+    pub fn set_connection_receiving(
+        &self,
+        id: ConnectionId,
+        session: String,
+        agent: Option<String>,
+    ) {
+        self.set_connection_state(id, ConnectionState::Receiving { session, agent });
+    }
+
+    pub fn set_connection_connected(&self, id: ConnectionId) {
+        self.set_connection_state(id, ConnectionState::Connected);
+    }
+
+    pub fn disconnect_client(&self, id: ConnectionId) {
+        let changed = self
+            .connections
+            .lock()
+            .expect("connections mutex poisoned")
+            .get_mut(&id)
+            .is_some_and(|entry| {
+                if !entry.live {
+                    return false;
+                }
+                entry.live = false;
+                true
+            });
+        if changed {
+            self.bump_connections();
+        }
+    }
+
+    pub fn connection(&self, id: ConnectionId) -> Option<ConnectionInfo> {
+        self.connections
+            .lock()
+            .expect("connections mutex poisoned")
+            .get(&id)
+            .map(|entry| entry.info.clone())
+    }
+
+    pub fn connections(&self) -> Vec<ConnectionInfo> {
+        let entries = self.connections.lock().expect("connections mutex poisoned");
+        let mut result: Vec<_> = entries
+            .values()
+            .filter(|entry| entry.live)
+            .map(|entry| entry.info.clone())
+            .collect();
+        let stores: Vec<_> = self
+            .lock()
+            .map
+            .iter()
+            .map(|(name, entry)| (name.clone(), entry.store.clone()))
+            .collect();
+        for (session, store) in stores {
+            for target in store.reconnecting_targets() {
+                if let Some(entry) = entries
+                    .get(&target.connection_id)
+                    .filter(|entry| !entry.live)
+                {
+                    let mut info = entry.info.clone();
+                    info.state = ConnectionState::Reconnecting {
+                        session: session.clone(),
+                        agent: target.agent,
+                    };
+                    result.push(info);
+                }
+            }
+        }
+        result
+    }
+
+    pub fn subscribe_connections(&self) -> watch::Receiver<u64> {
+        self.connection_generation.subscribe()
     }
 
     /// Create an empty session; the returned name is the slug (deduped with
@@ -486,7 +648,9 @@ mod tests {
     use super::*;
     use crate::demo::demo_doc;
     use crate::model::NodeId;
+    use crate::store::Awaiter;
     use std::path::PathBuf;
+    use std::time::Duration;
 
     fn tmp_root(name: &str) -> PathBuf {
         let dir =
@@ -720,5 +884,85 @@ mod tests {
         assert!(!info.active);
         assert!(!info.agent_waiting);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn connection_registry_reports_metadata_and_notifies_independently() {
+        let sessions =
+            Sessions::single(Store::new(SessionState::default()), tmp_root("connections"));
+        let mut changes = sessions.subscribe_connections();
+        let before = *changes.borrow_and_update();
+        let id = sessions.next_connection_id();
+
+        sessions.connect_client(id, "claude-code".into(), "1.2.3".into());
+        sessions.set_connection_waiting(id, "default".into(), Some("alpha".into()));
+
+        assert!(*changes.borrow_and_update() > before);
+        assert_eq!(
+            sessions.connections(),
+            vec![ConnectionInfo {
+                id,
+                client_name: "claude-code".into(),
+                version: "1.2.3".into(),
+                state: ConnectionState::Waiting {
+                    session: "default".into(),
+                    agent: Some("alpha".into()),
+                },
+            }]
+        );
+    }
+
+    #[test]
+    fn disconnect_removes_live_connection_without_bumping_session_generation() {
+        let sessions =
+            Sessions::single(Store::new(SessionState::default()), tmp_root("disconnect"));
+        let id = sessions.next_connection_id();
+        let mut generation = sessions.subscribe_generation();
+        let before = *generation.borrow_and_update();
+        sessions.connect_client(id, "claude-code".into(), "1".into());
+
+        sessions.disconnect_client(id);
+
+        assert!(sessions.connections().is_empty());
+        assert_eq!(*generation.borrow_and_update(), before);
+    }
+
+    #[tokio::test]
+    async fn orphaned_receipt_keeps_a_reconnecting_connection_row() {
+        let store = Store::new(SessionState::default());
+        let sessions = Sessions::single(store.clone(), tmp_root("reconnecting-row"));
+        let id = sessions.next_connection_id();
+        sessions.connect_client(id, "claude-code".into(), "1".into());
+        let waiting = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .await_flush(
+                        Duration::from_secs(30),
+                        Awaiter {
+                            connection_id: id,
+                            client_label: "claude-code 1".into(),
+                            agent: Some("alpha".into()),
+                        },
+                    )
+                    .await
+            }
+        });
+        for _ in 0..50 {
+            if store.snapshot_meta().waiting_agents == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        store.request_flush(None).unwrap();
+        waiting.abort();
+        let _ = waiting.await;
+        sessions.disconnect_client(id);
+
+        assert!(matches!(
+            sessions.connections()[0].state,
+            ConnectionState::Reconnecting { ref session, ref agent }
+                if session == "default" && agent.as_deref() == Some("alpha")
+        ));
     }
 }

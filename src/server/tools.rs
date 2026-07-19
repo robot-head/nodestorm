@@ -5,7 +5,7 @@
 //! the crate from SDK churn.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use rmcp::handler::server::wrapper::Parameters;
@@ -28,19 +28,48 @@ const HEARTBEAT_EVERY: Duration = Duration::from_secs(25);
 /// even when no progress token was sent; the skill tells agents to re-call.
 const DEFAULT_AWAIT_SECS: u64 = 240;
 const MAX_AWAIT_SECS: u64 = 3600;
-static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
+
+struct ConnectionLease {
+    id: ConnectionId,
+    sessions: Arc<crate::sessions::Sessions>,
+    initialized: AtomicBool,
+}
+
+impl Drop for ConnectionLease {
+    fn drop(&mut self) {
+        if self.initialized.load(Ordering::Acquire) {
+            self.sessions.disconnect_client(self.id);
+        }
+    }
+}
+
+struct ConnectionStateGuard {
+    id: ConnectionId,
+    sessions: Arc<crate::sessions::Sessions>,
+}
+
+impl Drop for ConnectionStateGuard {
+    fn drop(&mut self) {
+        self.sessions.set_connection_connected(self.id);
+    }
+}
 
 #[derive(Clone)]
 pub struct NodestormServer {
     sessions: Arc<crate::sessions::Sessions>,
-    connection_id: ConnectionId,
+    connection: Arc<ConnectionLease>,
 }
 
 impl NodestormServer {
     pub fn new(sessions: Arc<crate::sessions::Sessions>) -> Self {
+        let id = sessions.next_connection_id();
         Self {
-            sessions,
-            connection_id: ConnectionId(NEXT_CONNECTION_ID.fetch_add(1, Ordering::Relaxed)),
+            sessions: sessions.clone(),
+            connection: Arc::new(ConnectionLease {
+                id,
+                sessions,
+                initialized: AtomicBool::new(false),
+            }),
         }
     }
 
@@ -320,16 +349,27 @@ impl NodestormServer {
         Parameters(p): Parameters<AwaitDecisionsParams>,
         meta: Meta,
         client: Peer<RoleServer>,
+        request_cancel: CancellationToken,
     ) -> Result<CallToolResult, ErrorData> {
         let timeout = Duration::from_secs(p.timeout_seconds.clamp(5, MAX_AWAIT_SECS));
 
-        let (_, session_store) = self.session_and_store(&p.session)?;
+        let (session, session_store) = self.session_and_store(&p.session)?;
+        let info = self
+            .sessions
+            .connection(self.connection.id)
+            .ok_or_else(|| ErrorData::internal_error("MCP client is not initialized", None))?;
+        self.sessions
+            .set_connection_waiting(self.connection.id, session.clone(), p.agent.clone());
+        let _state_guard = ConnectionStateGuard {
+            id: self.connection.id,
+            sessions: self.sessions.clone(),
+        };
 
         // Best-effort heartbeat so long waits survive client idle-abort.
-        let cancel = CancellationToken::new();
+        let heartbeat_cancel = CancellationToken::new();
         if let Some(token) = meta.get_progress_token() {
             let store = session_store.clone();
-            let cancel = cancel.clone();
+            let heartbeat_cancel = heartbeat_cancel.clone();
             tokio::spawn(async move {
                 let mut elapsed = 0u64;
                 loop {
@@ -340,7 +380,7 @@ impl NodestormServer {
                         break;
                     }
                     tokio::select! {
-                        () = cancel.cancelled() => break,
+                        () = heartbeat_cancel.cancelled() => break,
                         () = tokio::time::sleep(HEARTBEAT_EVERY) => {
                             elapsed += HEARTBEAT_EVERY.as_secs();
                         }
@@ -349,26 +389,37 @@ impl NodestormServer {
             });
         }
 
-        let outcome = session_store
-            .await_flush(
-                timeout,
-                Awaiter {
-                    connection_id: self.connection_id,
-                    client_label: "MCP client".into(),
-                    agent: p.agent.clone(),
-                },
-            )
-            .await
-            .map_err(store_err)?;
-        cancel.cancel();
+        let await_flush = session_store.await_flush(
+            timeout,
+            Awaiter {
+                connection_id: self.connection.id,
+                client_label: format!("{} {}", info.client_name, info.version),
+                agent: p.agent.clone(),
+            },
+        );
+        let outcome = tokio::select! {
+            outcome = await_flush => outcome.map_err(store_err),
+            () = request_cancel.cancelled() => {
+                Err(ErrorData::internal_error("request cancelled", None))
+            }
+        };
+        heartbeat_cancel.cancel();
+        let outcome = outcome?;
 
         let (open, revision) = session_store.read(|s| (s.doc.open_choice_count(), s.doc.revision));
         match outcome {
-            FlushOutcome::Delivered(decisions) => json_result(AwaitResult::Delivered {
-                decisions,
-                open_choice_count: open,
-                revision,
-            }),
+            FlushOutcome::Delivered(decisions) => {
+                self.sessions.set_connection_receiving(
+                    self.connection.id,
+                    session,
+                    p.agent.clone(),
+                );
+                json_result(AwaitResult::Delivered {
+                    decisions,
+                    open_choice_count: open,
+                    revision,
+                })
+            }
             FlushOutcome::TimedOut { preview } => json_result(AwaitResult::Timeout {
                 decisions_so_far: preview,
                 open_choice_count: open,
@@ -501,6 +552,19 @@ impl NodestormServer {
 
 #[tool_handler]
 impl ServerHandler for NodestormServer {
+    async fn on_initialized(&self, context: rmcp::service::NotificationContext<RoleServer>) {
+        let Some(info) = context.peer.peer_info() else {
+            return;
+        };
+        if !self.connection.initialized.swap(true, Ordering::AcqRel) {
+            self.sessions.connect_client(
+                self.connection.id,
+                info.client_info.name.clone(),
+                info.client_info.version.clone(),
+            );
+        }
+    }
+
     fn get_info(&self) -> ServerInfo {
         let mut info = ServerInfo::default();
         info.capabilities = ServerCapabilities::builder().enable_tools().build();

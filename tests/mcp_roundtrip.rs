@@ -6,13 +6,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rmcp::ServiceExt;
-use rmcp::model::{CallToolRequestParams, ClientInfo};
+use rmcp::model::{
+    CallToolRequestParams, ClientCapabilities, ClientInfo, ClientRequest, Implementation, Request,
+};
+use rmcp::service::PeerRequestOptions;
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use serde_json::{Value, json};
 
 use nodestorm::model::{ChoiceId, NodeId, NodeKind, OptionId, QuestionId};
-use nodestorm::sessions::Sessions;
+use nodestorm::sessions::{ConnectionState, Sessions};
 use nodestorm::store::{SessionState, Store};
 
 async fn start_server(store: Arc<Store>) -> (u16, tokio::sync::watch::Sender<bool>, Arc<Sessions>) {
@@ -58,6 +61,76 @@ fn propose_args() -> Value {
         ],
         "edges": [{"from": "api", "to": "cache", "kind": "depends_on"}]
     })
+}
+
+#[tokio::test]
+async fn connection_lifecycle_is_visible() {
+    let store = Store::new(SessionState::default());
+    let (port, _shutdown, sessions) = start_server(store.clone()).await;
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(format!("http://127.0.0.1:{port}/mcp")),
+    );
+    let client = ClientInfo::new(
+        ClientCapabilities::default(),
+        Implementation::new("claude-code", "1.2.3"),
+    )
+    .serve(transport)
+    .await
+    .expect("mcp handshake");
+
+    let connections = sessions.connections();
+    assert_eq!(connections.len(), 1);
+    assert_eq!(connections[0].client_name, "claude-code");
+    assert_eq!(connections[0].version, "1.2.3");
+    assert_eq!(connections[0].state, ConnectionState::Connected);
+
+    let awaiting = client
+        .send_cancellable_request(
+            ClientRequest::CallToolRequest(Request::new(
+                CallToolRequestParams::new("await_decisions").with_arguments(
+                    json!({"timeout_seconds": 30, "agent": "alpha"})
+                        .as_object()
+                        .cloned()
+                        .unwrap_or_default(),
+                ),
+            )),
+            PeerRequestOptions::no_options(),
+        )
+        .await
+        .expect("start await_decisions");
+    for _ in 0..100 {
+        if matches!(
+            sessions.connections().first().map(|info| &info.state),
+            Some(ConnectionState::Waiting { session, agent })
+                if session == "default" && agent.as_deref() == Some("alpha")
+        ) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(matches!(
+        sessions.connections().first().map(|info| &info.state),
+        Some(ConnectionState::Waiting { session, agent })
+            if session == "default" && agent.as_deref() == Some("alpha")
+    ));
+
+    awaiting
+        .cancel(Some("test disconnect".into()))
+        .await
+        .expect("cancel await_decisions");
+    client.cancel().await.expect("client shutdown");
+    for _ in 0..100 {
+        if sessions.connections().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        sessions.connections().is_empty(),
+        "remaining connections: {:?}",
+        sessions.connections()
+    );
+    assert_eq!(store.snapshot_meta().waiting_agents, 0);
 }
 
 #[tokio::test]
