@@ -37,6 +37,19 @@ async fn start_server(store: Arc<Store>) -> (u16, tokio::sync::watch::Sender<boo
     (port, shutdown_tx, sessions)
 }
 
+async fn connect_client(
+    port: u16,
+    name: &str,
+) -> rmcp::service::RunningService<rmcp::RoleClient, ClientInfo> {
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(format!("http://127.0.0.1:{port}/mcp")),
+    );
+    ClientInfo::default()
+        .serve(transport)
+        .await
+        .unwrap_or_else(|err| panic!("{name} handshake failed: {err}"))
+}
+
 fn tool_json(result: &rmcp::model::CallToolResult) -> Value {
     let text = result.content[0].as_text().expect("text content");
     serde_json::from_str(&text.text).expect("tool result is json")
@@ -509,31 +522,26 @@ async fn agent_question_answered_roundtrip() {
 }
 
 #[tokio::test]
-async fn multi_agent_awaits_route_per_agent() {
+async fn multi_agent_awaits_route_per_connection() {
     let store = Store::new(SessionState::default());
-    let (port, _shutdown, _sessions) = start_server(store.clone()).await;
-    let transport = StreamableHttpClientTransport::from_config(
-        StreamableHttpClientTransportConfig::with_uri(format!("http://127.0.0.1:{port}/mcp")),
-    );
-    let client = ClientInfo::default()
-        .serve(transport)
-        .await
-        .expect("mcp handshake");
+    let (port, _shutdown, sessions) = start_server(store.clone()).await;
+    let alpha_client = connect_client(port, "alpha").await;
+    let beta_client = connect_client(port, "beta").await;
 
-    // Agent alpha proposes node "a" with a choice; agent beta adds node "b".
-    client
+    alpha_client
         .call_tool(CallToolRequestParams::new("propose_graph").with_arguments(
             json!({
                 "title": "multi", "agent": "alpha",
                 "nodes": [{"id": "a", "label": "A", "choices": [
-                    {"id": "ca", "prompt": "A?", "options": [{"id": "x", "label": "X"}, {"id": "y", "label": "Y"}]}
+                    {"id": "ca", "prompt": "A?", "options": [{"id": "x", "label": "X"}, {"id": "y", "label": "Y"}]},
+                    {"id": "later", "prompt": "Later?", "options": [{"id": "yes", "label": "Yes"}, {"id": "no", "label": "No"}]}
                 ]}]
             })
             .as_object().cloned().unwrap_or_default(),
         ))
         .await
         .expect("propose alpha");
-    client
+    beta_client
         .call_tool(CallToolRequestParams::new("update_graph").with_arguments(
             json!({
                 "agent": "beta",
@@ -546,21 +554,54 @@ async fn multi_agent_awaits_route_per_agent() {
         .await
         .expect("update beta");
 
-    // Both nodes are attributed to their author.
-    let state = tool_json(
-        &client
+    let alpha_peer = alpha_client.peer().clone();
+    let alpha_await = tokio::spawn(async move {
+        alpha_peer
             .call_tool(
-                CallToolRequestParams::new("get_state")
-                    .with_arguments(json!({}).as_object().cloned().unwrap_or_default()),
+                CallToolRequestParams::new("await_decisions").with_arguments(
+                    json!({"timeout_seconds": 10, "agent": "alpha"})
+                        .as_object()
+                        .cloned()
+                        .unwrap_or_default(),
+                ),
             )
             .await
-            .expect("get_state"),
-    );
-    assert_eq!(state["doc"]["nodes"][0]["agent"], "alpha");
-    assert_eq!(state["doc"]["nodes"][1]["agent"], "beta");
+    });
+    let beta_peer = beta_client.peer().clone();
+    let beta_await = tokio::spawn(async move {
+        beta_peer
+            .call_tool(
+                CallToolRequestParams::new("await_decisions").with_arguments(
+                    json!({"timeout_seconds": 10, "agent": "beta"})
+                        .as_object()
+                        .cloned()
+                        .unwrap_or_default(),
+                ),
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while store.snapshot_meta().waiting_agents != 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("both clients become waiting");
 
-    // The user decides both with nobody waiting; the persisted autoflush is
-    // independently claimable by each named agent.
+    let waiting_connections = sessions.connections();
+    assert_eq!(waiting_connections.len(), 2, "{waiting_connections:#?}");
+    assert_ne!(waiting_connections[0].id, waiting_connections[1].id);
+    assert!(waiting_connections.iter().any(|connection| matches!(
+        &connection.state,
+        ConnectionState::Waiting { session, agent }
+            if session == "default" && agent.as_deref() == Some("alpha")
+    )));
+    assert!(waiting_connections.iter().any(|connection| matches!(
+        &connection.state,
+        ConnectionState::Waiting { session, agent }
+            if session == "default" && agent.as_deref() == Some("beta")
+    )));
+
     store
         .select_option(
             &NodeId::from("a"),
@@ -577,45 +618,138 @@ async fn multi_agent_awaits_route_per_agent() {
             vec![],
         )
         .expect("select b");
+    store
+        .request_flush(Some("ready".into()))
+        .expect("send to both clients");
 
-    // alpha and beta each await the same session and get only their decision.
-    let alpha = tool_json(
-        &client
-            .call_tool(
-                CallToolRequestParams::new("await_decisions").with_arguments(
-                    json!({"timeout_seconds": 10, "agent": "alpha"})
-                        .as_object()
-                        .cloned()
-                        .unwrap_or_default(),
-                ),
-            )
-            .await
-            .expect("alpha await"),
-    );
+    let alpha_result = alpha_await
+        .await
+        .expect("alpha delivery task")
+        .expect("alpha await");
+    let beta_result = beta_await
+        .await
+        .expect("beta delivery task")
+        .expect("beta await");
+    let alpha = tool_json(&alpha_result);
+    let beta = tool_json(&beta_result);
     assert_eq!(alpha["status"], "delivered", "{alpha:#}");
     let a_dec = alpha["decisions"].as_array().unwrap();
-    assert_eq!(a_dec.len(), 1, "alpha sees only its own: {a_dec:#?}");
+    assert_eq!(
+        a_dec.len(),
+        2,
+        "alpha sees owned plus unclaimed: {a_dec:#?}"
+    );
+    assert_eq!(a_dec[0]["kind"], "option_selected");
     assert_eq!(a_dec[0]["node_id"], "a");
+    assert_eq!(a_dec[1]["kind"], "flush_requested");
+    assert_eq!(a_dec[1]["comment"], "ready");
 
-    let beta = tool_json(
-        &client
+    assert_eq!(beta["status"], "delivered", "{beta:#}");
+    let b_dec = beta["decisions"].as_array().unwrap();
+    assert_eq!(b_dec.len(), 2, "beta sees owned plus unclaimed: {b_dec:#?}");
+    assert_eq!(b_dec[0]["kind"], "option_selected");
+    assert_eq!(b_dec[0]["node_id"], "b");
+    assert_eq!(b_dec[1]["kind"], "flush_requested");
+    assert_eq!(b_dec[1]["comment"], "ready");
+
+    alpha_client.cancel().await.expect("alpha shutdown");
+    beta_client.cancel().await.expect("beta shutdown");
+}
+
+#[tokio::test]
+async fn reestablished_agent_recovers_pending_delivery() {
+    let store = Store::new(SessionState::default());
+    let (port, _shutdown, sessions) = start_server(store).await;
+    let first_client = connect_client(port, "initial alpha").await;
+
+    first_client
+        .call_tool(CallToolRequestParams::new("propose_graph").with_arguments(
+            json!({
+                "session": "recovery", "title": "recovery", "agent": "alpha",
+                "nodes": [{"id": "a", "label": "A", "choices": [
+                    {"id": "ca", "prompt": "A?", "options": [{"id": "x", "label": "X"}, {"id": "y", "label": "Y"}]}
+                ]}]
+            })
+            .as_object().cloned().unwrap_or_default(),
+        ))
+        .await
+        .expect("propose recovery graph");
+    let recovery = sessions.get("recovery").expect("recovery session");
+
+    let first_peer = first_client.peer().clone();
+    let first_await = tokio::spawn(async move {
+        first_peer
             .call_tool(
                 CallToolRequestParams::new("await_decisions").with_arguments(
-                    json!({"timeout_seconds": 10, "agent": "beta"})
+                    json!({"timeout_seconds": 30, "session": "recovery", "agent": "alpha"})
                         .as_object()
                         .cloned()
                         .unwrap_or_default(),
                 ),
             )
             .await
-            .expect("beta await"),
-    );
-    assert_eq!(beta["status"], "delivered", "{beta:#}");
-    let b_dec = beta["decisions"].as_array().unwrap();
-    assert_eq!(b_dec.len(), 1, "beta sees only its own: {b_dec:#?}");
-    assert_eq!(b_dec[0]["node_id"], "b");
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while recovery.snapshot_meta().waiting_agents != 1 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("initial alpha becomes waiting");
 
-    client.cancel().await.expect("client shutdown");
+    first_client.cancel().await.expect("initial alpha shutdown");
+    let _ = first_await.await;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while recovery.snapshot_meta().waiting_agents != 0 || !sessions.connections().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("initial alpha disconnects cleanly");
+
+    recovery
+        .select_option(
+            &NodeId::from("a"),
+            &ChoiceId::from("ca"),
+            &OptionId::from("x"),
+            vec![],
+        )
+        .expect("select while disconnected");
+    assert_eq!(
+        recovery.read(|state| state.agent_cursors.get("alpha").copied()),
+        None,
+        "disconnect must not advance alpha's cursor"
+    );
+
+    let reconnected = connect_client(port, "reestablished alpha").await;
+    let result = reconnected
+        .call_tool(
+            CallToolRequestParams::new("await_decisions").with_arguments(
+                json!({"timeout_seconds": 10, "session": "recovery", "agent": "alpha"})
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
+        )
+        .await
+        .expect("reestablished alpha await");
+    let outcome = tool_json(&result);
+    assert_eq!(outcome["status"], "delivered", "{outcome:#}");
+    let decisions = outcome["decisions"].as_array().expect("decisions array");
+    assert_eq!(decisions.len(), 1, "original decision delivered once");
+    assert_eq!(decisions[0]["kind"], "option_selected");
+    assert_eq!(decisions[0]["node_id"], "a");
+    assert_eq!(decisions[0]["choice_id"], "ca");
+    assert_eq!(decisions[0]["option_id"], "x");
+    recovery.read(|state| {
+        assert_eq!(
+            state.agent_cursors.get("alpha"),
+            Some(&state.decision_log.len())
+        );
+        assert_eq!(state.agent_flush.get("alpha"), Some(&state.flush_seq));
+    });
+
+    reconnected.cancel().await.expect("reestablished shutdown");
 }
 
 #[tokio::test]
