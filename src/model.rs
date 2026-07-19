@@ -799,6 +799,12 @@ pub struct DecisionEvent {
     /// 1-based position in the session's append-only decision log.
     pub seq: u64,
     pub at: DateTime<Utc>,
+    /// Multi-agent routing: the agent this decision is addressed to, captured
+    /// when the event was recorded (the author of the node/choice it concerns)
+    /// so re-authoring or removing that node later cannot misroute it. `None`
+    /// for unclaimed decisions delivered to every agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_agent: Option<String>,
     #[serde(flatten)]
     pub kind: DecisionKind,
 }
@@ -890,6 +896,8 @@ pub enum DecisionKind {
 struct CurrentDecisionEvent {
     seq: u64,
     at: DateTime<Utc>,
+    #[serde(default)]
+    target_agent: Option<String>,
     #[serde(flatten)]
     kind: DecisionKind,
 }
@@ -932,6 +940,7 @@ impl<'de> Deserialize<'de> for DecisionEvent {
             DecisionEventWire::Current(event) => Ok(Self {
                 seq: event.seq,
                 at: event.at,
+                target_agent: event.target_agent,
                 kind: event.kind,
             }),
             DecisionEventWire::Legacy(event) => {
@@ -969,6 +978,7 @@ impl<'de> Deserialize<'de> for DecisionEvent {
                 Ok(Self {
                     seq: event.seq,
                     at: event.at,
+                    target_agent: None,
                     kind,
                 })
             }
@@ -1127,6 +1137,7 @@ mod tests {
             DecisionEvent {
                 seq: 1,
                 at,
+                target_agent: None,
                 kind: DecisionKind::NodeAdded {
                     node: Node {
                         id: "rate-limiter".into(),
@@ -1148,6 +1159,7 @@ mod tests {
             DecisionEvent {
                 seq: 2,
                 at,
+                target_agent: None,
                 kind: DecisionKind::NodeEdited {
                     node_id: "rate-limiter".into(),
                     label: "Rate Limiter v2".into(),
@@ -1159,6 +1171,7 @@ mod tests {
             DecisionEvent {
                 seq: 3,
                 at,
+                target_agent: None,
                 kind: DecisionKind::NodeDeleted {
                     node_id: "rate-limiter".into(),
                 },
@@ -1166,6 +1179,7 @@ mod tests {
             DecisionEvent {
                 seq: 4,
                 at,
+                target_agent: None,
                 kind: DecisionKind::RemovalRequested {
                     node_id: "api".into(),
                 },
@@ -1173,6 +1187,7 @@ mod tests {
             DecisionEvent {
                 seq: 5,
                 at,
+                target_agent: None,
                 kind: DecisionKind::EdgeAdded {
                     from: "a".into(),
                     to: "b".into(),
@@ -1182,6 +1197,7 @@ mod tests {
             DecisionEvent {
                 seq: 6,
                 at,
+                target_agent: None,
                 kind: DecisionKind::EdgeDeleted {
                     from: "a".into(),
                     to: "b".into(),
@@ -1259,6 +1275,7 @@ mod tests {
         let ev = DecisionEvent {
             seq: 3,
             at: Utc::now(),
+            target_agent: None,
             kind: DecisionKind::OptionSelected {
                 node_id: NodeId::from("api"),
                 choice_id: ChoiceId::from("persistence"),
@@ -1306,6 +1323,7 @@ mod tests {
         let ev = DecisionEvent {
             seq: 1,
             at: Utc::now(),
+            target_agent: None,
             kind: DecisionKind::QuestionAnswered {
                 question_id: QuestionId::from("deploy"),
                 answer: "staging".into(),

@@ -52,6 +52,20 @@ pub fn diff_docs(a_name: &str, a: &SessionDoc, b_name: &str, b: &SessionDoc) -> 
                         nb.group.as_deref().unwrap_or("—")
                     ));
                 }
+                if na.build != nb.build {
+                    changes.push(format!(
+                        "build: {} → {}",
+                        na.build.map_or("—", crate::model::BuildStatus::name),
+                        nb.build.map_or("—", crate::model::BuildStatus::name)
+                    ));
+                }
+                if na.lane != nb.lane {
+                    changes.push(format!(
+                        "lane: {} → {}",
+                        na.lane.as_deref().unwrap_or("—"),
+                        nb.lane.as_deref().unwrap_or("—")
+                    ));
+                }
                 if na.description != nb.description {
                     changes.push("description changed".into());
                 }
@@ -321,6 +335,21 @@ mod tests {
         // A file without a snapshot is a clear error, not a panic.
         let err = diff_doc_vs_record("x.md", "plain markdown", "s", &demo_doc()).unwrap_err();
         assert!(err.contains("no nodestorm snapshot"), "{err}");
+    }
+
+    #[test]
+    fn diff_reports_build_and_lane_drift() {
+        let a = demo_doc();
+        let mut b = demo_doc();
+        {
+            let n = b.node_mut(&NodeId::from("sync-engine")).unwrap();
+            n.build = Some(crate::model::BuildStatus::Built);
+            n.lane = Some("Realtime".into());
+        }
+        let md = diff_docs("a", &a, "b", &b);
+        assert!(md.contains("## Components"), "{md}");
+        assert!(md.contains("build: planned → built"), "{md}");
+        assert!(md.contains("lane: Services → Realtime"), "{md}");
     }
 
     #[test]

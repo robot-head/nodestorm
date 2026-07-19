@@ -188,6 +188,7 @@ mod tests {
             event: DecisionEvent {
                 seq: 1,
                 at: Utc::now(),
+                target_agent: None,
                 kind: DecisionKind::NodeEdited {
                     node_id: NodeId::from("widget"),
                     label: "Widget".into(),
@@ -228,6 +229,7 @@ mod tests {
             event: DecisionEvent {
                 seq: 1,
                 at: Utc::now(),
+                target_agent: None,
                 kind: DecisionKind::NodeAdded { node },
             },
             blocked_reason: None,
@@ -238,6 +240,7 @@ mod tests {
             event: DecisionEvent {
                 seq: 2,
                 at: Utc::now(),
+                target_agent: None,
                 kind: DecisionKind::FlushRequested {
                     comment: Some("please keep the cache local".into()),
                 },

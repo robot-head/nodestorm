@@ -46,6 +46,8 @@ pub fn render_markdown(
     );
     if doc.nodes.is_empty() {
         out.push_str("_Empty session — nothing on the canvas yet._\n");
+        // Still embed the snapshot so an early export is diff-able too.
+        append_record_snapshot(&mut out, doc);
         return out;
     }
 
@@ -195,19 +197,30 @@ fn snapshot_doc(doc: &SessionDoc) -> SessionDoc {
 }
 
 /// Append the hidden, diff-able snapshot of the graph to the record.
+///
+/// The JSON lives inside an HTML comment, so any `>` it carries (only possible
+/// inside string values — e.g. a note or annotation containing `-->`) is
+/// escaped to its `>` JSON form. The payload then never contains `-->` and
+/// cannot close the comment early; `serde_json` decodes the escape back on
+/// parse, so the round-trip stays lossless.
 fn append_record_snapshot(out: &mut String, doc: &SessionDoc) {
     if let Ok(json) = serde_json::to_string(&snapshot_doc(doc)) {
+        let safe = json.replace('>', "\\u003e");
         let _ = write!(
             out,
-            "\n{RECORD_SNAPSHOT_BEGIN}\n{json}\n{RECORD_SNAPSHOT_END}\n"
+            "\n{RECORD_SNAPSHOT_BEGIN}\n{safe}\n{RECORD_SNAPSHOT_END}\n"
         );
     }
 }
 
 /// Recover the graph snapshot embedded in an exported record's text, if any.
 /// `None` when the file predates snapshots or was hand-edited past recognition.
+///
+/// Uses the *last* begin marker so user text that happens to contain the marker
+/// string (rendered earlier in the document) cannot shadow the real snapshot,
+/// which is always appended last.
 pub fn parse_record(text: &str) -> Option<SessionDoc> {
-    let begin = text.find(RECORD_SNAPSHOT_BEGIN)?;
+    let begin = text.rfind(RECORD_SNAPSHOT_BEGIN)?;
     let rest = &text[begin + RECORD_SNAPSHOT_BEGIN.len()..];
     let end = rest.find(RECORD_SNAPSHOT_END)?;
     serde_json::from_str(rest[..end].trim()).ok()
@@ -1074,6 +1087,7 @@ mod tests {
         DecisionEvent {
             seq,
             at: ts(),
+            target_agent: None,
             kind: DecisionKind::OptionSelected {
                 node_id: node.into(),
                 choice_id: choice.into(),
@@ -1087,6 +1101,7 @@ mod tests {
         DecisionEvent {
             seq,
             at: ts(),
+            target_agent: None,
             kind: DecisionKind::ChoiceDismissed {
                 node_id: node.into(),
                 choice_id: choice.into(),
@@ -1323,6 +1338,40 @@ mod tests {
     }
 
     #[test]
+    fn empty_record_still_carries_a_diffable_snapshot() {
+        let md = render_markdown(&SessionDoc::default(), &[], ts());
+        assert!(md.contains("_Empty session"), "{md}");
+        let parsed = parse_record(&md).expect("even an empty record is diff-able");
+        assert!(parsed.nodes.is_empty());
+    }
+
+    #[test]
+    fn snapshot_survives_comment_terminator_in_user_text() {
+        use crate::model::{Annotation, AnnotationId, AnnotationKind, Note, NoteId, Origin};
+        let mut node = tnode("api", "API");
+        node.notes = vec![Note {
+            id: NoteId::from("n"),
+            text: "watch out --> here".into(),
+            created_at: ts(),
+        }];
+        let mut doc = tdoc(vec![node], vec![]);
+        doc.annotations = vec![Annotation {
+            id: AnnotationId::from("a"),
+            kind: AnnotationKind::Note,
+            x: 0.0,
+            y: 0.0,
+            w: 0.0,
+            h: 0.0,
+            text: "also --> this".into(),
+            origin: Origin::User,
+        }];
+        let md = render_markdown(&doc, &[], ts());
+        let parsed = parse_record(&md).expect("snapshot round-trips despite -->");
+        assert_eq!(parsed.nodes[0].notes[0].text, "watch out --> here");
+        assert_eq!(parsed.annotations[0].text, "also --> this");
+    }
+
+    #[test]
     fn record_snapshot_round_trips_and_stays_hidden() {
         let doc = demo_doc();
         let md = render_markdown(&doc, &[], ts());
@@ -1448,6 +1497,7 @@ mod tests {
         log.push(DecisionEvent {
             seq: 3,
             at: ts(),
+            target_agent: None,
             kind: DecisionKind::FlushRequested {
                 comment: Some("looks good, proceed".into()),
             },
@@ -1455,6 +1505,7 @@ mod tests {
         log.push(DecisionEvent {
             seq: 4,
             at: ts(),
+            target_agent: None,
             kind: DecisionKind::NodeAdded {
                 node: Node {
                     id: "rate-limiter".into(),
