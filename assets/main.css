@@ -1837,6 +1837,9 @@ fieldset.agent-launch-options {
   z-index: 4;
   top: 8px;
   left: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   padding: 1px 6px;
   border-radius: 6px;
   background: color-mix(in srgb, var(--bg) 88%, transparent);
@@ -1846,6 +1849,38 @@ fieldset.agent-launch-options {
   letter-spacing: 0.02em;
   color: var(--text-dim);
   text-transform: uppercase;
+  pointer-events: auto;
+}
+
+.lane-name-edit {
+  font: inherit;
+  text-transform: uppercase;
+  color: var(--text);
+  background: var(--bg-card);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 0 4px;
+  width: 10ch;
+}
+
+.lane-delete {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 2px;
+  opacity: 0.6;
+}
+
+.lane-delete:hover {
+  opacity: 1;
+  color: var(--danger, #e5484d);
+}
+
+.add-lane-btn {
+  white-space: nowrap;
 }
 
 /* ---------- edge-kind layer toggles ---------- */

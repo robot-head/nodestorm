@@ -124,6 +124,10 @@ pub fn Canvas(
     let mut draw: Signal<Option<(f64, f64, f64, f64)>> = use_signal(|| None);
     // The lane the currently dragged card would drop into (drag feedback).
     let mut drop_lane: Signal<Option<String>> = use_signal(|| None);
+    // The lane whose label is being renamed inline (its current name).
+    let mut editing_lane: Signal<Option<String>> = use_signal(|| None);
+    // Draft text for the in-progress lane rename.
+    let mut lane_name_draft = use_signal(String::new);
 
     // Client → plane coordinates (the canvas sits below the 48px topbar).
     let to_plane = move |cx: f64, cy: f64| {
@@ -594,7 +598,60 @@ pub fn Canvas(
                             "swimlane"
                         },
                         style: "left: {lane.rect.x}px; top: {lane.rect.y}px; width: {lane.rect.w}px; height: {lane.rect.h}px;",
-                        span { class: "swimlane-label", "{lane.label}" }
+                        div {
+                            class: "swimlane-label",
+                            onmousedown: move |ev| ev.stop_propagation(),
+                            if editing_lane().as_deref() == Some(lane.label.as_str()) {
+                                input {
+                                    class: "lane-name-edit",
+                                    value: "{lane_name_draft}",
+                                    autofocus: true,
+                                    oninput: move |ev| lane_name_draft.set(ev.value()),
+                                    onkeydown: {
+                                        let old = lane.label.clone();
+                                        let store = store.clone();
+                                        move |ev: KeyboardEvent| {
+                                            if ev.key() == Key::Enter {
+                                                store.rename_lane(&old, &lane_name_draft.read());
+                                                editing_lane.set(None);
+                                            } else if ev.key() == Key::Escape {
+                                                editing_lane.set(None);
+                                            }
+                                        }
+                                    },
+                                    onblur: {
+                                        let old = lane.label.clone();
+                                        let store = store.clone();
+                                        move |_| {
+                                            store.rename_lane(&old, &lane_name_draft.read());
+                                            editing_lane.set(None);
+                                        }
+                                    },
+                                }
+                            } else {
+                                span {
+                                    class: "lane-name",
+                                    ondoubleclick: {
+                                        let label = lane.label.clone();
+                                        move |_| {
+                                            lane_name_draft.set(label.clone());
+                                            editing_lane.set(Some(label.clone()));
+                                        }
+                                    },
+                                    "{lane.label}"
+                                }
+                                button {
+                                    class: "lane-delete",
+                                    title: "Delete swimlane",
+                                    onclick: {
+                                        let label = lane.label.clone();
+                                        let store = store.clone();
+                                        move |_| store.delete_lane(&label)
+                                    },
+                                    "×"
+                                }
+                            }
+                        }
                     }
                 }
                 for (group, r) in group_outlines.iter() {
@@ -828,6 +885,19 @@ pub fn Canvas(
                         ));
                     },
                     "⤢ fit"
+                }
+                button {
+                    class: "ctl-btn add-lane-btn",
+                    title: "Add a swimlane",
+                    onclick: {
+                        let store = store.clone();
+                        move |_| {
+                            let name = store.add_lane();
+                            lane_name_draft.set(name.clone());
+                            editing_lane.set(Some(name));
+                        }
+                    },
+                    "+ swimlane"
                 }
                 if kinds_present.len() > 1 {
                     div { class: "layer-toggles", title: "Show/hide edge kinds",
