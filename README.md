@@ -121,6 +121,33 @@ nodestorm --demo                 # a built-in sample brainstorm
 cargo run --example drive        # simulates an agent against a running app
 ```
 
+## Start an agent from Nodestorm
+
+Use **Start agent** in the session menu, or **Start an agentic session** on
+an empty canvas, to launch an installed **Claude Code**, **Codex**,
+**OpenCode**, or **Pi** CLI in a new system-terminal tab. Choose a session
+name, repository, initial task, agent, and where the CLI should run.
+
+The default creates a branch in a new sibling worktree at
+`<repository-parent>/<repository-name>-worktrees/<branch>` and starts the
+agent there. You can edit both the branch and worktree path. Alternatively,
+choose **Existing checkout** to create and switch to the branch in the
+repository you selected. Nodestorm asks for confirmation before that option
+carries uncommitted changes onto the new branch. If terminal startup fails
+after Git preparation, the prepared branch/worktree is retained and the
+dialog offers the exact launch command for retry.
+
+For a remote launch, choose **SSH** and select an alias from
+`~/.ssh/config`. Remote launching currently targets Linux hosts. Git setup
+runs on that host, which must already have Git, the selected agent CLI, and
+the Nodestorm plugin installed. Nodestorm opens an interactive SSH terminal
+with reverse forwarding so the remote agent sees the local MCP server at
+`127.0.0.1:4747` (`-R 4747:127.0.0.1:<local-port>`). The SSH connection
+fails instead of launching the agent if that tunnel cannot be established.
+
+The existing **Create** control remains available in the session menu when
+you want a canvas-only session without launching an agent.
+
 ## Edit the graph yourself
 
 The canvas is a shared whiteboard, not just the agent's. Everything you

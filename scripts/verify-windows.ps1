@@ -198,6 +198,16 @@ try {
     # original graph must return intact.
     $SessionStem = [IO.Path]::GetFileNameWithoutExtension($SessionFile)
     Click-Element $hwnd ($SessionStem + ' ' + [char]0x25BE)
+    if (-not (Wait-Element 'Start agent' 5)) { Fail 'Start agent control missing' }
+    Click-Element $hwnd 'Start agent'
+    if (-not (Wait-Element 'Start agentic session' 5)) { Fail 'agent launcher did not open' }
+    if (-not (Wait-Element 'Claude Code' 5)) { Fail 'default Claude Code option missing' }
+    if (-not (Wait-Element 'Local' 5)) { Fail 'default local target missing' }
+    if (-not (Wait-Element 'New worktree (recommended)' 5)) { Fail 'default worktree option missing' }
+    Click-Element $hwnd 'Cancel'
+    Log 'agent launcher opens with local Claude and new-worktree defaults'
+
+    Click-Element $hwnd ($SessionStem + ' ' + [char]0x25BE)
     if (-not (Wait-Element 'Create' 5)) { Fail 'sessions menu did not open' }
     Click-Element $hwnd ('new session' + [char]0x2026)
     Type-Text $hwnd 'scratch'
