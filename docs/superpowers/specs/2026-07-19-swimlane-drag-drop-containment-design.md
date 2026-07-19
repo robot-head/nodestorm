@@ -82,13 +82,17 @@ drag's start-of-drag checkpoint captures both the old position and old lane, and
 single undo reverts the whole drag (undo restores the doc, and `node.lane` lives in
 the doc). Lane normalization (trim, empty -> None) mirrors `edit_node`.
 
-The lane-registry operations (`add_lane`, `rename_lane`, `delete_lane`) are
-view-state operations that mutate `declared_lanes` and are **not** undoable —
-`Snapshot` captures only the doc, not view-state, exactly as `collapsed_groups`
-and `toggle_group_collapsed` already work. `rename_lane`/`delete_lane` also rewrite
-member `node.lane` (a doc field), but they run without a checkpoint so the whole
-op stays consistent with the view-state model rather than leaving a half-undoable
-entry.
+`add_lane` is a pure view-state operation (it only appends to `declared_lanes`,
+touching no doc data) and is **not** undoable — `Snapshot` captures only the doc,
+matching `collapsed_groups`/`toggle_group_collapsed`.
+
+`rename_lane` and `delete_lane` also rewrite member `node.lane` (a doc field), so a
+misclick on a populated lane's `×` would otherwise irreversibly strip membership
+from every member card. They therefore **checkpoint** (`push_undo`) before
+mutating: one Ctrl+Z restores `node.lane` on the members, and the lane reappears as
+a band. Undo does not restore `declared_lanes` (it is view-state, outside the
+snapshot); for a *declared* lane this leaves the renamed-to name as an empty band
+after undo — a minor, accepted wart, since restoring membership is the goal.
 
 ## Drag feedback
 
@@ -125,7 +129,8 @@ Write and confirm-failing before implementing:
   `set_lane`, then one undo reverts the lane change (drag semantics, since
   `node.lane` is in the doc). `add_lane` dedups names; `delete_lane` clears member
   `node.lane` and removes the declared entry; `rename_lane` rewrites member
-  `node.lane` and the declared entry.
+  `node.lane` and the declared entry. `delete_lane`/`rename_lane` checkpoint, so
+  one undo restores member membership.
 - Layout: `lane_at` returns the lane whose stable hit-strip contains a point, and
   `None` for a point outside every band (the drop-outside case).
 - CSS contract assertion for `.swimlane.drop-target`.
