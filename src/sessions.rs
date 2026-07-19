@@ -463,7 +463,7 @@ impl Sessions {
     /// so an in-flight `await_decisions` keeps working; only lookups by the
     /// old name start failing (with the usual available-sessions error).
     pub fn rename(&self, old: &str, new: &str) -> anyhow::Result<String> {
-        let (slug, old_path, new_path, connection_projection_changed) = {
+        let (old_slug, slug, old_path, new_path, reconnecting_projection_changed) = {
             let mut inner = self.lock();
             let old_slug = slugify(old);
             if !inner.map.contains_key(&old_slug) {
@@ -480,7 +480,7 @@ impl Sessions {
                 n += 1;
             }
             let mut entry = inner.map.remove(&old_slug).expect("checked above");
-            let connection_projection_changed =
+            let reconnecting_projection_changed =
                 old_slug != slug && !entry.store.reconnecting_targets().is_empty();
             let old_path = entry.path.clone();
             let new_path = self.dir.join(format!("{slug}.json"));
@@ -490,13 +490,38 @@ impl Sessions {
             if inner.active == old_slug {
                 inner.active = slug.clone();
             }
-            (slug, old_path, new_path, connection_projection_changed)
+            (
+                old_slug,
+                slug,
+                old_path,
+                new_path,
+                reconnecting_projection_changed,
+            )
         };
         if old_path != new_path {
             std::fs::rename(&old_path, &new_path)?;
         }
+        let live_projection_changed = if old_slug == slug {
+            false
+        } else {
+            let mut entries = self.connections.lock().expect("connections mutex poisoned");
+            let mut changed = false;
+            for entry in entries.values_mut().filter(|entry| entry.live) {
+                match &mut entry.info.state {
+                    ConnectionState::Waiting { session, .. }
+                    | ConnectionState::Receiving { session, .. }
+                        if *session == old_slug =>
+                    {
+                        *session = slug.clone();
+                        changed = true;
+                    }
+                    _ => {}
+                }
+            }
+            changed
+        };
         self.bump();
-        if connection_projection_changed {
+        if reconnecting_projection_changed || live_projection_changed {
             self.bump_connections();
         }
         Ok(slug)
@@ -835,6 +860,58 @@ mod tests {
         sessions.create("beta").unwrap();
         let slug = sessions.rename("beta", "alpha").unwrap();
         assert_eq!(slug, "alpha-2", "collides with live alpha");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rename_updates_matching_live_connection_rows_once() {
+        let root = tmp_root("rename-live-connections");
+        let sessions = Sessions::open(root.join("sessions"), None).unwrap();
+        sessions.create("alpha").unwrap();
+        sessions.create("beta").unwrap();
+
+        let waiting = sessions.next_connection_id();
+        sessions.connect_client(waiting, "claude-code".into(), "1".into());
+        sessions.set_connection_waiting(waiting, "alpha".into(), Some("one".into()));
+        let receiving = sessions.next_connection_id();
+        sessions.connect_client(receiving, "claude-code".into(), "1".into());
+        sessions.set_connection_receiving(receiving, "alpha".into(), Some("two".into()));
+        let other = sessions.next_connection_id();
+        sessions.connect_client(other, "claude-code".into(), "1".into());
+        sessions.set_connection_waiting(other, "beta".into(), Some("three".into()));
+        let connected = sessions.next_connection_id();
+        sessions.connect_client(connected, "claude-code".into(), "1".into());
+
+        let mut changes = sessions.subscribe_connections();
+        let before = *changes.borrow_and_update();
+        assert_eq!(sessions.rename("alpha", "Big Plan").unwrap(), "big-plan");
+
+        assert!(changes.has_changed().unwrap());
+        assert_eq!(*changes.borrow_and_update(), before + 1);
+        assert!(matches!(
+            sessions.connection(waiting).unwrap().state,
+            ConnectionState::Waiting { session, agent }
+                if session == "big-plan" && agent.as_deref() == Some("one")
+        ));
+        assert!(matches!(
+            sessions.connection(receiving).unwrap().state,
+            ConnectionState::Receiving { session, agent }
+                if session == "big-plan" && agent.as_deref() == Some("two")
+        ));
+        assert!(matches!(
+            sessions.connection(other).unwrap().state,
+            ConnectionState::Waiting { session, agent }
+                if session == "beta" && agent.as_deref() == Some("three")
+        ));
+        assert_eq!(
+            sessions.connection(connected).unwrap().state,
+            ConnectionState::Connected
+        );
+
+        let before_noop = *changes.borrow_and_update();
+        assert_eq!(sessions.rename("big-plan", "Big Plan").unwrap(), "big-plan");
+        assert!(!changes.has_changed().unwrap());
+        assert_eq!(*changes.borrow_and_update(), before_noop);
         let _ = std::fs::remove_dir_all(&root);
     }
 
