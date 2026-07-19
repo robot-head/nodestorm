@@ -54,6 +54,18 @@ for no user benefit. The `collapsed_groups` precedent settles the choice.
   band rect (the same bounding math `group_outline_rects` uses in
   `src/ui/canvas.rs`), so a dropped card is visibly enclosed by its band.
 
+`LaneBand` gains a second rect so growth does not corrupt hit-testing:
+
+- `rect` — the **grown** rect (base strip unioned with the lane's pinned members).
+  This is what is drawn, so a dropped card is visibly wrapped.
+- `hit` — the **base strip** (fixed horizontal band, independent of pinned cards).
+  Drop hit-testing and the drag-target highlight use `hit` so the target stays
+  stable even while a card being dragged stretches its old lane's drawn `rect`.
+
+Mid-drag, the dragged card still belongs to its old lane, so that lane's drawn
+`rect` stretches toward the cursor — acceptable live feedback. On drop the lane
+changes and the next layout snaps the old band back and grows the new one.
+
 ## Drop = re-parent by geometry
 
 In `Canvas.onmouseup` (`src/ui/canvas.rs`), when the ending gesture is a
@@ -67,10 +79,16 @@ In `Canvas.onmouseup` (`src/ui/canvas.rs`), when the ending gesture is a
 The card keeps its pinned drop position (Model B). The drop path mutates
 `node.lane` *without* a fresh checkpoint — exactly like `set_position` — so the
 drag's start-of-drag checkpoint captures both the old position and old lane, and a
-single undo reverts the whole drag. Lane normalization (trim, empty -> None)
-mirrors `edit_node`. The standalone lane operations below (`add_lane`,
-`rename_lane`, `delete_lane`) each push their own undo entry since they are not
-part of a drag.
+single undo reverts the whole drag (undo restores the doc, and `node.lane` lives in
+the doc). Lane normalization (trim, empty -> None) mirrors `edit_node`.
+
+The lane-registry operations (`add_lane`, `rename_lane`, `delete_lane`) are
+view-state operations that mutate `declared_lanes` and are **not** undoable —
+`Snapshot` captures only the doc, not view-state, exactly as `collapsed_groups`
+and `toggle_group_collapsed` already work. `rename_lane`/`delete_lane` also rewrite
+member `node.lane` (a doc field), but they run without a checkpoint so the whole
+op stays consistent with the view-state model rather than leaving a half-undoable
+entry.
 
 ## Drag feedback
 
@@ -103,10 +121,13 @@ Write and confirm-failing before implementing:
 - Layout: a declared empty lane produces a band; a pinned card whose `lane` is set
   is fully enclosed by that lane's band rect.
 - Layout: band render order is declared-then-referenced-then-default.
-- Store: the drop-path lane mutation sets and clears membership; a checkpoint
-  taken before it, then the mutation, then one undo reverts the lane change (drag
-  semantics). `add_lane` dedups names; `delete_lane` clears member `node.lane`;
-  `rename_lane` rewrites member `node.lane`.
+- Store: `set_lane` sets and clears membership; a checkpoint taken before it, then
+  `set_lane`, then one undo reverts the lane change (drag semantics, since
+  `node.lane` is in the doc). `add_lane` dedups names; `delete_lane` clears member
+  `node.lane` and removes the declared entry; `rename_lane` rewrites member
+  `node.lane` and the declared entry.
+- Layout: `lane_at` returns the lane whose stable hit-strip contains a point, and
+  `None` for a point outside every band (the drop-outside case).
 - CSS contract assertion for `.swimlane.drop-target`.
 
 Then run the focused tests and the full project checks.
