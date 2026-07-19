@@ -59,9 +59,10 @@ pub fn App() -> Element {
     });
 
     let layout: Memo<Layout> = use_memo(move || {
+        let m = meta.read();
         let collapsed: std::collections::BTreeSet<String> =
-            meta.read().collapsed_groups.iter().cloned().collect();
-        layout::compute_collapsed(&doc.read(), &collapsed)
+            m.collapsed_groups.iter().cloned().collect();
+        layout::compute_view(&doc.read(), &collapsed, &m.declared_lanes)
     });
     let mut selected: Signal<Option<NodeId>> = use_signal(|| None);
     let hovered_affects: Signal<Vec<NodeId>> = use_signal(Vec::new);

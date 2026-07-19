@@ -242,6 +242,27 @@ mod tests {
     }
 
     #[test]
+    fn swimlane_labels_are_interactive() {
+        // The label sits over an otherwise non-interactive band; its controls
+        // must receive pointer events.
+        assert_block_contains(".swimlane-label", "pointer-events: auto");
+        assert!(
+            !block_for(".add-lane-btn").trim().is_empty(),
+            "add-lane control is styled"
+        );
+        assert!(
+            !block_for(".lane-delete").trim().is_empty(),
+            "delete control is styled"
+        );
+    }
+
+    #[test]
+    fn dragged_card_highlights_its_target_lane() {
+        // The drop-target band is visibly distinct via the accent color.
+        assert_block_contains(".swimlane.drop-target", "var(--accent)");
+    }
+
+    #[test]
     fn dropdowns_fit_the_supported_viewport() {
         assert_block_contains(
             ".export-dropdown",
