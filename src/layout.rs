@@ -155,12 +155,14 @@ pub fn estimate_height(node: &Node, open_questions: usize) -> f64 {
     const HEAD_MIN: f64 = 24.0;
     const META_H: f64 = 20.0;
     const LINE_H: f64 = 18.0;
-    let label_lines = wrap_lines(&node.label, 22).min(3);
+    // Label: 13.5px Space Grotesk in 232px minus the 13px kind glyph + 8px
+    // gap. Description: 12.5px body font across the full 232px.
+    let label_lines = wrap_lines(&node.label, 211.0, 1.0).min(3);
     let head = (label_lines as f64 * LINE_H).max(HEAD_MIN);
     let desc = if node.description.is_empty() {
         0.0
     } else {
-        4.0 + wrap_lines(&node.description, 36).min(4) as f64 * LINE_H
+        4.0 + wrap_lines(&node.description, 232.0, 12.5 / 13.5).min(4) as f64 * LINE_H
     };
     let badge_row = if open_questions > 0
         || node.open_choice_count() > 0
@@ -190,24 +192,43 @@ fn node_heights(doc: &SessionDoc) -> Vec<f64> {
         .collect()
 }
 
-/// Greedy word-wrap line count at `per_line` characters.
-fn wrap_lines(text: &str, per_line: usize) -> usize {
+/// Approximate advance width in px of `c` at the 13.5px label size. Flat
+/// per-character counts undercount wide glyphs (`W`-heavy or all-caps
+/// labels wrap earlier than 1/22th of the width each), which would clip
+/// content now that cards are max-height-clamped to the estimate — so bin
+/// glyphs by width class instead. Leaning wide is the safe direction: it
+/// only makes a band slightly taller.
+fn char_w(c: char) -> f64 {
+    match c {
+        'i' | 'j' | 'l' | '.' | ',' | '\'' | '|' | '!' | ':' | ';' => 4.5,
+        'f' | 't' | 'r' | '(' | ')' | '[' | ']' | '-' | '/' => 5.5,
+        'm' | 'w' => 11.5,
+        'M' | 'W' | '@' => 13.0,
+        c if c.is_uppercase() || c.is_ascii_digit() => 9.5,
+        _ => 7.5,
+    }
+}
+
+/// Greedy word-wrap line count inside a `budget`-px line, with glyph widths
+/// scaled by `scale` (1.0 = the 13.5px label size). Mirrors CSS
+/// `overflow-wrap: anywhere`: over-long single words wrap mid-word.
+fn wrap_lines(text: &str, budget: f64, scale: f64) -> usize {
+    let space = 4.0 * scale;
     let mut lines = 1usize;
-    let mut current = 0usize;
+    let mut used = 0.0f64;
     for word in text.split_whitespace() {
-        let len = word.chars().count();
-        if current == 0 {
-            current = len;
-        } else if current + 1 + len <= per_line {
-            current += 1 + len;
+        let w: f64 = word.chars().map(char_w).sum::<f64>() * scale;
+        if used == 0.0 {
+            used = w;
+        } else if used + space + w <= budget {
+            used += space + w;
         } else {
             lines += 1;
-            current = len;
+            used = w;
         }
-        // Very long single words wrap mid-word.
-        while current > per_line {
+        while used > budget {
             lines += 1;
-            current -= per_line;
+            used -= budget;
         }
     }
     lines
@@ -1556,9 +1577,25 @@ mod tests {
 
     #[test]
     fn wrap_lines_counts_greedily() {
-        assert_eq!(wrap_lines("short", 20), 1);
-        assert_eq!(wrap_lines("two words", 5), 2);
-        assert_eq!(wrap_lines("supercalifragilistic", 10), 2);
+        assert_eq!(wrap_lines("short", 211.0, 1.0), 1);
+        // Two ~37px words never fit a 40px line together.
+        assert_eq!(wrap_lines("goose goose", 40.0, 1.0), 2);
+        // A single over-long word wraps mid-word (overflow-wrap: anywhere).
+        assert_eq!(wrap_lines("supercalifragilistic", 80.0, 1.0), 2);
+    }
+
+    #[test]
+    fn wide_glyphs_wrap_earlier_than_narrow_ones() {
+        // 22 W's overflow the 211px label budget (real wrap at ~16 wide
+        // glyphs); 22 i's fit on one line. A flat per-character count would
+        // treat these identically and clip the wide label's second line.
+        let mut wide = node("wide");
+        wide.label = "W".repeat(22);
+        let mut narrow = node("narrow");
+        narrow.label = "i".repeat(22);
+        assert!(estimate_height(&wide, 0) > estimate_height(&narrow, 0));
+        assert_eq!(wrap_lines(&"W".repeat(22), 211.0, 1.0), 2);
+        assert_eq!(wrap_lines(&"i".repeat(22), 211.0, 1.0), 1);
     }
 
     #[test]
