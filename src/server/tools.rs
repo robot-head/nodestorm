@@ -5,6 +5,7 @@
 //! the crate from SDK churn.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use rmcp::handler::server::wrapper::Parameters;
@@ -17,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use crate::model::{DecisionEvent, Edge, GraphOp, Node, NodeId, SessionDoc};
-use crate::store::{FlushOutcome, Store, StoreError, UpdateSummary};
+use crate::store::{Awaiter, ConnectionId, FlushOutcome, Store, StoreError, UpdateSummary};
 
 /// Progress heartbeat cadence while an `await_decisions` call blocks. Keeps
 /// Claude Code's HTTP idle-abort (default 5 min) from killing the call.
@@ -27,15 +28,20 @@ const HEARTBEAT_EVERY: Duration = Duration::from_secs(25);
 /// even when no progress token was sent; the skill tells agents to re-call.
 const DEFAULT_AWAIT_SECS: u64 = 240;
 const MAX_AWAIT_SECS: u64 = 3600;
+static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
 pub struct NodestormServer {
     sessions: Arc<crate::sessions::Sessions>,
+    connection_id: ConnectionId,
 }
 
 impl NodestormServer {
     pub fn new(sessions: Arc<crate::sessions::Sessions>) -> Self {
-        Self { sessions }
+        Self {
+            sessions,
+            connection_id: ConnectionId(NEXT_CONNECTION_ID.fetch_add(1, Ordering::Relaxed)),
+        }
     }
 
     /// Route a tool call to its session's store: `None` → the active
@@ -343,7 +349,17 @@ impl NodestormServer {
             });
         }
 
-        let outcome = session_store.await_flush(timeout, p.agent.clone()).await;
+        let outcome = session_store
+            .await_flush(
+                timeout,
+                Awaiter {
+                    connection_id: self.connection_id,
+                    client_label: "MCP client".into(),
+                    agent: p.agent.clone(),
+                },
+            )
+            .await
+            .map_err(store_err)?;
         cancel.cancel();
 
         let (open, revision) = session_store.read(|s| (s.doc.open_choice_count(), s.doc.revision));

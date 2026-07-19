@@ -311,7 +311,7 @@ async fn agent_question_answered_roundtrip() {
             store
                 .answer_question(&QuestionId::from("deploy-target"), "staging first".into())
                 .expect("answer");
-            store.request_flush(None);
+            store.request_flush(None).expect("send answer");
         }
     });
 
@@ -398,29 +398,24 @@ async fn multi_agent_awaits_route_per_agent() {
     assert_eq!(state["doc"]["nodes"][0]["agent"], "alpha");
     assert_eq!(state["doc"]["nodes"][1]["agent"], "beta");
 
-    // The user decides both; deciding the last open choice autoflushes.
-    tokio::spawn({
-        let store = store.clone();
-        async move {
-            tokio::time::sleep(Duration::from_millis(200)).await;
-            store
-                .select_option(
-                    &NodeId::from("a"),
-                    &ChoiceId::from("ca"),
-                    &OptionId::from("x"),
-                    vec![],
-                )
-                .expect("select a");
-            store
-                .select_option(
-                    &NodeId::from("b"),
-                    &ChoiceId::from("cb"),
-                    &OptionId::from("q"),
-                    vec![],
-                )
-                .expect("select b");
-        }
-    });
+    // The user decides both with nobody waiting; the persisted autoflush is
+    // independently claimable by each named agent.
+    store
+        .select_option(
+            &NodeId::from("a"),
+            &ChoiceId::from("ca"),
+            &OptionId::from("x"),
+            vec![],
+        )
+        .expect("select a");
+    store
+        .select_option(
+            &NodeId::from("b"),
+            &ChoiceId::from("cb"),
+            &OptionId::from("q"),
+            vec![],
+        )
+        .expect("select b");
 
     // alpha and beta each await the same session and get only their decision.
     let alpha = tool_json(
@@ -601,8 +596,14 @@ async fn await_decisions_times_out_without_losing_anything() {
         "preview shows the un-sent decision"
     );
 
-    // The user clicks Send afterwards: the next call gets it instantly.
-    store.request_flush(None);
+    // The user clicks Send after the next call has registered its waiter.
+    tokio::spawn({
+        let store = store.clone();
+        async move {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            store.request_flush(None).expect("send queued decision");
+        }
+    });
     let result = client
         .call_tool(
             CallToolRequestParams::new("await_decisions").with_arguments(
