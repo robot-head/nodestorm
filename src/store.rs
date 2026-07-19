@@ -1641,7 +1641,11 @@ fn register_waiter(s: &mut SessionState, awaiter: Awaiter) -> Result<bool, Store
         .send_receipt
         .as_ref()
         .is_some_and(|receipt| receipt.targets.iter().any(|target| !target.delivered));
-    if !unfinished_receipt && s.flush_seq > s.delivered_flush_seq {
+    let pending = match &recipient {
+        RecipientKey::Agent(agent) => s.agent_flush.get(agent).copied().unwrap_or(0) < s.flush_seq,
+        RecipientKey::Anonymous(_) => s.delivered_flush_seq < s.flush_seq,
+    };
+    if !unfinished_receipt && pending {
         s.send_receipt = Some(SendReceipt {
             flush_seq: s.flush_seq,
             end_cursor: s.decision_log.len(),
@@ -4485,6 +4489,64 @@ mod tests {
             b_batch.is_empty(),
             "new owner does not steal it: {b_batch:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn absent_named_agent_claims_its_pending_flush() {
+        let choice = |id: &str| {
+            serde_json::from_value(serde_json::json!({
+                "id": id,
+                "prompt": format!("{id}?"),
+                "options": [{"id": "yes", "label": "Yes"}]
+            }))
+            .unwrap()
+        };
+        let mut gamma = user_node("gamma-node");
+        gamma.origin = Origin::Agent;
+        gamma.agent = Some("gamma".into());
+        gamma.choices = vec![choice("gamma-choice")];
+        let mut gate = user_node("gate");
+        gate.choices = vec![choice("keep-open")];
+        let store = Store::with_doc(SessionDoc {
+            nodes: vec![gamma, gate],
+            ..Default::default()
+        });
+        store
+            .select_option(
+                &NodeId::from("gamma-node"),
+                &ChoiceId::from("gamma-choice"),
+                &OptionId::from("yes"),
+                vec![],
+            )
+            .unwrap();
+
+        let alpha = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .await_flush(Duration::from_secs(1), awaiter(1, Some("alpha")))
+                    .await
+            }
+        });
+        wait_until(&store, 1).await;
+        store.request_flush(None).unwrap();
+        let FlushOutcome::Delivered(alpha_batch) = alpha.await.unwrap().unwrap() else {
+            panic!("alpha not delivered");
+        };
+        assert!(
+            alpha_batch.is_empty(),
+            "alpha must not receive gamma's event"
+        );
+
+        let gamma = store
+            .await_flush(Duration::from_millis(50), awaiter(2, Some("gamma")))
+            .await
+            .expect("gamma await");
+        let FlushOutcome::Delivered(events) = gamma else {
+            panic!("gamma did not receive its pending event");
+        };
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].target_agent.as_deref(), Some("gamma"));
     }
 
     #[tokio::test]

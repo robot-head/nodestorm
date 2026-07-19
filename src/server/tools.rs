@@ -411,7 +411,7 @@ impl NodestormServer {
         let _await_guard = ActiveAwaitGuard::enter(self.connection.clone())?;
         self.sessions
             .set_connection_waiting(self.connection.id, session.clone(), p.agent.clone());
-        let _state_guard = ConnectionStateGuard {
+        let state_guard = ConnectionStateGuard {
             id: self.connection.id,
             sessions: self.sessions.clone(),
         };
@@ -460,6 +460,7 @@ impl NodestormServer {
         let (open, revision) = session_store.read(|s| (s.doc.open_choice_count(), s.doc.revision));
         match outcome {
             FlushOutcome::Delivered(decisions) => {
+                drop(state_guard);
                 self.sessions.set_connection_receiving(
                     self.connection.id,
                     session,

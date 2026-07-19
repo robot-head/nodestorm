@@ -674,6 +674,18 @@ async fn multi_agent_awaits_route_per_connection() {
     assert_eq!(b_dec[1]["kind"], "flush_requested");
     assert_eq!(b_dec[1]["comment"], "ready");
 
+    let receiving = sessions.connections();
+    assert!(receiving.iter().any(|connection| matches!(
+        &connection.state,
+        ConnectionState::Receiving { session, agent }
+            if session == "default" && agent.as_deref() == Some("alpha")
+    )));
+    assert!(receiving.iter().any(|connection| matches!(
+        &connection.state,
+        ConnectionState::Receiving { session, agent }
+            if session == "default" && agent.as_deref() == Some("beta")
+    )));
+
     alpha_client.cancel().await.expect("alpha shutdown");
     beta_client.cancel().await.expect("beta shutdown");
 }

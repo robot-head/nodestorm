@@ -58,7 +58,10 @@ Name the guard `state_guard`, explicitly drop it in the delivered branch, and
 only then set the connection to `Receiving`.
 
 ```rust
-let state_guard = ConnectionStateGuard { /* existing fields */ };
+let state_guard = ConnectionStateGuard {
+    id: self.connection.id,
+    sessions: self.sessions.clone(),
+};
 
 FlushOutcome::Delivered(decisions) => {
     drop(state_guard);
@@ -67,7 +70,11 @@ FlushOutcome::Delivered(decisions) => {
         session,
         p.agent.clone(),
     );
-    // existing result construction
+    json_result(AwaitResult::Delivered {
+        decisions,
+        open_choice_count: open,
+        revision,
+    })
 }
 ```
 
@@ -123,7 +130,20 @@ let pending = match &recipient {
     RecipientKey::Anonymous(_) => s.delivered_flush_seq < s.flush_seq,
 };
 if !unfinished_receipt && pending {
-    // existing claimable receipt construction
+    s.send_receipt = Some(SendReceipt {
+        flush_seq: s.flush_seq,
+        end_cursor: s.decision_log.len(),
+        doc_at_send: s.doc.clone(),
+        targets: vec![ReceiptTarget {
+            key: recipient,
+            connection_id: Some(connection_id),
+            last_connection_id: connection_id,
+            client_label: awaiter.client_label,
+            delivered: false,
+        }],
+        claimable: true,
+    });
+    s.send_status = SendStatus::Sending;
 }
 ```
 
