@@ -210,7 +210,10 @@ mod tests {
         for n in 0..Preferences::MAX_RECENT_REPOS {
             assert!(prefs.record_repository(&format!("  /repo/{n}  ")));
         }
-        assert_eq!(prefs.recent_repositories.len(), Preferences::MAX_RECENT_REPOS);
+        assert_eq!(
+            prefs.recent_repositories.len(),
+            Preferences::MAX_RECENT_REPOS
+        );
         assert_eq!(prefs.recent_repositories[0], "/repo/7");
         assert!(!prefs.recent_repositories.iter().any(|r| r == "/work/web"));
     }
