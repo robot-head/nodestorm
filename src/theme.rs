@@ -179,6 +179,25 @@ mod tests {
     }
 
     #[test]
+    fn topbar_uses_the_shared_graph_bolt_mark() {
+        let brand = TOPBAR_SOURCE
+            .split_once("span { class: \"topbar-brand\"")
+            .expect("topbar brand")
+            .1
+            .split_once("div { class: \"export-menu\"")
+            .expect("topbar export menu")
+            .0;
+        assert!(brand.contains("topbar-mark"));
+        assert!(brand.contains("polyline"));
+        assert!(brand.contains("BOLT_POINTS"));
+        assert!(brand.contains("NODE_INDICES"));
+        assert!(brand.contains("currentColor"));
+        assert!(!brand.contains("mask"));
+        assert!(!brand.contains("topbar-bolt-cutout"));
+        assert!(!brand.contains("\"ϟ\""));
+    }
+
+    #[test]
     fn exact_selector_lookup_ignores_longer_selector() {
         let css = ".session-row.active .sess-name {\n\
                      color: red;\n\

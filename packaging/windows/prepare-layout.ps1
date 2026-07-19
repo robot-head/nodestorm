@@ -16,7 +16,7 @@ Copy-Item $Binary (Join-Path $Layout "nodestorm.exe")
 & (Join-Path $PSScriptRoot "generate-manifest.ps1") -Architecture $Architecture -OutputPath (Join-Path $Layout "AppxManifest.xml")
 
 Add-Type -AssemblyName System.Drawing
-$source = [System.Drawing.Image]::FromFile((Resolve-Path (Join-Path $PSScriptRoot "../../docs/demo/poster.png")))
+$source = [System.Drawing.Image]::FromFile((Resolve-Path (Join-Path $PSScriptRoot "../../assets/icons/nodestorm-1024.png")))
 try {
     foreach ($asset in @(
         @{ Name = "StoreLogo.png"; Width = 50; Height = 50 },
@@ -27,7 +27,17 @@ try {
         $bitmap = [System.Drawing.Bitmap]::new($asset.Width, $asset.Height)
         try {
             $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-            try { $graphics.DrawImage($source, 0, 0, $asset.Width, $asset.Height) } finally { $graphics.Dispose() }
+            try {
+                $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+                $graphics.Clear([System.Drawing.Color]::Transparent)
+                if ($asset.Name -eq "Wide310x150Logo.png") {
+                    $side = 150
+                    $x = ($asset.Width - $side) / 2
+                    $graphics.DrawImage($source, $x, 0, $side, $side)
+                } else {
+                    $graphics.DrawImage($source, 0, 0, $asset.Width, $asset.Height)
+                }
+            } finally { $graphics.Dispose() }
             $bitmap.Save((Join-Path $Layout "Assets/$($asset.Name)"), [System.Drawing.Imaging.ImageFormat]::Png)
         } finally { $bitmap.Dispose() }
     }

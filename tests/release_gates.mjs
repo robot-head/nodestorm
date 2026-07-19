@@ -64,3 +64,58 @@ test("Windows setup aborts unavailable Store, version, port, and readiness paths
   ]) assert.match(script, pattern);
   assert.doesNotMatch(script, /releases\/download|https?:\/\/[^\s"']+\.msix(?:bundle)?/i);
 });
+
+test("Windows package assets use the redesigned square icon without distortion", async () => {
+  const script = await readFile(path.join(root, "packaging", "windows", "prepare-layout.ps1"), "utf8");
+
+  assert.match(script, /assets[\\\/]icons[\\\/]nodestorm-1024\.png/i);
+  assert.doesNotMatch(script, /docs[\\\/]demo[\\\/]poster\.png/i);
+  assert.match(script, /Wide310x150Logo\.png/);
+  assert.match(script, /\$x\s*=\s*\(\$asset\.Width\s*-\s*\$side\)\s*\/\s*2/i);
+});
+
+test("macOS app bundle packages the redesigned icon", async () => {
+  const plist = await readFile(path.join(root, "packaging", "macos", "Info.plist"), "utf8");
+  const workflow = await readFile(path.join(root, ".github", "workflows", "release-build.yml"), "utf8");
+  const macosWorkflow = workflow.slice(workflow.indexOf("\n  macos:"), workflow.indexOf("\n  windows:"));
+
+  assert.match(plist, /<key>CFBundleIconFile<\/key><string>Nodestorm\.icns<\/string>/);
+  for (const command of [
+    'cp assets/icons/nodestorm-16.png "$ICONSET/icon_16x16.png"',
+    'cp assets/icons/nodestorm-32.png "$ICONSET/icon_16x16@2x.png"',
+    'cp assets/icons/nodestorm-32.png "$ICONSET/icon_32x32.png"',
+    'cp assets/icons/nodestorm-64.png "$ICONSET/icon_32x32@2x.png"',
+    'cp assets/icons/nodestorm-128.png "$ICONSET/icon_128x128.png"',
+    'cp assets/icons/nodestorm-256.png "$ICONSET/icon_128x128@2x.png"',
+    'cp assets/icons/nodestorm-256.png "$ICONSET/icon_256x256.png"',
+    'cp assets/icons/nodestorm-512.png "$ICONSET/icon_256x256@2x.png"',
+    'cp assets/icons/nodestorm-512.png "$ICONSET/icon_512x512.png"',
+    'cp assets/icons/nodestorm-1024.png "$ICONSET/icon_512x512@2x.png"',
+  ]) assert.ok(macosWorkflow.includes(command), `missing macOS icon mapping: ${command}`);
+
+  const iconGeneration = macosWorkflow.indexOf('iconutil -c icns -o "$APP/Contents/Resources/Nodestorm.icns" "$ICONSET"');
+  const iconCheck = macosWorkflow.indexOf('test -s "$APP/Contents/Resources/Nodestorm.icns"');
+  const firstCodesign = macosWorkflow.indexOf("codesign");
+  assert.notEqual(iconGeneration, -1);
+  assert.notEqual(iconCheck, -1);
+  assert.notEqual(firstCodesign, -1);
+  assert.ok(iconGeneration < iconCheck && iconCheck < firstCodesign, "macOS icon must be generated and checked before codesign");
+});
+
+test("Linux release packages and installs launcher artwork", async () => {
+  const workflow = await readFile(path.join(root, ".github", "workflows", "release-build.yml"), "utf8");
+  const linuxWorkflow = workflow.slice(workflow.indexOf("\n  linux:"), workflow.indexOf("\n  macos:"));
+  const script = await readFile(path.join(scripts, "setup.sh"), "utf8");
+
+  assert.match(linuxWorkflow, /mkdir -p dist\/icons\/\{48x48,128x128,256x256,512x512\}/);
+  for (const size of [48, 128, 256, 512]) {
+    assert.ok(
+      linuxWorkflow.includes(`cp assets/icons/nodestorm-${size}.png dist/icons/${size}x${size}/nodestorm.png`),
+      `missing Linux ${size}px icon mapping`,
+    );
+  }
+  assert.match(linuxWorkflow, /tar -C dist .* nodestorm icons/);
+  assert.match(script, /for size in 48 128 256 512/);
+  assert.match(script, /icons\/hicolor\/\$\{size\}x\$\{size\}\/apps/);
+  assert.match(script, /Icon=nodestorm/);
+});

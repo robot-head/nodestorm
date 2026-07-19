@@ -62,11 +62,32 @@ pub fn TopBar(
     let mut search = use_context::<super::SearchQuery>().0;
     let mut zoom_target = use_context::<super::ZoomTarget>().0;
     let mut search_cursor = use_signal(|| 0usize);
+    let mark_points = crate::icon::svg_points();
 
     rsx! {
         header { class: "topbar",
             span { class: "topbar-brand",
-                span { class: "topbar-bolt", "ϟ" }
+                svg {
+                    class: "topbar-mark",
+                    view_box: crate::icon::VIEW_BOX,
+                    "aria-hidden": "true",
+                    polyline {
+                        points: "{mark_points}",
+                        fill: "none",
+                        stroke: "currentColor",
+                        stroke_width: "{crate::icon::STROKE_WIDTH}",
+                        stroke_linecap: "round",
+                        stroke_linejoin: "round",
+                    }
+                    for index in crate::icon::NODE_INDICES {
+                        circle {
+                            cx: "{crate::icon::BOLT_POINTS[index].0}",
+                            cy: "{crate::icon::BOLT_POINTS[index].1}",
+                            r: "{crate::icon::NODE_RADIUS}",
+                            fill: "currentColor",
+                        }
+                    }
+                }
                 span { class: "topbar-word", "nodestorm" }
             }
             div { class: "export-menu",

@@ -25,6 +25,7 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 tokio-util = "0.7"
 rfd = "0.17.2"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }

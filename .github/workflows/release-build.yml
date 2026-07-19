@@ -82,9 +82,13 @@ jobs:
           bash plugins/nodestorm/skills/nodestorm/scripts/setup.sh --dry-run --os linux --arch "${{ matrix.arch }}"
       - name: Package pinned artifact
         run: |
-          mkdir -p dist
+          mkdir -p dist/icons/{48x48,128x128,256x256,512x512}
           cp target/release/nodestorm dist/nodestorm
-          tar -C dist -czf "nodestorm-v${VERSION}-linux-${{ matrix.arch }}.tar.gz" nodestorm
+          cp assets/icons/nodestorm-48.png dist/icons/48x48/nodestorm.png
+          cp assets/icons/nodestorm-128.png dist/icons/128x128/nodestorm.png
+          cp assets/icons/nodestorm-256.png dist/icons/256x256/nodestorm.png
+          cp assets/icons/nodestorm-512.png dist/icons/512x512/nodestorm.png
+          tar -C dist -czf "nodestorm-v${VERSION}-linux-${{ matrix.arch }}.tar.gz" nodestorm icons
       - uses: actions/attest-build-provenance@v3
         with:
           subject-path: nodestorm-v${{ env.VERSION }}-linux-${{ matrix.arch }}.tar.gz
@@ -128,9 +132,22 @@ jobs:
           cargo build --release --locked
           bash plugins/nodestorm/skills/nodestorm/scripts/setup.sh --dry-run --os macos --arch "${{ matrix.arch }}"
           APP="$RUNNER_TEMP/Nodestorm.app"
-          mkdir -p "$APP/Contents/MacOS"
+          ICONSET="$RUNNER_TEMP/Nodestorm.iconset"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$ICONSET"
           cp packaging/macos/Info.plist "$APP/Contents/Info.plist"
           cp target/release/nodestorm "$APP/Contents/MacOS/nodestorm"
+          cp assets/icons/nodestorm-16.png "$ICONSET/icon_16x16.png"
+          cp assets/icons/nodestorm-32.png "$ICONSET/icon_16x16@2x.png"
+          cp assets/icons/nodestorm-32.png "$ICONSET/icon_32x32.png"
+          cp assets/icons/nodestorm-64.png "$ICONSET/icon_32x32@2x.png"
+          cp assets/icons/nodestorm-128.png "$ICONSET/icon_128x128.png"
+          cp assets/icons/nodestorm-256.png "$ICONSET/icon_128x128@2x.png"
+          cp assets/icons/nodestorm-256.png "$ICONSET/icon_256x256.png"
+          cp assets/icons/nodestorm-512.png "$ICONSET/icon_256x256@2x.png"
+          cp assets/icons/nodestorm-512.png "$ICONSET/icon_512x512.png"
+          cp assets/icons/nodestorm-1024.png "$ICONSET/icon_512x512@2x.png"
+          iconutil -c icns -o "$APP/Contents/Resources/Nodestorm.icns" "$ICONSET"
+          test -s "$APP/Contents/Resources/Nodestorm.icns"
           "$APP/Contents/MacOS/nodestorm" --version | grep -F "$VERSION"
       - name: Sign, notarize, staple, and verify
         env:

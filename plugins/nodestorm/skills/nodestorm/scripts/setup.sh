@@ -154,9 +154,45 @@ if [[ "$TARGET_OS" == "linux" ]]; then
     echo "Downloaded binary version does not match $VERSION." >&2
     exit 1
   }
-  INSTALL_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/nodestorm/${VERSION}"
+  if [[ "${XDG_DATA_HOME:-}" == /* && "$XDG_DATA_HOME" != *"="* ]]; then
+    DATA_HOME=$XDG_DATA_HOME
+  else
+    DATA_HOME="$HOME/.local/share"
+  fi
+  for size in 48 128 256 512; do
+    staged_icon="$TEMP_DIR/icons/${size}x${size}/nodestorm.png"
+    [[ -f "$staged_icon" ]] || { echo "Release archive has no ${size}px launcher icon." >&2; exit 1; }
+  done
+
+  INSTALL_DIR="$DATA_HOME/nodestorm/${VERSION}"
+  desktop_exec="$INSTALL_DIR/nodestorm"
+  if [[ "$desktop_exec" != /* || "$desktop_exec" == *"="* ]]; then
+    echo "Desktop executable path cannot be represented in a desktop entry." >&2
+    exit 1
+  fi
   mkdir -p "$INSTALL_DIR"
   install -m 0755 "$STAGED_BINARY" "$INSTALL_DIR/nodestorm"
+  for size in 48 128 256 512; do
+    staged_icon="$TEMP_DIR/icons/${size}x${size}/nodestorm.png"
+    icon_dir="$DATA_HOME/icons/hicolor/${size}x${size}/apps"
+    mkdir -p "$icon_dir"
+    install -m 0644 "$staged_icon" "$icon_dir/nodestorm.png"
+  done
+
+  desktop_dir="$DATA_HOME/applications"
+  mkdir -p "$desktop_dir"
+  desktop_exec=${desktop_exec//\\/\\\\}
+  desktop_exec=${desktop_exec//\"/\\\"}
+  desktop_exec=${desktop_exec//\$/\\$}
+  desktop_exec=${desktop_exec//\`/\\\`}
+  desktop_exec=${desktop_exec//%/%%}
+  desktop_exec=${desktop_exec//\\/\\\\}
+  {
+    printf '[Desktop Entry]\nType=Application\nVersion=1.0\n'
+    printf 'Name=Nodestorm\nComment=Visual architecture brainstorming\n'
+    printf 'Exec="%s"\nIcon=nodestorm\nTerminal=false\nCategories=Development;\n' "$desktop_exec"
+  } > "$desktop_dir/nodestorm.desktop"
+  chmod 0644 "$desktop_dir/nodestorm.desktop"
   LAUNCH_COMMAND=("$INSTALL_DIR/nodestorm")
 else
   (cd "$TEMP_DIR" && shasum -a 256 --check asset.sha256)
@@ -202,7 +238,7 @@ if port_in_use; then
 fi
 
 if [[ "$TARGET_OS" == "linux" ]]; then
-  LOG_FILE="${XDG_DATA_HOME:-${HOME}/.local/share}/nodestorm/nodestorm.log"
+  LOG_FILE="$DATA_HOME/nodestorm/nodestorm.log"
   "${LAUNCH_COMMAND[@]}" >"$LOG_FILE" 2>&1 &
 else
   "${LAUNCH_COMMAND[@]}"
