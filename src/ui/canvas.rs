@@ -459,6 +459,12 @@ pub fn Canvas(
                                 );
                                 drop_lane.set(crate::layout::lane_at(&l.lanes, cx, cy));
                                 if !moved {
+                                    // The card leaves its lane the moment the
+                                    // drag starts, so bands hold still instead
+                                    // of stretching after the cursor; the drop
+                                    // re-parents by geometry. Folds into the
+                                    // drag's start-of-drag undo checkpoint.
+                                    store.set_lane(id, None);
                                     gesture.set(GestureState {
                                         gesture: Some(Gesture::DragNode { start, orig, moved: true }),
                                         node: state.node.clone(),

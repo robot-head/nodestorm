@@ -470,8 +470,23 @@ impl Store {
             (!t.is_empty()).then(|| t.to_owned())
         });
         self.mutate(|s| {
-            if let Some(n) = s.doc.node_mut(node) {
-                n.lane = lane;
+            let Some(n) = s.doc.node_mut(node) else {
+                return;
+            };
+            let old = std::mem::replace(&mut n.lane, lane.clone());
+            // Dragging the last card out of an undeclared (agent-set) lane
+            // would otherwise erase the lane entirely; keep its band alive
+            // as a declared empty lane — deletion stays an explicit ×.
+            if let Some(old) = old
+                && lane.as_deref() != Some(old.as_str())
+                && !s
+                    .doc
+                    .nodes
+                    .iter()
+                    .any(|m| m.lane.as_deref() == Some(old.as_str()))
+                && !s.declared_lanes.contains(&old)
+            {
+                s.declared_lanes.push(old);
             }
         });
     }
@@ -2972,6 +2987,31 @@ mod tests {
             .unwrap()
             .clone();
         assert_eq!(redis.lane, None, "undo reverts the lane change");
+    }
+
+    #[test]
+    fn set_lane_declares_a_lane_orphaned_by_drag_out() {
+        let store = demo_store();
+        // email-provider is the sole "External" member; dragging it out must
+        // not erase the lane — it survives as a declared empty band.
+        store.set_lane(&NodeId::from("email-provider"), None);
+        assert!(
+            store
+                .snapshot_meta()
+                .declared_lanes
+                .contains(&"External".to_owned()),
+            "orphaned lane is rescued into declared_lanes"
+        );
+        // redis leaves "Data" but postgres/search-index remain members:
+        // no rescue needed, the lane still exists by reference.
+        store.set_lane(&NodeId::from("redis"), None);
+        assert!(
+            !store
+                .snapshot_meta()
+                .declared_lanes
+                .contains(&"Data".to_owned()),
+            "a lane with remaining members is not force-declared"
+        );
     }
 
     #[test]
