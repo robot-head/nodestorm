@@ -562,6 +562,9 @@ fn union_rect(a: Rect, b: Rect) -> Rect {
     }
 }
 
+const LANE_CARD_PAD: f64 = 20.0;
+const LANE_TITLE_H: f64 = 36.0;
+
 /// Lane-constrained placement: cards pack into labeled horizontal bands by
 /// their `lane` (the unlabeled default band holds nodes without one). Bands
 /// stack top-to-bottom in first-appearance order; within a (lane, rank) cell
@@ -573,7 +576,6 @@ fn place_laned(
     _ranks: &[usize],
     order: &[Vec<usize>],
 ) -> (HashMap<NodeId, Rect>, Vec<LaneBand>) {
-    const LANE_VPAD: f64 = 20.0;
     const LANE_SEP: f64 = 18.0;
     const LANE_HPAD: f64 = 30.0;
     let heights: Vec<f64> = doc.nodes.iter().map(estimate_height).collect();
@@ -591,6 +593,16 @@ fn place_laned(
     }
     let num_lanes = lane_order.len();
     let num_ranks = order.len();
+    let top_pad: Vec<f64> = lane_order
+        .iter()
+        .map(|label| {
+            if label.is_empty() {
+                LANE_CARD_PAD
+            } else {
+                LANE_TITLE_H
+            }
+        })
+        .collect();
 
     // Band height = tallest (lane, rank) stack over the ranks.
     let mut lane_stack_h = vec![0.0f64; num_lanes];
@@ -616,7 +628,7 @@ fn place_laned(
     let mut acc = 0.0;
     for li in 0..num_lanes {
         lane_y[li] = acc;
-        band_h[li] = lane_stack_h[li] + 2.0 * LANE_VPAD;
+        band_h[li] = lane_stack_h[li] + top_pad[li] + LANE_CARD_PAD;
         acc += band_h[li] + LANE_SEP;
     }
 
@@ -642,7 +654,11 @@ fn place_laned(
     }
     for (r, rank_nodes) in order.iter().enumerate() {
         let x = r as f64 * (CARD_WIDTH + RANK_GUTTER);
-        let mut cursor: Vec<f64> = lane_y.iter().map(|y| y + LANE_VPAD).collect();
+        let mut cursor: Vec<f64> = lane_y
+            .iter()
+            .zip(&top_pad)
+            .map(|(y, pad)| y + pad)
+            .collect();
         for &i in rank_nodes {
             if doc.nodes[i].position.is_some() {
                 continue;
@@ -1059,6 +1075,10 @@ mod tests {
             let band = layout.lanes.iter().find(|l| l.label == label).unwrap().rect;
             for id in ids {
                 let r = layout.rects[&NodeId::from(id)];
+                assert!(
+                    r.y >= band.y + 36.0,
+                    "{id} overlaps the {label} title strip"
+                );
                 assert!(
                     r.y >= band.y && r.y + r.h <= band.y + band.h,
                     "{id} escapes {label}"

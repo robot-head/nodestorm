@@ -225,6 +225,23 @@ mod tests {
     }
 
     #[test]
+    fn canvas_cards_raise_on_hover_and_selection() {
+        assert_block_contains(".node-card", "z-index: 1");
+        assert_block_contains(".node-card:hover", "z-index: 2");
+        assert_block_contains(".node-card.selected", "z-index: 3");
+    }
+
+    #[test]
+    fn swimlane_label_stays_above_cards() {
+        assert_block_contains(".swimlane", "z-index: auto");
+        assert_block_contains(".swimlane-label", "z-index: 4");
+        assert_block_contains(
+            ".swimlane-label",
+            "background: color-mix(in srgb, var(--bg) 88%, transparent)",
+        );
+    }
+
+    #[test]
     fn dropdowns_fit_the_supported_viewport() {
         assert_block_contains(
             ".export-dropdown",
