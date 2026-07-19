@@ -29,6 +29,8 @@ image = { version = "0.25.10", default-features = false, features = ["png"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
+# Raw HTTP client for the stateless-transport regression test (no session id).
+reqwest = { version = "0.13", default-features = false }
 rmcp = { version = "2.2.0", features = [
     "client",
     "transport-streamable-http-client-reqwest",
