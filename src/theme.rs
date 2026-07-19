@@ -213,6 +213,16 @@ mod tests {
     }
 
     #[test]
+    fn swimlane_label_stays_above_cards() {
+        assert_block_contains(".swimlane", "z-index: auto");
+        assert_block_contains(".swimlane-label", "z-index: 4");
+        assert_block_contains(
+            ".swimlane-label",
+            "background: color-mix(in srgb, var(--bg) 88%, transparent)",
+        );
+    }
+
+    #[test]
     fn dropdowns_fit_the_supported_viewport() {
         assert_block_contains(
             ".export-dropdown",
