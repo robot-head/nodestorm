@@ -203,7 +203,8 @@ fn checked_output(program: &str, args: &[&str]) -> anyhow::Result<String> {
 }
 
 pub fn ensure_executable(program: &str) -> anyhow::Result<()> {
-    checked_output(program, &["--version"])
+    let version_flag = if program == "ssh" { "-V" } else { "--version" };
+    checked_output(program, &[version_flag])
         .map(|_| ())
         .map_err(|err| anyhow::anyhow!("`{program}` is unavailable: {err}"))
 }
@@ -809,6 +810,7 @@ mod tests {
     #[test]
     fn executable_check_reports_missing_program() {
         assert!(ensure_executable("git").is_ok());
+        assert!(ensure_executable("ssh").is_ok());
         assert!(
             ensure_executable("nodestorm-definitely-not-installed")
                 .unwrap_err()
