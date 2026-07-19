@@ -1878,6 +1878,7 @@ button.empty-cmd code {
 
 .node-card {
   position: absolute;
+  z-index: 1;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -1898,12 +1899,14 @@ button.empty-cmd code {
 }
 
 .node-card:hover {
+  z-index: 2;
   background: var(--bg-card-hover);
   transform: translateY(-1px);
   box-shadow: 0 4px 14px color-mix(in srgb, var(--shadow) 40%, transparent);
 }
 
 .node-card.selected {
+  z-index: 3;
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--glow), 0 0 16px var(--glow);
 }
