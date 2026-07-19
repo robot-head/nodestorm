@@ -152,7 +152,7 @@ impl Sessions {
 
         let (generation, _) = watch::channel(0);
         let (connection_generation, _) = watch::channel(0);
-        Ok(Arc::new(Self {
+        let sessions = Arc::new(Self {
             inner: Mutex::new(Inner { map, active }),
             dir,
             generation,
@@ -160,7 +160,9 @@ impl Sessions {
             connection_generation,
             next_connection: AtomicU64::new(1),
             runtime: Mutex::new(None),
-        }))
+        });
+        sessions.bind_connection_notifiers();
+        Ok(sessions)
     }
 
     /// Convenience for `main`: directory and pin from the CLI.
@@ -181,7 +183,7 @@ impl Sessions {
         );
         let (generation, _) = watch::channel(0);
         let (connection_generation, _) = watch::channel(0);
-        Arc::new(Self {
+        let sessions = Arc::new(Self {
             inner: Mutex::new(Inner {
                 map,
                 active: "default".into(),
@@ -192,7 +194,9 @@ impl Sessions {
             connection_generation,
             next_connection: AtomicU64::new(1),
             runtime: Mutex::new(None),
-        })
+        });
+        sessions.bind_connection_notifiers();
+        sessions
     }
 
     /// The active session's backing file (export paths derive from it).
@@ -211,6 +215,16 @@ impl Sessions {
 
     fn bump_connections(&self) {
         self.connection_generation.send_modify(|g| *g += 1);
+    }
+
+    fn bind_store_connection_notifier(&self, store: &Arc<Store>) {
+        store.set_connection_notifier(self.connection_generation.clone());
+    }
+
+    fn bind_connection_notifiers(&self) {
+        for entry in self.lock().map.values() {
+            self.bind_store_connection_notifier(&entry.store);
+        }
     }
 
     pub fn next_connection_id(&self) -> ConnectionId {
@@ -342,6 +356,7 @@ impl Sessions {
                 n += 1;
             }
             let store = Store::new(SessionState::default());
+            self.bind_store_connection_notifier(&store);
             let path = self.dir.join(format!("{slug}.json"));
             inner.map.insert(
                 slug.clone(),
@@ -557,6 +572,7 @@ impl Sessions {
             Some(state) => Store::new(state),
             None => Store::new(SessionState::default()),
         };
+        self.bind_store_connection_notifier(&store);
         {
             let mut inner = self.lock();
             inner.map.insert(
@@ -964,5 +980,156 @@ mod tests {
             ConnectionState::Reconnecting { ref session, ref agent }
                 if session == "default" && agent.as_deref() == Some("alpha")
         ));
+    }
+
+    #[tokio::test]
+    async fn reconnecting_projection_notifies_on_orphan_and_rebind() {
+        let root = tmp_root("reconnecting-events");
+        let sessions = Sessions::open(root.join("sessions"), None).unwrap();
+        sessions.create("plan").unwrap();
+        let store = sessions.get("plan").unwrap();
+        let first_id = sessions.next_connection_id();
+        sessions.connect_client(first_id, "claude-code".into(), "1".into());
+        let mut changes = sessions.subscribe_connections();
+        changes.borrow_and_update();
+
+        let first = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .await_flush(
+                        Duration::from_secs(30),
+                        Awaiter {
+                            connection_id: first_id,
+                            client_label: "claude-code 1".into(),
+                            agent: Some("alpha".into()),
+                        },
+                    )
+                    .await
+            }
+        });
+        let mut revisions = store.subscribe();
+        while store.snapshot_meta().waiting_agents != 1 {
+            revisions.changed().await.unwrap();
+        }
+        store.request_flush(None).unwrap();
+        sessions.disconnect_client(first_id);
+        changes.borrow_and_update();
+        assert!(sessions.connections().is_empty());
+
+        first.abort();
+        let _ = first.await;
+        tokio::time::timeout(Duration::from_secs(1), changes.changed())
+            .await
+            .expect("orphan creation publishes a connection change")
+            .unwrap();
+        assert!(matches!(
+            sessions.connections().as_slice(),
+            [ConnectionInfo {
+                id,
+                state: ConnectionState::Reconnecting { session, agent },
+                ..
+            }] if *id == first_id
+                && session == "plan"
+                && agent.as_deref() == Some("alpha")
+        ));
+
+        let second_id = sessions.next_connection_id();
+        sessions.connect_client(second_id, "claude-code".into(), "2".into());
+        changes.borrow_and_update();
+        let recovered = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .await_flush(
+                        Duration::from_secs(30),
+                        Awaiter {
+                            connection_id: second_id,
+                            client_label: "claude-code 2".into(),
+                            agent: Some("alpha".into()),
+                        },
+                    )
+                    .await
+            }
+        });
+
+        tokio::time::timeout(Duration::from_secs(1), changes.changed())
+            .await
+            .expect("reconnect rebind publishes a connection change")
+            .unwrap();
+        assert_eq!(
+            sessions.connections(),
+            vec![ConnectionInfo {
+                id: second_id,
+                client_name: "claude-code".into(),
+                version: "2".into(),
+                state: ConnectionState::Connected,
+            }]
+        );
+        assert!(matches!(
+            recovered.await.unwrap().unwrap(),
+            crate::store::FlushOutcome::Delivered(_)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn unarchived_store_notifies_when_a_receipt_is_orphaned() {
+        let root = tmp_root("unarchived-reconnecting-events");
+        let sessions = Sessions::open(root.join("sessions"), None).unwrap();
+        sessions.create("plan").unwrap();
+        sessions.archive("plan").unwrap();
+        sessions.unarchive("plan").unwrap();
+        let store = sessions.get("plan").unwrap();
+        let id = sessions.next_connection_id();
+        sessions.connect_client(id, "claude-code".into(), "1".into());
+        let mut changes = sessions.subscribe_connections();
+        changes.borrow_and_update();
+
+        let waiting = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .await_flush(
+                        Duration::from_secs(30),
+                        Awaiter {
+                            connection_id: id,
+                            client_label: "claude-code 1".into(),
+                            agent: Some("alpha".into()),
+                        },
+                    )
+                    .await
+            }
+        });
+        let mut revisions = store.subscribe();
+        while store.snapshot_meta().waiting_agents != 1 {
+            revisions.changed().await.unwrap();
+        }
+        store.request_flush(None).unwrap();
+        sessions.disconnect_client(id);
+        changes.borrow_and_update();
+        waiting.abort();
+        let _ = waiting.await;
+
+        tokio::time::timeout(Duration::from_secs(1), changes.changed())
+            .await
+            .expect("an unarchived store publishes orphan projection changes")
+            .unwrap();
+        assert!(matches!(
+            sessions.connections().as_slice(),
+            [ConnectionInfo {
+                state: ConnectionState::Reconnecting { session, .. },
+                ..
+            }] if session == "plan"
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    #[should_panic(expected = "store already belongs to a session manager")]
+    fn store_rejects_a_second_connection_notifier_owner() {
+        let store = Store::new(SessionState::default());
+        let _first = Sessions::single(store.clone(), tmp_root("store-owner-1"));
+        let _second = Sessions::single(store, tmp_root("store-owner-2"));
     }
 }

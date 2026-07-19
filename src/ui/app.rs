@@ -30,9 +30,16 @@ use super::topbar::TopBar;
 pub fn App() -> Element {
     let cli = use_context::<Cli>();
     let sessions = use_context::<Arc<Sessions>>();
-    let mut doc = use_signal(|| sessions.active_store().snapshot_doc());
-    let mut meta = use_signal(|| sessions.active_store().snapshot_meta());
-    let mut session_name = use_signal(|| sessions.active_name());
+    let (initial_name, initial_store) = sessions
+        .resolve_named(None)
+        .expect("active session always exists");
+    let initial_doc = initial_store.snapshot_doc();
+    let initial_meta = initial_store.snapshot_meta();
+    let mut active_store =
+        use_context_provider(move || super::ActiveStore(Signal::new(initial_store))).0;
+    let mut doc = use_signal(move || initial_doc);
+    let mut meta = use_signal(move || initial_meta);
+    let mut session_name = use_signal(move || initial_name);
     let mut connections = use_signal(|| sessions.connections());
 
     // Cross-component signals (topbar, panel, and canvas all touch them),
@@ -79,6 +86,7 @@ pub fn App() -> Element {
             let sessions = sessions.clone();
             async move {
                 let mut changes = sessions.subscribe_connections();
+                connections.set(sessions.connections());
                 while changes.changed().await.is_ok() {
                     connections.set(sessions.connections());
                 }
@@ -95,10 +103,13 @@ pub fn App() -> Element {
             async move {
                 let mut generation = sessions.subscribe_generation();
                 loop {
-                    let store = sessions.active_store();
+                    let (name, store) = sessions
+                        .resolve_named(None)
+                        .expect("active session always exists");
                     doc.set(store.snapshot_doc());
                     meta.set(store.snapshot_meta());
-                    session_name.set(sessions.active_name());
+                    session_name.set(name);
+                    active_store.set(store.clone());
                     let mut rev = store.subscribe();
                     loop {
                         tokio::select! {
@@ -227,7 +238,7 @@ pub fn App() -> Element {
                     button {
                         aria_label: "Dismiss error",
                         onclick: {
-                            let store = sessions.active_store();
+                            let store = active_store.read().clone();
                             move |_| store.dismiss_toast()
                         },
                         "×"
@@ -238,7 +249,7 @@ pub fn App() -> Element {
     }
 }
 
-/// Convenience for child components: the ACTIVE session's store.
+/// Convenience for child components: the store backing the rendered snapshots.
 pub fn use_store() -> Arc<crate::store::Store> {
-    use_context::<Arc<Sessions>>().active_store()
+    use_context::<super::ActiveStore>().0.read().clone()
 }

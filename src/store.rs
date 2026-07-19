@@ -8,7 +8,7 @@
 //! delivery cursor advanced under the mutex; see [`Store::await_flush`].
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use chrono::Utc;
@@ -262,6 +262,7 @@ pub struct UpdateSummary {
 pub struct Store {
     state: Mutex<SessionState>,
     revision_tx: watch::Sender<u64>,
+    connection_tx: OnceLock<watch::Sender<u64>>,
 }
 
 impl Store {
@@ -299,6 +300,7 @@ impl Store {
         Arc::new(Self {
             state: Mutex::new(state),
             revision_tx,
+            connection_tx: OnceLock::new(),
         })
     }
 
@@ -332,6 +334,19 @@ impl Store {
 
     pub fn subscribe(&self) -> watch::Receiver<u64> {
         self.revision_tx.subscribe()
+    }
+
+    pub(crate) fn set_connection_notifier(&self, notifier: watch::Sender<u64>) {
+        assert!(
+            self.connection_tx.set(notifier).is_ok(),
+            "store already belongs to a session manager"
+        );
+    }
+
+    fn notify_connection_projection(&self) {
+        if let Some(notifier) = self.connection_tx.get() {
+            notifier.send_modify(|generation| *generation += 1);
+        }
     }
 
     pub fn snapshot_doc(&self) -> SessionDoc {
@@ -1404,7 +1419,10 @@ struct WaitGuard {
 impl WaitGuard {
     fn enter(store: Arc<Store>, awaiter: Awaiter) -> Self {
         let connection_id = awaiter.connection_id;
-        store.mutate(|s| register_waiter(s, awaiter));
+        let rebound = store.mutate(|s| register_waiter(s, awaiter));
+        if rebound {
+            store.notify_connection_projection();
+        }
         Self {
             store,
             connection_id,
@@ -1414,7 +1432,7 @@ impl WaitGuard {
 
 impl Drop for WaitGuard {
     fn drop(&mut self) {
-        self.store.mutate(|s| {
+        let orphaned = self.store.mutate(|s| {
             let removed = s.waiters.remove(&self.connection_id);
             s.waiting_agents = s.waiters.len();
             let Some(target) = s.send_receipt.as_mut().and_then(|receipt| {
@@ -1422,7 +1440,7 @@ impl Drop for WaitGuard {
                     !target.delivered && target.connection_id == Some(self.connection_id)
                 })
             }) else {
-                return;
+                return false;
             };
             target.last_connection_id = self.connection_id;
             target.connection_id = None;
@@ -1439,11 +1457,15 @@ impl Drop for WaitGuard {
                 level: ToastLevel::Warning,
                 message: format!("{recipient} disconnected; waiting to reconnect"),
             });
+            true
         });
+        if orphaned {
+            self.store.notify_connection_projection();
+        }
     }
 }
 
-fn register_waiter(s: &mut SessionState, awaiter: Awaiter) {
+fn register_waiter(s: &mut SessionState, awaiter: Awaiter) -> bool {
     if matches!(s.send_status, SendStatus::Sent | SendStatus::Failed) {
         s.send_status = SendStatus::Idle;
     }
@@ -1452,6 +1474,7 @@ fn register_waiter(s: &mut SessionState, awaiter: Awaiter) {
         Some(agent) => RecipientKey::Agent(agent.clone()),
         None => RecipientKey::Anonymous(connection_id),
     };
+    let mut rebound = false;
 
     if let Some(receipt) = s.send_receipt.as_mut() {
         let target = match &recipient {
@@ -1490,6 +1513,7 @@ fn register_waiter(s: &mut SessionState, awaiter: Awaiter) {
             target.last_connection_id = connection_id;
             target.client_label = awaiter.client_label.clone();
             s.send_status = SendStatus::Sending;
+            rebound = true;
         }
     }
 
@@ -1520,7 +1544,7 @@ fn register_waiter(s: &mut SessionState, awaiter: Awaiter) {
             });
             s.send_status = SendStatus::Sending;
         }
-        return;
+        return rebound;
     }
 
     let unfinished_receipt = s
@@ -1543,6 +1567,7 @@ fn register_waiter(s: &mut SessionState, awaiter: Awaiter) {
         });
         s.send_status = SendStatus::Sending;
     }
+    rebound
 }
 
 fn validated_targets(s: &SessionState) -> Result<Vec<ReceiptTarget>, StoreError> {

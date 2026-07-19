@@ -285,6 +285,52 @@ mod tests {
         assert_block_contains(".delivery-toast", "position: fixed");
         assert_block_contains(".delivery-toast", "z-index: 30");
         assert_block_contains(".delivery-toast-error", "color: var(--status-removed)");
+        assert_block_contains(".btn-send.sent", "color: var(--on-badge)");
+        assert_block_contains(".btn-send.failed", "color: var(--on-badge)");
+    }
+
+    #[test]
+    fn connection_bridge_subscribes_before_its_initial_resnapshot() {
+        let subscribe = APP_SOURCE
+            .find("let mut changes = sessions.subscribe_connections()")
+            .expect("connection bridge subscribes");
+        let bridge = &APP_SOURCE[subscribe..];
+        let resnapshot = bridge
+            .find("connections.set(sessions.connections())")
+            .expect("connection bridge immediately resnapshots");
+        let await_change = bridge
+            .find("while changes.changed().await.is_ok()")
+            .expect("connection bridge awaits later changes");
+
+        assert!(
+            resnapshot < await_change,
+            "the subscribe/snapshot gap must close before awaiting changes"
+        );
+    }
+
+    #[test]
+    fn rendered_handlers_use_the_snapshotted_store() {
+        let helper = APP_SOURCE
+            .find("pub fn use_store()")
+            .map(|start| &APP_SOURCE[start..])
+            .expect("render-bound store helper");
+        assert!(helper.contains("use_context::<super::ActiveStore>()"));
+
+        let toast = APP_SOURCE
+            .find("if let Some(toast)")
+            .map(|start| &APP_SOURCE[start..])
+            .expect("toast renderer");
+        assert!(toast.contains("let store = active_store.read().clone()"));
+    }
+
+    #[test]
+    fn active_session_name_and_store_resolve_together() {
+        let resolve = APP_SOURCE
+            .find("let (name, store) = sessions")
+            .map(|start| &APP_SOURCE[start..])
+            .expect("the bridge resolves the active name and store together");
+        assert!(resolve.contains(".resolve_named(None)"));
+        assert!(resolve.contains("session_name.set(name)"));
     }
 
     #[test]

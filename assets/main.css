@@ -359,11 +359,13 @@ body {
 .btn-send.sent {
   background: var(--badge-decided);
   border-color: var(--badge-decided);
+  color: var(--on-badge);
 }
 
 .btn-send.failed {
   background: var(--status-removed);
   border-color: var(--status-removed);
+  color: var(--on-badge);
 }
 
 .btn-ghost {
