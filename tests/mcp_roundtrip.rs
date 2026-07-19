@@ -2,7 +2,9 @@
 //! streamable-HTTP server over loopback, with a simulated user clicking in
 //! the store.
 
+use std::future::{Future, poll_fn};
 use std::sync::Arc;
+use std::task::Poll;
 use std::time::Duration;
 
 use rmcp::ServiceExt;
@@ -16,7 +18,7 @@ use serde_json::{Value, json};
 
 use nodestorm::model::{ChoiceId, NodeId, NodeKind, OptionId, QuestionId};
 use nodestorm::sessions::{ConnectionState, Sessions};
-use nodestorm::store::{SessionState, Store};
+use nodestorm::store::{Awaiter, ConnectionId, SendStatus, SessionState, Store};
 
 async fn start_server(store: Arc<Store>) -> (u16, tokio::sync::watch::Sender<bool>, Arc<Sessions>) {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
@@ -555,6 +557,7 @@ async fn multi_agent_awaits_route_per_connection() {
         .expect("update beta");
 
     let alpha_peer = alpha_client.peer().clone();
+    let mut connection_changes = sessions.subscribe_connections();
     let alpha_await = tokio::spawn(async move {
         alpha_peer
             .call_tool(
@@ -582,7 +585,10 @@ async fn multi_agent_awaits_route_per_connection() {
     });
     tokio::time::timeout(Duration::from_secs(1), async {
         while store.snapshot_meta().waiting_agents != 2 {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            connection_changes
+                .changed()
+                .await
+                .expect("connection watch open");
         }
     })
     .await
@@ -657,6 +663,51 @@ async fn multi_agent_awaits_route_per_connection() {
 }
 
 #[tokio::test]
+async fn explicit_send_stays_pending_until_every_target_consumes() {
+    let store = Store::new(SessionState::default());
+    let alpha = store.await_flush(
+        Duration::from_secs(10),
+        Awaiter {
+            connection_id: ConnectionId(1),
+            client_label: "alpha client".into(),
+            agent: Some("alpha".into()),
+        },
+    );
+    tokio::pin!(alpha);
+    poll_fn(|context| match alpha.as_mut().poll(context) {
+        Poll::Pending => Poll::Ready(()),
+        Poll::Ready(outcome) => panic!("alpha await completed before Send: {outcome:?}"),
+    })
+    .await;
+    let beta = store.await_flush(
+        Duration::from_secs(10),
+        Awaiter {
+            connection_id: ConnectionId(2),
+            client_label: "beta client".into(),
+            agent: Some("beta".into()),
+        },
+    );
+    tokio::pin!(beta);
+    poll_fn(|context| match beta.as_mut().poll(context) {
+        Poll::Pending => Poll::Ready(()),
+        Poll::Ready(outcome) => panic!("beta await completed before Send: {outcome:?}"),
+    })
+    .await;
+    assert_eq!(store.snapshot_meta().waiting_agents, 2);
+
+    store.request_flush(None).expect("send to both targets");
+    alpha.await.expect("alpha consumes receipt");
+    assert_eq!(
+        store.snapshot_meta().send_status,
+        SendStatus::Sending,
+        "Send must not report Sent while beta has not consumed"
+    );
+
+    beta.await.expect("beta consumes receipt");
+    assert_eq!(store.snapshot_meta().send_status, SendStatus::Sent);
+}
+
+#[tokio::test]
 async fn reestablished_agent_recovers_pending_delivery() {
     let store = Store::new(SessionState::default());
     let (port, _shutdown, sessions) = start_server(store).await;
@@ -676,6 +727,7 @@ async fn reestablished_agent_recovers_pending_delivery() {
         .expect("propose recovery graph");
     let recovery = sessions.get("recovery").expect("recovery session");
 
+    let mut connection_changes = sessions.subscribe_connections();
     let first_peer = first_client.peer().clone();
     let first_await = tokio::spawn(async move {
         first_peer
@@ -691,17 +743,33 @@ async fn reestablished_agent_recovers_pending_delivery() {
     });
     tokio::time::timeout(Duration::from_secs(1), async {
         while recovery.snapshot_meta().waiting_agents != 1 {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            connection_changes
+                .changed()
+                .await
+                .expect("connection watch open");
         }
     })
     .await
     .expect("initial alpha becomes waiting");
 
     first_client.cancel().await.expect("initial alpha shutdown");
-    let _ = first_await.await;
+    let first_error = first_await
+        .await
+        .expect("initial alpha await task")
+        .expect_err("disconnected await must fail");
+    let first_error = first_error.to_string();
+    assert!(
+        first_error.contains("transport")
+            || first_error.contains("cancel")
+            || first_error.contains("closed"),
+        "unexpected disconnect error: {first_error}"
+    );
     tokio::time::timeout(Duration::from_secs(1), async {
         while recovery.snapshot_meta().waiting_agents != 0 || !sessions.connections().is_empty() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            connection_changes
+                .changed()
+                .await
+                .expect("connection watch open");
         }
     })
     .await
@@ -741,15 +809,43 @@ async fn reestablished_agent_recovers_pending_delivery() {
     assert_eq!(decisions[0]["node_id"], "a");
     assert_eq!(decisions[0]["choice_id"], "ca");
     assert_eq!(decisions[0]["option_id"], "x");
-    recovery.read(|state| {
-        assert_eq!(
-            state.agent_cursors.get("alpha"),
-            Some(&state.decision_log.len())
+    let delivered_position = recovery.read(|state| {
+        let position = (
+            state.agent_cursors.get("alpha").copied(),
+            state.agent_flush.get("alpha").copied(),
         );
-        assert_eq!(state.agent_flush.get("alpha"), Some(&state.flush_seq));
+        assert_eq!(position.0, Some(state.decision_log.len()));
+        assert_eq!(position.1, Some(state.flush_seq));
+        position
     });
 
     reconnected.cancel().await.expect("reestablished shutdown");
+
+    let fresh_client = connect_client(port, "fresh alpha").await;
+    let result = fresh_client
+        .call_tool(
+            CallToolRequestParams::new("await_decisions").with_arguments(
+                json!({"timeout_seconds": 5, "session": "recovery", "agent": "alpha"})
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
+        )
+        .await
+        .expect("fresh alpha await");
+    let outcome = tool_json(&result);
+    assert_eq!(outcome["status"], "timeout", "{outcome:#}");
+    assert_eq!(outcome["decisions_so_far"], json!([]));
+    assert_eq!(
+        recovery.read(|state| (
+            state.agent_cursors.get("alpha").copied(),
+            state.agent_flush.get("alpha").copied(),
+        )),
+        delivered_position,
+        "empty retry must not advance alpha's delivery position"
+    );
+
+    fresh_client.cancel().await.expect("fresh alpha shutdown");
 }
 
 #[tokio::test]
