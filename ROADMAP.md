@@ -141,11 +141,40 @@ power, scale & records) shipped together.
 - [x] Diff against exported record files (session-vs-session shipped in
       v0.5)
 
-## Next
+## Next — v0.10+ (candidates)
 
-The planned backlog is complete. Future directions (unscheduled):
+Prioritized from a nodestorm brainstorm on 2026-07-19 (record:
+[docs/decisions/2026-07-19-roadmap-post-v0.9.md](docs/decisions/2026-07-19-roadmap-post-v0.9.md)).
+The theme: stay a focused single-machine planning tool — every item below
+reuses machinery that already ships. Integrations (issue/PR sync, repo
+seeding), multi-human collaboration, design-variant branching, and drill-down
+subgraphs were all considered and cut.
 
-- Multi-agent depth: per-agent queue editing and choice/edge-level
-  attribution (nodes and the feed are attributed today).
+### v0.10 — Insight & records
+
+- [ ] Decision provenance links: every decided node links to its
+      considered-trail and the moment it was decided, in the exported record.
+- [ ] Diff overlay on canvas: render `diff_sessions` / `diff_record` as color
+      on the graph itself, not just the side panel.
+- [ ] Session health metrics: decision velocity, reopened-choice count,
+      open-question age — in the topbar and the record.
+- [ ] Confidence & effort tags: the agent tags nodes/options with certainty
+      and a size (decided: **T-shirt** S/M/L/XL); sizes roll up into
+      session-metrics and the exported record.
+
+### v0.11 — Loop & timeline
+
+- [ ] Timeline replay: scrub the session log to see the graph at any past
+      point (the log already captures the data).
+- [ ] Multi-agent depth: per-agent queue editing and edge/choice-level
+      attribution (nodes and the feed are attributed today).
+
+### v0.12+ — Cross-platform (separate infra track)
+
+- [ ] macOS/Linux builds + auto-update (decided: **per-OS native** —
+      dmg / AppImage / MSIX — with an in-app updater). Windows / Microsoft
+      Store is already moving (#23).
+
+### Ongoing polish (unscheduled)
+
 - Semantic-zoom tuning and lane/annotation polish from real-world use.
-- Richer record diffing (annotations and question drift).
