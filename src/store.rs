@@ -1625,12 +1625,23 @@ fn try_deliver_locked(
     };
     receipt.targets[target_index].delivered = true;
     if receipt.targets.iter().all(|target| target.delivered) {
+        let actionable = s.decision_log.len() > receipt.end_cursor
+            || s.waiters.keys().any(|connection_id| {
+                !receipt
+                    .targets
+                    .iter()
+                    .any(|target| target.connection_id == Some(*connection_id))
+            });
         s.delivery_cursor = receipt.end_cursor;
         s.delivered_flush_seq = receipt.flush_seq;
         s.pending_base =
             (s.decision_log.len() > receipt.end_cursor).then(|| receipt.doc_at_send.clone());
         s.queue_edit_error = None;
-        s.send_status = SendStatus::Sent;
+        s.send_status = if actionable {
+            SendStatus::Idle
+        } else {
+            SendStatus::Sent
+        };
         push_activity(s, ActivityOrigin::User, "sent decisions to Claude".into());
     }
     Some(batch)
@@ -3042,6 +3053,7 @@ mod tests {
             1,
             "later edit remains queued"
         );
+        assert_eq!(store.snapshot_meta().send_status, SendStatus::Idle);
     }
 
     #[test]
@@ -3094,6 +3106,22 @@ mod tests {
             }]
         ));
 
+        drop(alpha);
+        drop(beta);
+    }
+
+    #[test]
+    fn receipt_completion_is_idle_for_later_waiter() {
+        let store = demo_store();
+        pick_first_choice(&store);
+        let alpha = WaitGuard::enter(store.clone(), awaiter(23, Some("alpha")));
+        store.request_flush(None).unwrap();
+        let beta = WaitGuard::enter(store.clone(), awaiter(24, Some("beta")));
+
+        assert!(store.try_deliver(ConnectionId(23)).is_some());
+
+        assert_eq!(store.peek_undelivered().len(), 0);
+        assert_eq!(store.snapshot_meta().send_status, SendStatus::Idle);
         drop(alpha);
         drop(beta);
     }
