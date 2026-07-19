@@ -171,9 +171,188 @@ pub fn agent_command(agent: AgentKind, slug: &str, prompt: &str, cwd: &str) -> C
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalInspection {
+    pub dirty: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedWorkspace {
+    pub directory: String,
+    pub retained_path: String,
+}
+
+fn checked_output(program: &str, args: &[&str]) -> anyhow::Result<String> {
+    let output = std::process::Command::new(program).args(args).output()?;
+    anyhow::ensure!(
+        output.status.success(),
+        "`{program}` failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+pub fn ensure_executable(program: &str) -> anyhow::Result<()> {
+    checked_output(program, &["--version"])
+        .map(|_| ())
+        .map_err(|err| anyhow::anyhow!("`{program}` is unavailable: {err}"))
+}
+
+fn git(repository: &str, args: &[&str]) -> anyhow::Result<String> {
+    let mut all = vec!["-C", repository];
+    all.extend_from_slice(args);
+    checked_output("git", &all)
+}
+
+pub fn inspect_local(req: &LaunchRequest) -> anyhow::Result<LocalInspection> {
+    validate_request(req)?;
+    anyhow::ensure!(
+        matches!(req.target, LaunchTarget::Local),
+        "local inspection requires a local target"
+    );
+    git(&req.repository, &["rev-parse", "--show-toplevel"])?;
+    git(
+        &req.repository,
+        &["check-ref-format", "--branch", &req.branch],
+    )?;
+
+    let reference = format!("refs/heads/{}", req.branch);
+    let branch_status = std::process::Command::new("git")
+        .args([
+            "-C",
+            &req.repository,
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &reference,
+        ])
+        .status()?;
+    match branch_status.code() {
+        Some(0) => anyhow::bail!("branch `{}` already exists", req.branch),
+        Some(1) => {}
+        _ => anyhow::bail!("git could not inspect branch `{}`", req.branch),
+    }
+
+    if let GitMode::NewWorktree { path } = &req.git_mode {
+        anyhow::ensure!(
+            !Path::new(path).exists(),
+            "worktree destination `{path}` already exists"
+        );
+    }
+
+    Ok(LocalInspection {
+        dirty: !git(&req.repository, &["status", "--porcelain"])?.is_empty(),
+    })
+}
+
+pub fn prepare_local(req: &LaunchRequest, allow_dirty: bool) -> anyhow::Result<PreparedWorkspace> {
+    let inspection = inspect_local(req)?;
+    if matches!(req.git_mode, GitMode::ExistingCheckout) && inspection.dirty && !allow_dirty {
+        anyhow::bail!(
+            "the existing checkout has uncommitted changes; confirm before creating the branch"
+        );
+    }
+
+    match &req.git_mode {
+        GitMode::ExistingCheckout => {
+            git(&req.repository, &["switch", "-c", &req.branch])?;
+            Ok(PreparedWorkspace {
+                directory: req.repository.clone(),
+                retained_path: req.repository.clone(),
+            })
+        }
+        GitMode::NewWorktree { path } => {
+            if let Some(parent) = Path::new(path).parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            git(
+                &req.repository,
+                &["worktree", "add", "-b", &req.branch, path, "HEAD"],
+            )?;
+            Ok(PreparedWorkspace {
+                directory: path.clone(),
+                retained_path: path.clone(),
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    struct TempRepo {
+        root: PathBuf,
+        path: PathBuf,
+    }
+
+    impl TempRepo {
+        fn new(name: &str) -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "nodestorm-launcher-{name}-{}",
+                uuid::Uuid::new_v4()
+            ));
+            let path = root.join("api");
+            std::fs::create_dir_all(&path).unwrap();
+            for args in [
+                vec!["init"],
+                vec!["config", "user.name", "Nodestorm Test"],
+                vec!["config", "user.email", "nodestorm@example.invalid"],
+            ] {
+                assert!(
+                    std::process::Command::new("git")
+                        .arg("-C")
+                        .arg(&path)
+                        .args(args)
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+            }
+            std::fs::write(path.join("README.md"), "fixture\n").unwrap();
+            assert!(
+                std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&path)
+                    .args(["add", "README.md"])
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            assert!(
+                std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&path)
+                    .args(["commit", "-m", "fixture"])
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            Self { root, path }
+        }
+    }
+
+    impl Drop for TempRepo {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.root).ok();
+        }
+    }
+
+    fn git_output(repo: &Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
 
     fn request(agent: AgentKind) -> LaunchRequest {
         LaunchRequest {
@@ -261,6 +440,115 @@ mod tests {
         assert_eq!(
             validate_request(&req).unwrap_err().to_string(),
             "SSH host alias is required"
+        );
+    }
+
+    #[test]
+    fn worktree_mode_creates_branch_without_switching_or_carrying_dirty_files() {
+        let repo = TempRepo::new("worktree");
+        std::fs::write(repo.path.join("dirty.txt"), "not committed").unwrap();
+        let original = git_output(&repo.path, &["branch", "--show-current"]);
+        let worktree = repo.root.join("api-worktrees/nodestorm/cache-redesign");
+        let mut req = request(AgentKind::Claude);
+        req.repository = repo.path.to_string_lossy().into_owned();
+        req.git_mode = GitMode::NewWorktree {
+            path: worktree.to_string_lossy().into_owned(),
+        };
+
+        let prepared = prepare_local(&req, false).unwrap();
+
+        assert_eq!(prepared.directory, worktree.to_string_lossy().into_owned());
+        assert_eq!(
+            git_output(&repo.path, &["branch", "--show-current"]),
+            original
+        );
+        assert!(!worktree.join("dirty.txt").exists());
+        assert_eq!(
+            git_output(&worktree, &["branch", "--show-current"]),
+            "nodestorm/cache-redesign"
+        );
+    }
+
+    #[test]
+    fn existing_checkout_requires_dirty_confirmation_then_switches() {
+        let repo = TempRepo::new("existing");
+        std::fs::write(repo.path.join("dirty.txt"), "keep me").unwrap();
+        let mut req = request(AgentKind::Claude);
+        req.repository = repo.path.to_string_lossy().into_owned();
+        req.git_mode = GitMode::ExistingCheckout;
+
+        assert!(inspect_local(&req).unwrap().dirty);
+        assert!(
+            prepare_local(&req, false)
+                .unwrap_err()
+                .to_string()
+                .contains("uncommitted changes")
+        );
+        let prepared = prepare_local(&req, true).unwrap();
+        assert_eq!(prepared.directory, repo.path.to_string_lossy().into_owned());
+        assert_eq!(
+            git_output(&repo.path, &["branch", "--show-current"]),
+            "nodestorm/cache-redesign"
+        );
+        assert!(repo.path.join("dirty.txt").exists());
+    }
+
+    #[test]
+    fn collisions_and_invalid_branches_do_not_mutate_repository() {
+        let repo = TempRepo::new("invalid");
+        let original = git_output(&repo.path, &["branch", "--show-current"]);
+        let mut req = request(AgentKind::Claude);
+        req.repository = repo.path.to_string_lossy().into_owned();
+        req.branch = "bad branch".into();
+        assert!(prepare_local(&req, false).is_err());
+        assert_eq!(
+            git_output(&repo.path, &["branch", "--show-current"]),
+            original
+        );
+
+        assert!(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo.path)
+                .args(["branch", "already-there"])
+                .status()
+                .unwrap()
+                .success()
+        );
+        req.branch = "already-there".into();
+        assert!(
+            prepare_local(&req, false)
+                .unwrap_err()
+                .to_string()
+                .contains("already exists")
+        );
+
+        let occupied = repo.root.join("occupied");
+        std::fs::create_dir_all(&occupied).unwrap();
+        req.branch = "free-branch".into();
+        req.git_mode = GitMode::NewWorktree {
+            path: occupied.to_string_lossy().into_owned(),
+        };
+        assert!(
+            prepare_local(&req, false)
+                .unwrap_err()
+                .to_string()
+                .contains("destination")
+        );
+        assert_eq!(
+            git_output(&repo.path, &["branch", "--show-current"]),
+            original
+        );
+    }
+
+    #[test]
+    fn executable_check_reports_missing_program() {
+        assert!(ensure_executable("git").is_ok());
+        assert!(
+            ensure_executable("nodestorm-definitely-not-installed")
+                .unwrap_err()
+                .to_string()
+                .contains("unavailable")
         );
     }
 }
