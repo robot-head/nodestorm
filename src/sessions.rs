@@ -463,7 +463,7 @@ impl Sessions {
     /// so an in-flight `await_decisions` keeps working; only lookups by the
     /// old name start failing (with the usual available-sessions error).
     pub fn rename(&self, old: &str, new: &str) -> anyhow::Result<String> {
-        let (slug, old_path, new_path) = {
+        let (slug, old_path, new_path, connection_projection_changed) = {
             let mut inner = self.lock();
             let old_slug = slugify(old);
             if !inner.map.contains_key(&old_slug) {
@@ -480,6 +480,8 @@ impl Sessions {
                 n += 1;
             }
             let mut entry = inner.map.remove(&old_slug).expect("checked above");
+            let connection_projection_changed =
+                old_slug != slug && !entry.store.reconnecting_targets().is_empty();
             let old_path = entry.path.clone();
             let new_path = self.dir.join(format!("{slug}.json"));
             entry.path = new_path.clone();
@@ -488,12 +490,15 @@ impl Sessions {
             if inner.active == old_slug {
                 inner.active = slug.clone();
             }
-            (slug, old_path, new_path)
+            (slug, old_path, new_path, connection_projection_changed)
         };
         if old_path != new_path {
             std::fs::rename(&old_path, &new_path)?;
         }
         self.bump();
+        if connection_projection_changed {
+            self.bump_connections();
+        }
         Ok(slug)
     }
 
@@ -524,7 +529,11 @@ impl Sessions {
         if entry.path.exists() {
             std::fs::remove_file(&entry.path)?;
         }
+        let connection_projection_changed = !entry.store.reconnecting_targets().is_empty();
         self.bump();
+        if connection_projection_changed {
+            self.bump_connections();
+        }
         Ok(())
     }
 
@@ -620,7 +629,11 @@ impl Sessions {
         let archive_dir = self.dir.join("archive");
         std::fs::create_dir_all(&archive_dir)?;
         std::fs::rename(&entry.path, archive_dir.join(format!("{slug}.json")))?;
+        let connection_projection_changed = !entry.store.reconnecting_targets().is_empty();
         self.bump();
+        if connection_projection_changed {
+            self.bump_connections();
+        }
         Ok(())
     }
 
@@ -1122,6 +1135,106 @@ mod tests {
                 ..
             }] if session == "plan"
         ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    async fn orphan_named_receipt(sessions: &Arc<Sessions>, session: &str) {
+        let store = sessions.get(session).unwrap();
+        let id = sessions.next_connection_id();
+        sessions.connect_client(id, "claude-code".into(), "1".into());
+        let waiting = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .await_flush(
+                        Duration::from_secs(30),
+                        Awaiter {
+                            connection_id: id,
+                            client_label: "claude-code 1".into(),
+                            agent: Some("alpha".into()),
+                        },
+                    )
+                    .await
+            }
+        });
+        let mut revisions = store.subscribe();
+        while store.snapshot_meta().waiting_agents != 1 {
+            revisions.changed().await.unwrap();
+        }
+        store.request_flush(None).unwrap();
+        sessions.disconnect_client(id);
+        waiting.abort();
+        let _ = waiting.await;
+        assert!(matches!(
+            sessions.connections().as_slice(),
+            [ConnectionInfo {
+                state: ConnectionState::Reconnecting {
+                    session: projected,
+                    ..
+                },
+                ..
+            }] if projected == session
+        ));
+    }
+
+    #[tokio::test]
+    async fn reconnecting_projection_notifies_on_rename_archive_and_not_unarchive() {
+        let root = tmp_root("reconnecting-session-lifecycle");
+        let sessions = Sessions::open(root.join("sessions"), None).unwrap();
+        sessions.create("plan").unwrap();
+        orphan_named_receipt(&sessions, "plan").await;
+        let mut changes = sessions.subscribe_connections();
+        changes.borrow_and_update();
+
+        assert_eq!(sessions.rename("plan", "roadmap").unwrap(), "roadmap");
+        tokio::time::timeout(Duration::from_secs(1), changes.changed())
+            .await
+            .expect("rename publishes reconnect projection change")
+            .unwrap();
+        assert!(matches!(
+            sessions.connections().as_slice(),
+            [ConnectionInfo {
+                state: ConnectionState::Reconnecting { session, .. },
+                ..
+            }] if session == "roadmap"
+        ));
+
+        changes.borrow_and_update();
+        assert_eq!(sessions.rename("roadmap", "roadmap").unwrap(), "roadmap");
+        assert!(!changes.has_changed().unwrap(), "no-op rename stays quiet");
+
+        sessions.archive("roadmap").unwrap();
+        tokio::time::timeout(Duration::from_secs(1), changes.changed())
+            .await
+            .expect("archive publishes reconnect projection change")
+            .unwrap();
+        assert!(sessions.connections().is_empty());
+
+        changes.borrow_and_update();
+        sessions.unarchive("roadmap").unwrap();
+        assert!(
+            !changes.has_changed().unwrap(),
+            "unarchive has no transient reconnect projection to publish"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn reconnecting_projection_notifies_when_session_is_deleted() {
+        let root = tmp_root("reconnecting-session-delete");
+        let sessions = Sessions::open(root.join("sessions"), None).unwrap();
+        sessions.create("plan").unwrap();
+        orphan_named_receipt(&sessions, "plan").await;
+        let mut changes = sessions.subscribe_connections();
+        changes.borrow_and_update();
+
+        sessions.delete("plan").unwrap();
+
+        tokio::time::timeout(Duration::from_secs(1), changes.changed())
+            .await
+            .expect("delete publishes reconnect projection change")
+            .unwrap();
+        assert!(sessions.connections().is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }
 

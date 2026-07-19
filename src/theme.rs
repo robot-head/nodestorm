@@ -334,6 +334,45 @@ mod tests {
     }
 
     #[test]
+    fn active_store_bridge_subscribes_before_resnapshotting() {
+        let active = APP_SOURCE
+            .find("let (name, store) = sessions")
+            .map(|start| &APP_SOURCE[start..])
+            .expect("active store bridge");
+        let subscribe = active
+            .find("let mut rev = store.subscribe()")
+            .expect("store revision subscription");
+        let doc = active
+            .find("doc.set(store.snapshot_doc())")
+            .expect("doc snapshot");
+        let meta = active
+            .find("meta.set(store.snapshot_meta())")
+            .expect("metadata snapshot");
+
+        assert!(subscribe < doc && subscribe < meta);
+    }
+
+    #[test]
+    fn empty_state_copy_uses_the_snapshotted_store() {
+        let empty = APP_SOURCE
+            .find(r#"div { class: "empty-state""#)
+            .map(|start| &APP_SOURCE[start..])
+            .expect("empty-state renderer");
+        let handler_and_rest = empty
+            .find(r#"title: "Copy the connect command""#)
+            .map(|start| &empty[start..])
+            .expect("copy handler");
+        let handler = handler_and_rest
+            .find(r#"code { "claude mcp add"#)
+            .map(|end| &handler_and_rest[..end])
+            .expect("end of copy handler");
+
+        assert!(!handler.contains(r#"code { "claude mcp add"#));
+        assert!(handler.contains("let store = active_store.read().clone()"));
+        assert!(!handler.contains("sessions.active_store()"));
+    }
+
+    #[test]
     fn queue_panel_is_available_when_the_document_is_empty() {
         let empty_state = APP_SOURCE
             .find("} else {\n                    div { class: \"empty-state\"")

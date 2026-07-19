@@ -106,11 +106,11 @@ pub fn App() -> Element {
                     let (name, store) = sessions
                         .resolve_named(None)
                         .expect("active session always exists");
+                    let mut rev = store.subscribe();
                     doc.set(store.snapshot_doc());
                     meta.set(store.snapshot_meta());
                     session_name.set(name);
                     active_store.set(store.clone());
-                    let mut rev = store.subscribe();
                     loop {
                         tokio::select! {
                             changed = rev.changed() => {
@@ -184,13 +184,13 @@ pub fn App() -> Element {
                                 class: "empty-cmd",
                                 title: "Copy the connect command",
                                 onclick: {
-                                    let sessions = sessions.clone();
+                                    let store = active_store.read().clone();
                                     let cmd = format!(
                                         "claude mcp add --transport http nodestorm {mcp_url}"
                                     );
                                     move |_| {
                                         super::copy_to_clipboard(
-                                            &sessions.active_store(),
+                                            &store,
                                             cmd.clone(),
                                             "copied the connect command",
                                         );
