@@ -2233,10 +2233,13 @@ fieldset.agent-launch-options {
 
 /* ---------- node cards ---------- */
 /* Geometry must stay in sync with layout::estimate_height:
-   card width 260, border 1px, padding 13px horizontal (text width 232),
-   head row ~24px, meta row ~20px, 18px line-height text, labels clamped to
-   3 lines, descriptions clamped to 4 lines, badge row 28px. The 3px status
-   rail is an absolute ::before overlay and adds no height. */
+   card width 260 (border-box; 13px horizontal padding → 232px text width),
+   chrome = 2px border + 8px top / 10px bottom padding, head row min 24px
+   with 18px per label line (clamped to 3 lines), meta row 20px, description
+   4px margin + 18px per line (clamped to 4 lines), badge row 8px margin +
+   20px min-height. The 3px status rail is an absolute ::before overlay and
+   adds no height; NodeCard sets max-height from the layout rect so drift
+   clips inside the card instead of spilling out of a swimlane band. */
 
 .node-card {
   position: absolute;

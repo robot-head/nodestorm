@@ -143,21 +143,27 @@ pub fn visible_set(
     out
 }
 
-/// Estimated card height in px. Must stay consistent with `assets/main.css`
-/// (card width 260, 13px horizontal padding → 232px text width, 18px line
-/// height, labels clamped to 3 lines, descriptions clamped to 4 lines; the
-/// 3px status rail is an absolute overlay and adds no height).
-pub fn estimate_height(node: &Node) -> f64 {
-    const BASE: f64 = 54.0; // padding + kind row + first label line
+/// Estimated Near-tier card height in px. Must stay consistent with
+/// `assets/main.css` (see the "node cards" geometry comment there): 20px
+/// chrome (2px border + 18px vertical padding), head row min 24px with 18px
+/// per label line (clamped to 3), 20px meta row, description 4px margin +
+/// 18px per line (clamped to 4), 28px badge row. `open_questions` is the
+/// node's unanswered-question count — those badges come from the doc, not
+/// the node, so the caller supplies them.
+pub fn estimate_height(node: &Node, open_questions: usize) -> f64 {
+    const CHROME: f64 = 20.0; // 2px border + 8px top / 10px bottom padding
+    const HEAD_MIN: f64 = 24.0;
+    const META_H: f64 = 20.0;
     const LINE_H: f64 = 18.0;
     let label_lines = wrap_lines(&node.label, 22).min(3);
-    let label_extra = label_lines.saturating_sub(1);
-    let desc_lines = if node.description.is_empty() {
-        0
+    let head = (label_lines as f64 * LINE_H).max(HEAD_MIN);
+    let desc = if node.description.is_empty() {
+        0.0
     } else {
-        wrap_lines(&node.description, 36).min(4)
+        4.0 + wrap_lines(&node.description, 36).min(4) as f64 * LINE_H
     };
-    let badge_row = if node.open_choice_count() > 0
+    let badge_row = if open_questions > 0
+        || node.open_choice_count() > 0
         || node.choices.iter().any(|c| !c.is_open())
         || !node.notes.is_empty()
     {
@@ -165,7 +171,23 @@ pub fn estimate_height(node: &Node) -> f64 {
     } else {
         0.0
     };
-    BASE + (label_extra + desc_lines) as f64 * LINE_H + badge_row
+    CHROME + head + META_H + desc + badge_row
+}
+
+/// Per-node estimated heights, including unanswered-question badge rows.
+fn node_heights(doc: &SessionDoc) -> Vec<f64> {
+    let mut open_q: HashMap<&NodeId, usize> = HashMap::new();
+    for q in &doc.questions {
+        if let Some(id) = &q.node_id
+            && !q.is_answered()
+        {
+            *open_q.entry(id).or_default() += 1;
+        }
+    }
+    doc.nodes
+        .iter()
+        .map(|n| estimate_height(n, open_q.get(&n.id).copied().unwrap_or(0)))
+        .collect()
 }
 
 /// Greedy word-wrap line count at `per_line` characters.
@@ -301,7 +323,9 @@ pub fn compute_view(doc: &SessionDoc, collapsed: &BTreeSet<String>, declared: &[
         focus: None,
         nodes,
         edges: syn_edges,
-        questions: vec![],
+        // Kept so question badges still count toward visible cards' heights;
+        // refs to collapsed members simply match no synthetic node.
+        questions: doc.questions.clone(),
         annotations: vec![],
     };
     let mut layout = compute_inner(&syn_doc, &counts, declared);
@@ -351,12 +375,13 @@ fn compute_inner(doc: &SessionDoc, counts: &[usize], declared: &[String]) -> Lay
     let dag = break_cycles(&fwd);
     let ranks = longest_path_ranks(&dag);
     let order = barycenter_order(&dag, &ranks);
+    let heights = node_heights(doc);
     // Swimlanes constrain vertical packing into labeled bands; without any
     // `lane` the layout is unchanged (centered ranks).
     let (rects, lanes) = if declared.is_empty() && !doc.nodes.iter().any(|n| n.lane.is_some()) {
-        (place(doc, &ranks, &order), Vec::new())
+        (place(doc, &ranks, &order, &heights), Vec::new())
     } else {
-        place_laned(doc, &ranks, &order, declared)
+        place_laned(doc, &ranks, &order, declared, &heights)
     };
     let rank_of: HashMap<&NodeId, usize> = doc
         .nodes
@@ -501,9 +526,13 @@ fn barycenter_order(dag: &[Vec<usize>], ranks: &[usize]) -> Vec<Vec<usize>> {
 
 /// Assign rects: ranks map to x columns, ranks pack vertically centered on 0.
 /// Pinned nodes keep their user position; auto nodes are nudged off them.
-fn place(doc: &SessionDoc, ranks: &[usize], order: &[Vec<usize>]) -> HashMap<NodeId, Rect> {
+fn place(
+    doc: &SessionDoc,
+    ranks: &[usize],
+    order: &[Vec<usize>],
+    heights: &[f64],
+) -> HashMap<NodeId, Rect> {
     let mut rects: HashMap<NodeId, Rect> = HashMap::new();
-    let heights: Vec<f64> = doc.nodes.iter().map(estimate_height).collect();
 
     let pinned: Vec<usize> = (0..doc.nodes.len())
         .filter(|&i| doc.nodes[i].position.is_some())
@@ -596,8 +625,8 @@ fn place_laned(
     _ranks: &[usize],
     order: &[Vec<usize>],
     declared: &[String],
+    heights: &[f64],
 ) -> (HashMap<NodeId, Rect>, Vec<LaneBand>) {
-    let heights: Vec<f64> = doc.nodes.iter().map(estimate_height).collect();
     let lane_key = |i: usize| doc.nodes[i].lane.clone().unwrap_or_default();
 
     // Lane order: declared lanes first (in the user's order), then lanes only
@@ -778,12 +807,48 @@ pub fn lane_at(lanes: &[LaneBand], x: f64, y: f64) -> Option<String> {
 
 /// Vertical spacing between channel lanes for rank-spanning edges.
 const LANE_GAP: f64 = 12.0;
+/// Clearance kept between a routed corridor and any card it passes.
+const CORRIDOR_CLEAR: f64 = 18.0;
+/// Horizontal swing a channel edge uses to enter/leave its corridor.
+const CHANNEL_SWING: f64 = 60.0;
 
-/// Cubic bezier from the right edge of `from` to the left edge of `to`, with
-/// per-port vertical fan-out when several edges share a card side. Edges
-/// spanning more than one rank are channel-routed: each `(from_rank,
-/// to_rank)` group shares a horizontal corridor, one lane per edge (document
-/// order), so parallel long edges run together instead of criss-crossing.
+/// Pick a horizontal corridor near `desired` that crosses no card between
+/// `x_lo` and `x_hi`: the blocked y-intervals (cards grown by `margin`) are
+/// merged and `desired` snaps to the nearest free boundary.
+fn clear_corridor_y<'a>(
+    desired: f64,
+    x_lo: f64,
+    x_hi: f64,
+    margin: f64,
+    rects: impl Iterator<Item = &'a Rect>,
+) -> f64 {
+    let mut blocked: Vec<(f64, f64)> = rects
+        .filter(|r| r.x < x_hi && x_lo < r.x + r.w)
+        .map(|r| (r.y - margin, r.y + r.h + margin))
+        .collect();
+    blocked.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut merged: Vec<(f64, f64)> = Vec::new();
+    for iv in blocked {
+        match merged.last_mut() {
+            Some(last) if iv.0 <= last.1 => last.1 = last.1.max(iv.1),
+            _ => merged.push(iv),
+        }
+    }
+    for (lo, hi) in merged {
+        if desired > lo && desired < hi {
+            return if desired - lo <= hi - desired { lo } else { hi };
+        }
+    }
+    desired
+}
+
+/// Cubic bezier from the right edge of `from` to the left edge of `to`.
+/// Port anchors on each card side are sorted by the far endpoint's y (not
+/// document order), so edges fan out without crossing right at the card.
+/// Rank-spanning edges are channel-routed: each `(from_rank, to_rank)` group
+/// shares a horizontal corridor snapped clear of every card it would cross,
+/// one lane per edge (document order). Backward (cycle) edges spanning ranks
+/// get the mirrored corridor treatment instead of a blind bulge.
 /// `counts[i]` is the bundle size of `doc.edges[i]` (missing → 1).
 fn route_edges(
     doc: &SessionDoc,
@@ -791,44 +856,94 @@ fn route_edges(
     counts: &[usize],
     rank_of: &HashMap<&NodeId, usize>,
 ) -> Vec<EdgePath> {
-    // Channel groups: rank-spanning forward edges keyed by the rank pair.
-    let mut groups: std::collections::BTreeMap<(usize, usize), Vec<usize>> =
+    // Channel groups keyed by the rank pair: forward edges spanning more
+    // than one rank, and every rank-backward edge.
+    let mut fwd_groups: std::collections::BTreeMap<(usize, usize), Vec<usize>> =
+        std::collections::BTreeMap::new();
+    let mut back_groups: std::collections::BTreeMap<(usize, usize), Vec<usize>> =
         std::collections::BTreeMap::new();
     for (i, e) in doc.edges.iter().enumerate() {
-        if let (Some(&ra), Some(&rb)) = (rank_of.get(&e.from), rank_of.get(&e.to))
-            && rb > ra + 1
-            && rects.contains_key(&e.from)
-            && rects.contains_key(&e.to)
-        {
-            groups.entry((ra, rb)).or_default().push(i);
+        let (Some(&ra), Some(&rb)) = (rank_of.get(&e.from), rank_of.get(&e.to)) else {
+            continue;
+        };
+        if !rects.contains_key(&e.from) || !rects.contains_key(&e.to) {
+            continue;
+        }
+        if rb > ra + 1 {
+            fwd_groups.entry((ra, rb)).or_default().push(i);
+        } else if rb < ra {
+            back_groups.entry((rb, ra)).or_default().push(i);
         }
     }
-    // edge index → (lane, group size, group mean y).
-    let mut lanes: HashMap<usize, (usize, usize, f64)> = HashMap::new();
-    for idxs in groups.values() {
-        let mean: f64 = idxs
-            .iter()
-            .map(|&i| {
+    // edge index → (lane, group size, corridor y), per direction.
+    let mut chan_fwd: HashMap<usize, (usize, usize, f64)> = HashMap::new();
+    let mut chan_back: HashMap<usize, (usize, usize, f64)> = HashMap::new();
+    for (groups, chan, forward) in [
+        (&fwd_groups, &mut chan_fwd, true),
+        (&back_groups, &mut chan_back, false),
+    ] {
+        for idxs in groups.values() {
+            let mut x_lo = f64::MAX;
+            let mut x_hi = f64::MIN;
+            let mut mean = 0.0;
+            for &i in idxs {
                 let e = &doc.edges[i];
-                (rects[&e.from].center_y() + rects[&e.to].center_y()) / 2.0
-            })
-            .sum::<f64>()
-            / idxs.len() as f64;
-        for (lane, &i) in idxs.iter().enumerate() {
-            lanes.insert(i, (lane, idxs.len(), mean));
+                let (a, b) = (&rects[&e.from], &rects[&e.to]);
+                // The corridor spans the gap between the two cards' facing
+                // edges, inset by the swing on each side.
+                let (lo, hi) = if forward {
+                    (a.x + a.w, b.x)
+                } else {
+                    (b.x + b.w, a.x)
+                };
+                x_lo = x_lo.min(lo + CHANNEL_SWING);
+                x_hi = x_hi.max(hi - CHANNEL_SWING);
+                mean += (a.center_y() + b.center_y()) / 2.0;
+            }
+            mean /= idxs.len() as f64;
+            let margin = CORRIDOR_CLEAR + (idxs.len() as f64 - 1.0) / 2.0 * LANE_GAP;
+            let base = clear_corridor_y(mean, x_lo, x_hi, margin, rects.values());
+            for (lane, &i) in idxs.iter().enumerate() {
+                chan.insert(i, (lane, idxs.len(), base));
+            }
         }
     }
-    // Count edges per (node, side) so anchors can spread.
-    let mut out_total: HashMap<&NodeId, usize> = HashMap::new();
-    let mut in_total: HashMap<&NodeId, usize> = HashMap::new();
-    for e in &doc.edges {
-        *out_total.entry(&e.from).or_default() += 1;
-        *in_total.entry(&e.to).or_default() += 1;
+    // Port anchors: each card side hands out slots ordered by the far
+    // endpoint's y, so fan-out at the card matches where edges are headed.
+    let mut out_order: HashMap<&NodeId, Vec<usize>> = HashMap::new();
+    let mut in_order: HashMap<&NodeId, Vec<usize>> = HashMap::new();
+    for (i, e) in doc.edges.iter().enumerate() {
+        if rects.contains_key(&e.from) && rects.contains_key(&e.to) {
+            out_order.entry(&e.from).or_default().push(i);
+            in_order.entry(&e.to).or_default().push(i);
+        }
     }
-    let mut out_seen: HashMap<&NodeId, usize> = HashMap::new();
-    let mut in_seen: HashMap<&NodeId, usize> = HashMap::new();
-
-    let spread = |slot: usize, total: usize| -> f64 {
+    let far_y = |order: &mut HashMap<&NodeId, Vec<usize>>, from_side: bool| {
+        for list in order.values_mut() {
+            list.sort_by(|&x, &y| {
+                let far = |i: usize| {
+                    let e = &doc.edges[i];
+                    rects[if from_side { &e.to } else { &e.from }].center_y()
+                };
+                far(x).total_cmp(&far(y)).then(x.cmp(&y))
+            });
+        }
+    };
+    far_y(&mut out_order, true);
+    far_y(&mut in_order, false);
+    let mut out_slot = vec![(0usize, 0usize); doc.edges.len()];
+    let mut in_slot = vec![(0usize, 0usize); doc.edges.len()];
+    for list in out_order.values() {
+        for (s, &i) in list.iter().enumerate() {
+            out_slot[i] = (s, list.len());
+        }
+    }
+    for list in in_order.values() {
+        for (s, &i) in list.iter().enumerate() {
+            in_slot[i] = (s, list.len());
+        }
+    }
+    let spread = |(slot, total): (usize, usize)| -> f64 {
         (slot as f64 - (total as f64 - 1.0) / 2.0) * PORT_SPREAD
     };
 
@@ -838,24 +953,12 @@ fn route_edges(
         .filter_map(|(i, e)| {
             let a = rects.get(&e.from)?;
             let b = rects.get(&e.to)?;
-            let so = {
-                let slot = out_seen.entry(&e.from).or_default();
-                let s = spread(*slot, out_total[&e.from]);
-                *slot += 1;
-                s
-            };
-            let si = {
-                let slot = in_seen.entry(&e.to).or_default();
-                let s = spread(*slot, in_total[&e.to]);
-                *slot += 1;
-                s
-            };
             // Forward edges leave the right side and enter the left side;
             // backward (cycle) edges flip sides so the curve stays between
             // the two cards instead of ballooning past the graph.
             let backward = b.x + b.w / 2.0 < a.x + a.w / 2.0;
-            let y1 = (a.center_y() + so).clamp(a.y + 8.0, a.y + a.h - 8.0);
-            let y2 = (b.center_y() + si).clamp(b.y + 8.0, b.y + b.h - 8.0);
+            let y1 = (a.center_y() + spread(out_slot[i])).clamp(a.y + 8.0, a.y + a.h - 8.0);
+            let y2 = (b.center_y() + spread(in_slot[i])).clamp(b.y + 8.0, b.y + b.h - 8.0);
             let (x1, x2, c1, c2) = if backward {
                 let x1 = a.x;
                 let x2 = b.x + b.w;
@@ -867,36 +970,65 @@ fn route_edges(
                 let dx = ((x2 - x1) / 2.0).abs().max(60.0);
                 (x1, x2, x1 + dx, x2 - dx)
             };
-            let (path, label_pos) = match lanes.get(&i) {
-                Some(&(lane, n, mean)) if !backward => {
-                    // Channel routing: swing into the shared corridor lane,
-                    // run horizontally, swing out at the target.
-                    let lane_y = mean + (lane as f64 - (n as f64 - 1.0) / 2.0) * LANE_GAP;
-                    let gx1 = x1 + 60.0;
-                    let gx2 = x2 - 60.0;
-                    (
-                        format!(
-                            "M {x1:.1} {y1:.1} C {:.1} {y1:.1} {:.1} {lane_y:.1} {gx1:.1} {lane_y:.1} \
-                             L {gx2:.1} {lane_y:.1} \
-                             C {:.1} {lane_y:.1} {:.1} {y2:.1} {x2:.1} {y2:.1}",
-                            x1 + 30.0,
-                            gx1 - 30.0,
-                            gx2 + 30.0,
-                            x2 - 30.0,
-                        ),
-                        Point {
-                            x: (gx1 + gx2) / 2.0,
-                            y: lane_y - 8.0,
-                        },
-                    )
-                }
-                _ => (
+            let corridor = |lane: usize, n: usize, base: f64| -> f64 {
+                base + (lane as f64 - (n as f64 - 1.0) / 2.0) * LANE_GAP
+            };
+            let fwd_chan = chan_fwd
+                .get(&i)
+                .filter(|_| !backward && x2 - x1 >= 2.0 * CHANNEL_SWING);
+            let back_chan = chan_back
+                .get(&i)
+                .filter(|_| backward && x1 - x2 >= 2.0 * CHANNEL_SWING);
+            let (path, label_pos) = if let Some(&(lane, n, base)) = fwd_chan {
+                // Channel routing: swing into the shared corridor, run
+                // horizontally through card-free space, swing out at the
+                // target.
+                let cy = corridor(lane, n, base);
+                let gx1 = x1 + CHANNEL_SWING;
+                let gx2 = x2 - CHANNEL_SWING;
+                (
+                    format!(
+                        "M {x1:.1} {y1:.1} C {:.1} {y1:.1} {:.1} {cy:.1} {gx1:.1} {cy:.1} \
+                         L {gx2:.1} {cy:.1} \
+                         C {:.1} {cy:.1} {:.1} {y2:.1} {x2:.1} {y2:.1}",
+                        x1 + 30.0,
+                        gx1 - 30.0,
+                        gx2 + 30.0,
+                        x2 - 30.0,
+                    ),
+                    Point {
+                        x: (gx1 + gx2) / 2.0,
+                        y: cy - 8.0,
+                    },
+                )
+            } else if let Some(&(lane, n, base)) = back_chan {
+                // Mirrored channel: leftward corridor between the cards.
+                let cy = corridor(lane, n, base);
+                let gx1 = x1 - CHANNEL_SWING;
+                let gx2 = x2 + CHANNEL_SWING;
+                (
+                    format!(
+                        "M {x1:.1} {y1:.1} C {:.1} {y1:.1} {:.1} {cy:.1} {gx1:.1} {cy:.1} \
+                         L {gx2:.1} {cy:.1} \
+                         C {:.1} {cy:.1} {:.1} {y2:.1} {x2:.1} {y2:.1}",
+                        x1 - 30.0,
+                        gx1 + 30.0,
+                        gx2 - 30.0,
+                        x2 + 30.0,
+                    ),
+                    Point {
+                        x: (gx1 + gx2) / 2.0,
+                        y: cy - 8.0,
+                    },
+                )
+            } else {
+                (
                     format!("M {x1:.1} {y1:.1} C {c1:.1} {y1:.1} {c2:.1} {y2:.1} {x2:.1} {y2:.1}"),
                     Point {
                         x: (x1 + x2) / 2.0,
                         y: (y1 + y2) / 2.0 - 8.0,
                     },
-                ),
+                )
             };
             Some(EdgePath {
                 from: e.from.clone(),
@@ -1096,6 +1228,119 @@ mod tests {
         }
     }
 
+    /// y of the path's `M x y` start point.
+    fn first_move_y(path: &str) -> f64 {
+        let mut t = path.split_whitespace();
+        assert_eq!(t.next(), Some("M"), "path starts with M: {path}");
+        t.next().unwrap();
+        t.next().unwrap().parse().unwrap()
+    }
+
+    /// y of the horizontal corridor (`L x y`) segment.
+    fn corridor_y(path: &str) -> f64 {
+        let mut t = path.split_whitespace().skip_while(|s| *s != "L");
+        assert_eq!(t.next(), Some("L"), "path has a corridor: {path}");
+        t.next().unwrap();
+        t.next().unwrap().parse().unwrap()
+    }
+
+    #[test]
+    fn out_ports_fan_toward_their_targets() {
+        // Edges are declared t3, t1, t2 — document order must not decide
+        // ports, or the curves cross right at the hub's edge.
+        let d = doc(
+            &["hub", "t1", "t2", "t3"],
+            &[("hub", "t3"), ("hub", "t1"), ("hub", "t2")],
+        );
+        let l = compute(&d);
+        let ty = |id: &str| l.rects[&NodeId::from(id)].center_y();
+        assert!(
+            ty("t1") < ty("t2") && ty("t2") < ty("t3"),
+            "stacked targets"
+        );
+        let start_y = |to: &str| {
+            first_move_y(
+                &l.edges
+                    .iter()
+                    .find(|e| e.to.as_str() == to)
+                    .expect("edge present")
+                    .path,
+            )
+        };
+        assert!(start_y("t1") < start_y("t2"));
+        assert!(start_y("t2") < start_y("t3"));
+    }
+
+    #[test]
+    fn long_corridor_snaps_clear_of_cards() {
+        // a→d spans ranks 0→3; the mean-y corridor would cut straight
+        // through b and c, so it must snap outside every intermediate card.
+        let d = doc(
+            &["a", "b", "c", "d"],
+            &[("a", "b"), ("b", "c"), ("c", "d"), ("a", "d")],
+        );
+        let l = compute(&d);
+        let long = l
+            .edges
+            .iter()
+            .find(|e| e.from.as_str() == "a" && e.to.as_str() == "d")
+            .unwrap();
+        let cy = corridor_y(&long.path);
+        for id in ["b", "c"] {
+            let r = l.rects[&NodeId::from(id)];
+            assert!(
+                cy <= r.y || cy >= r.y + r.h,
+                "corridor {cy} cuts card {id} {r:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn backward_edges_route_through_a_clear_corridor() {
+        let d = doc(&["a", "b", "c"], &[("a", "b"), ("b", "c"), ("c", "a")]);
+        let l = compute(&d);
+        let back = l
+            .edges
+            .iter()
+            .find(|e| e.from.as_str() == "c" && e.to.as_str() == "a")
+            .unwrap();
+        let cy = corridor_y(&back.path);
+        let rb = l.rects[&NodeId::from("b")];
+        assert!(
+            cy <= rb.y || cy >= rb.y + rb.h,
+            "backward corridor {cy} cuts intermediate card {rb:?}"
+        );
+    }
+
+    #[test]
+    fn question_badge_grows_the_lane_band() {
+        use crate::model::{Question, QuestionId};
+        let mut d = doc(&["a"], &[]);
+        d.nodes[0].lane = Some("data".into());
+        d.questions.push(Question {
+            id: QuestionId::from("q1"),
+            prompt: "which engine?".into(),
+            node_id: Some(NodeId::from("a")),
+            rationale: None,
+            answer: None,
+            answered_at: None,
+        });
+        let with_q = compute(&d);
+        d.questions.clear();
+        let without_q = compute(&d);
+        let r = with_q.rects[&NodeId::from("a")];
+        let band = &with_q.lanes[0].rect;
+        assert!(
+            r.y + r.h <= band.y + band.h,
+            "badged card {r:?} stays inside its band {band:?}"
+        );
+        assert_eq!(
+            r.h - without_q.rects[&NodeId::from("a")].h,
+            28.0,
+            "open question adds the badge row"
+        );
+    }
+
     #[test]
     fn bundled_routing_is_deterministic() {
         let d = doc(
@@ -1266,7 +1511,7 @@ mod tests {
     fn auto_nodes_are_nudged_off_pinned_cards() {
         let mut d = doc(&["a", "b"], &[]);
         // Pin `a` exactly where rank-0 packing would put `b`'s column start.
-        let h_b = estimate_height(&d.nodes[1]);
+        let h_b = estimate_height(&d.nodes[1], 0);
         d.nodes[0].position = Some(Point {
             x: 0.0,
             y: -h_b / 2.0,
@@ -1283,7 +1528,17 @@ mod tests {
         let mut rich = node("x");
         rich.description =
             "A long description that certainly wraps across multiple lines of card text".into();
-        assert!(estimate_height(&rich) > estimate_height(&plain));
+        assert!(estimate_height(&rich, 0) > estimate_height(&plain, 0));
+    }
+
+    #[test]
+    fn open_question_badge_adds_height() {
+        let n = node("x");
+        assert_eq!(
+            estimate_height(&n, 1) - estimate_height(&n, 0),
+            28.0,
+            "unanswered question badge row"
+        );
     }
 
     #[test]
@@ -1293,7 +1548,10 @@ mod tests {
         let mut ten_lines = node("ten-lines");
         ten_lines.label = "x".repeat(220);
 
-        assert_eq!(estimate_height(&three_lines), estimate_height(&ten_lines));
+        assert_eq!(
+            estimate_height(&three_lines, 0),
+            estimate_height(&ten_lines, 0)
+        );
     }
 
     #[test]

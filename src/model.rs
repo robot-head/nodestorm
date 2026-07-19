@@ -419,10 +419,17 @@ impl Node {
 }
 
 /// A directed relationship between two nodes. Identity is `(from, to, kind)`.
+/// The arrowhead renders at `to`: `depends_on` points dependent → dependency
+/// (`from` needs `to`), `data_flow` points along the data (`from` produces,
+/// `to` consumes), `contains` points container → member.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Edge {
+    /// Origin side: the dependent for `depends_on`, the producer for
+    /// `data_flow`, the container for `contains`.
     pub from: NodeId,
+    /// Target side (where the arrowhead lands): the dependency, the data
+    /// consumer, or the contained member.
     pub to: NodeId,
     #[serde(default)]
     pub kind: EdgeKind,
