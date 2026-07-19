@@ -508,6 +508,9 @@ pub fn Canvas(
             onmouseleave: move |_| {
                 ghost_to.set(None);
                 gesture.set(GestureState::default());
+                // Abandon an in-progress annotation stroke released off-canvas,
+                // so re-entering doesn't drop a stray note/arrow/region.
+                draw.set(None);
             },
             ondoubleclick: {
                 let store = store.clone();

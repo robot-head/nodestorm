@@ -942,8 +942,9 @@ impl Store {
                 }
             }
             // A re-propose that drops or reopens a decided choice flags its
-            // decided dependents for review.
-            flag_reopened_dependents(&previous, &mut s.doc);
+            // decided dependents for review (a propose carries no per-op
+            // re-scopes, so nothing is exempt).
+            flag_reopened_dependents(&previous, &mut s.doc, &std::collections::HashSet::new());
             let title = if s.doc.title.is_empty() {
                 "a graph".to_owned()
             } else {
@@ -972,6 +973,28 @@ impl Store {
         agent: Option<String>,
     ) -> Result<UpdateSummary, StoreError> {
         let mutates_document = ops.iter().any(|op| !matches!(op, GraphOp::Announce { .. }));
+        // Choices this batch explicitly (re-)scopes — exempt from the reopened
+        // dependent flagging below so a same-turn re-scope keeps its cleared flag.
+        let mut rescoped: std::collections::HashSet<(NodeId, ChoiceId)> =
+            std::collections::HashSet::new();
+        for op in &ops {
+            match op {
+                GraphOp::AddChoice { node_id, choice } => {
+                    rescoped.insert((node_id.clone(), choice.id.clone()));
+                }
+                GraphOp::ResolveChoice {
+                    node_id, choice_id, ..
+                } => {
+                    rescoped.insert((node_id.clone(), choice_id.clone()));
+                }
+                GraphOp::UpsertNode { node } => {
+                    for c in &node.choices {
+                        rescoped.insert((node.id.clone(), c.id.clone()));
+                    }
+                }
+                _ => {}
+            }
+        }
         // Stage on a clone so a failed op or failed validation commits nothing.
         let old = self.read(|s| s.doc.clone());
         let mut doc = old.clone();
@@ -986,7 +1009,7 @@ impl Store {
             });
         }
         // Reopening a parent flags decided dependents for the agent to revisit.
-        flag_reopened_dependents(&old, &mut doc);
+        flag_reopened_dependents(&old, &mut doc, &rescoped);
         Ok(self.mutate(|s| {
             clear_undo(s); // an agent turn invalidates the user's undo window
             if mutates_document {
@@ -1134,7 +1157,7 @@ impl Store {
                     .min(s.decision_log.len());
                 s.decision_log[cursor..]
                     .iter()
-                    .filter(|e| addressed_to(&s.doc, &e.kind, a))
+                    .filter(|e| addressed_to(e, a))
                     .cloned()
                     .collect()
             }
@@ -1251,7 +1274,7 @@ fn try_deliver_for_agent_locked(s: &mut SessionState, agent: &str) -> Option<Vec
         .min(s.decision_log.len());
     let batch: Vec<DecisionEvent> = s.decision_log[cursor..]
         .iter()
-        .filter(|e| addressed_to(&s.doc, &e.kind, agent))
+        .filter(|e| addressed_to(e, agent))
         .cloned()
         .collect();
     s.agent_cursors
@@ -1288,9 +1311,10 @@ fn event_target(doc: &SessionDoc, kind: &DecisionKind) -> Option<String> {
     }
 }
 
-/// Whether `kind` should reach `agent`: addressed to it, or unclaimed.
-fn addressed_to(doc: &SessionDoc, kind: &DecisionKind, agent: &str) -> bool {
-    match event_target(doc, kind) {
+/// Whether an event should reach `agent`: addressed to it, or unclaimed. Uses
+/// the target captured at event creation, not the current (mutable) doc.
+fn addressed_to(event: &DecisionEvent, agent: &str) -> bool {
+    match &event.target_agent {
         Some(target) => target == agent,
         None => true,
     }
@@ -1301,10 +1325,14 @@ fn push_event(s: &mut SessionState, kind: DecisionKind) {
         s.pending_base = Some(s.doc.clone());
         s.queue_edit_error = None;
     }
+    // Capture the routing target now, against the doc as it stands, so a later
+    // re-authoring or removal of the node cannot misroute this decision.
+    let target_agent = event_target(&s.doc, &kind);
     let seq = s.decision_log.len() as u64 + 1;
     s.decision_log.push(DecisionEvent {
         seq,
         at: Utc::now(),
+        target_agent,
         kind,
     });
 }
@@ -1742,15 +1770,18 @@ fn apply_op(
                 c.status = ChoiceStatus::Decided;
             }
         }
-        GraphOp::Ask { question } => {
-            // The user's answer is user-owned: a re-ask (same id) refreshes
-            // the wording but never unsends the reply.
+        GraphOp::Ask { mut question } => {
+            // The answer is user-owned: an agent cannot pre-answer a question.
+            // A re-ask (same id) refreshes the wording but keeps the user's
+            // existing reply.
             if let Some(existing) = doc.questions.iter_mut().find(|q| q.id == question.id) {
                 let (answer, answered_at) = (existing.answer.take(), existing.answered_at.take());
                 *existing = question;
                 existing.answer = answer;
                 existing.answered_at = answered_at;
             } else {
+                question.answer = None;
+                question.answered_at = None;
                 doc.questions.push(question);
             }
         }
@@ -1784,9 +1815,17 @@ fn apply_op(
 
 /// When an agent turn reopens (or removes) a choice that other *decided*
 /// choices depended on, flag those dependents `needs_review` so the agent
-/// re-scopes them. Compares the pre-turn doc with the post-turn doc; re-scoping
-/// a dependent (a fresh add_choice/upsert) clears the flag on its own.
-fn flag_reopened_dependents(old: &SessionDoc, new: &mut SessionDoc) {
+/// re-scopes them. Compares the pre-turn doc with the post-turn doc.
+///
+/// `rescoped` holds the `(node, choice)` pairs this same batch explicitly
+/// added/upserted — those are skipped, so an agent that reopens a parent and
+/// re-scopes the dependent (with `needs_review: false`) in one `update_graph`
+/// call keeps the cleared flag.
+fn flag_reopened_dependents(
+    old: &SessionDoc,
+    new: &mut SessionDoc,
+    rescoped: &std::collections::HashSet<(NodeId, ChoiceId)>,
+) {
     let mut reopened: std::collections::HashSet<(NodeId, ChoiceId)> =
         std::collections::HashSet::new();
     for node in &old.nodes {
@@ -1808,6 +1847,9 @@ fn flag_reopened_dependents(old: &SessionDoc, new: &mut SessionDoc) {
     }
     for node in &mut new.nodes {
         for choice in &mut node.choices {
+            if rescoped.contains(&(node.id.clone(), choice.id.clone())) {
+                continue; // the agent already re-scoped this dependent this turn
+            }
             if choice.status == ChoiceStatus::Decided
                 && choice
                     .depends_on
@@ -2538,6 +2580,7 @@ mod tests {
             decision_log: vec![DecisionEvent {
                 seq: 1,
                 at: Utc::now(),
+                target_agent: None,
                 kind: DecisionKind::FlushRequested {
                     comment: Some("legacy queue".into()),
                 },
@@ -3076,6 +3119,116 @@ mod tests {
     }
 
     #[test]
+    fn same_batch_rescope_exempts_dependent_from_review_flag() {
+        use crate::model::{Choice, ChoiceOption, ChoiceRef, ChoiceStatus};
+        let opt = |id: &str| ChoiceOption {
+            id: id.into(),
+            label: id.to_owned(),
+            summary: String::new(),
+            pros: vec![],
+            cons: vec![],
+            recommended: false,
+            affects: vec![],
+        };
+        let mk = |id: &str, deps: Vec<ChoiceRef>| Choice {
+            id: id.into(),
+            prompt: format!("{id}?"),
+            rationale: None,
+            options: vec![opt("x"), opt("y")],
+            selected: Some(OptionId::from("x")),
+            status: ChoiceStatus::Decided,
+            depends_on: deps,
+            needs_review: false,
+            reopen: false,
+        };
+        let mut n = user_node("n");
+        n.origin = crate::model::Origin::Agent;
+        n.choices = vec![
+            mk("a", vec![]),
+            mk(
+                "b",
+                vec![ChoiceRef {
+                    node: NodeId::from("n"),
+                    choice: ChoiceId::from("a"),
+                }],
+            ),
+        ];
+        let store = Store::with_doc(SessionDoc {
+            nodes: vec![n],
+            ..Default::default()
+        });
+        // In ONE update the agent reopens parent `a` AND re-decides dependent
+        // `b` — so `b` must not be re-flagged: it was addressed this turn.
+        let mut reopened = mk("a", vec![]);
+        reopened.reopen = true;
+        store
+            .apply_update(vec![
+                GraphOp::AddChoice {
+                    node_id: NodeId::from("n"),
+                    choice: reopened,
+                },
+                GraphOp::ResolveChoice {
+                    node_id: NodeId::from("n"),
+                    choice_id: ChoiceId::from("b"),
+                    selected: Some(OptionId::from("y")),
+                    dismiss: false,
+                },
+            ])
+            .expect("reopen + rescope");
+        let n = store
+            .snapshot_doc()
+            .node(&NodeId::from("n"))
+            .cloned()
+            .unwrap();
+        assert_eq!(
+            n.choice(&ChoiceId::from("a")).unwrap().status,
+            ChoiceStatus::Open
+        );
+        assert!(
+            !n.choice(&ChoiceId::from("b")).unwrap().needs_review,
+            "a same-turn re-scope keeps the cleared flag"
+        );
+    }
+
+    #[test]
+    fn ask_ignores_agent_supplied_answer_on_new_question() {
+        let store = demo_store();
+        let q1 = crate::model::QuestionId::from("q1");
+        store
+            .apply_update(vec![GraphOp::Ask {
+                question: crate::model::Question {
+                    id: q1.clone(),
+                    prompt: "?".into(),
+                    node_id: None,
+                    rationale: None,
+                    answer: Some("agent pre-answer".into()),
+                    answered_at: Some(Utc::now()),
+                },
+            }])
+            .expect("ask");
+        let q = store.snapshot_doc().question(&q1).cloned().unwrap();
+        assert!(q.answer.is_none(), "agent cannot pre-answer a question");
+        assert!(q.answered_at.is_none());
+        // The user answers; a re-ask keeps that reply.
+        store.answer_question(&q1, "real answer".into()).unwrap();
+        store
+            .apply_update(vec![GraphOp::Ask {
+                question: crate::model::Question {
+                    id: q1.clone(),
+                    prompt: "reworded?".into(),
+                    node_id: None,
+                    rationale: None,
+                    answer: None,
+                    answered_at: None,
+                },
+            }])
+            .expect("re-ask");
+        let q = store.snapshot_doc().question(&q1).cloned().unwrap();
+        assert_eq!(q.prompt, "reworded?");
+        assert_eq!(q.answer.as_deref(), Some("real answer"));
+    }
+
+    #[test]
     fn set_build_advances_and_survives_unrelated_upsert() {
         use crate::model::BuildStatus;
         let store = demo_store();
@@ -3177,6 +3330,89 @@ mod tests {
                 .activity
                 .iter()
                 .any(|a| a.agent.as_deref() == Some("alpha"))
+        );
+    }
+
+    #[tokio::test]
+    async fn decision_routes_to_original_author_even_after_reownership() {
+        use crate::model::{Choice, ChoiceOption, ChoiceStatus, Origin};
+        let opt = |id: &str| ChoiceOption {
+            id: id.into(),
+            label: id.to_owned(),
+            summary: String::new(),
+            pros: vec![],
+            cons: vec![],
+            recommended: false,
+            affects: vec![],
+        };
+        let mut a = user_node("a");
+        a.origin = Origin::Agent;
+        a.agent = Some("alpha".into());
+        a.choices = vec![Choice {
+            id: "ca".into(),
+            prompt: "?".into(),
+            rationale: None,
+            options: vec![opt("x"), opt("y")],
+            selected: None,
+            status: ChoiceStatus::Open,
+            depends_on: vec![],
+            needs_review: false,
+            reopen: false,
+        }];
+        let store = Store::with_doc(SessionDoc {
+            nodes: vec![a],
+            ..Default::default()
+        });
+        // The user decides (autoflush); the routing target is captured as alpha.
+        store
+            .select_option(
+                &NodeId::from("a"),
+                &ChoiceId::from("ca"),
+                &OptionId::from("x"),
+                vec![],
+            )
+            .unwrap();
+        // Before anyone consumes the flush, beta re-authors the node.
+        let mut relabel = store
+            .snapshot_doc()
+            .node(&NodeId::from("a"))
+            .cloned()
+            .unwrap();
+        relabel.agent = None; // wire value ignored; forced to beta below
+        store
+            .apply_update_as(
+                vec![GraphOp::UpsertNode { node: relabel }],
+                Some("beta".into()),
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .snapshot_doc()
+                .node(&NodeId::from("a"))
+                .unwrap()
+                .agent
+                .as_deref(),
+            Some("beta"),
+            "node is now owned by beta"
+        );
+        // alpha still receives the decision it originally owned…
+        let FlushOutcome::Delivered(a_batch) = store
+            .await_flush(Duration::from_secs(1), Some("alpha".into()))
+            .await
+        else {
+            panic!("alpha not delivered");
+        };
+        assert_eq!(a_batch.len(), 1, "original author still gets the decision");
+        // …and beta does not.
+        let FlushOutcome::Delivered(b_batch) = store
+            .await_flush(Duration::from_secs(1), Some("beta".into()))
+            .await
+        else {
+            panic!("beta not delivered");
+        };
+        assert!(
+            b_batch.is_empty(),
+            "new owner does not steal it: {b_batch:?}"
         );
     }
 
