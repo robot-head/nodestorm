@@ -10,6 +10,7 @@ use crate::agent_launcher::{
     read_ssh_aliases, remote_agent_command, suggest_branch, suggest_worktree, validate_request,
 };
 use crate::cli::Cli;
+use crate::prefs::Preferences;
 use crate::sessions::Sessions;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -213,16 +214,29 @@ struct LaunchSignals {
     dirty_warning: Signal<bool>,
     error: Signal<Option<String>>,
     retained: Signal<Option<String>>,
-    retry: Signal<Option<CommandSpec>>,
+    retry: Signal<Option<(CommandSpec, String)>>,
     open: Signal<bool>,
+}
+
+fn remember_repository(prefs: &mut Preferences, cli: &Cli, repo: &str) {
+    if prefs.record_repository(repo)
+        && let Err(err) = cli
+            .prefs_path()
+            .and_then(|path| crate::prefs::save(&path, prefs))
+    {
+        tracing::warn!(%err, "saving recent repositories failed");
+    }
 }
 
 fn start_attempt(
     request: LaunchRequest,
     sessions: Arc<Sessions>,
     allow_dirty: bool,
+    mut prefs: Signal<Preferences>,
+    cli: Cli,
     mut signals: LaunchSignals,
 ) {
+    let repo = request.repository.clone();
     signals.running.set(true);
     signals.error.set(None);
     signals.retained.set(None);
@@ -234,7 +248,10 @@ fn start_attempt(
                 .unwrap_or_else(|err| failed(format!("launcher worker failed: {err}"), None));
         signals.running.set(false);
         match outcome {
-            LaunchOutcome::Started => signals.open.set(false),
+            LaunchOutcome::Started => {
+                remember_repository(&mut prefs.write(), &cli, &repo);
+                signals.open.set(false);
+            }
             LaunchOutcome::NeedsDirtyConfirmation => signals.dirty_warning.set(true),
             LaunchOutcome::Failed {
                 message,
@@ -250,7 +267,7 @@ fn start_attempt(
             } => {
                 signals.error.set(Some(message));
                 signals.retained.set(path);
-                signals.retry.set(Some(command));
+                signals.retry.set(Some((command, repo)));
             }
         }
     });
@@ -261,6 +278,7 @@ pub fn AgentLauncher() -> Element {
     let sessions = use_context::<Arc<Sessions>>();
     let cli = use_context::<Cli>();
     let mut open = use_context::<super::AgentLauncherOpen>().0;
+    let mut prefs = use_context::<super::ThemePref>().0;
     let mut draft = use_signal(LaunchDraft::default);
     let aliases = use_signal(read_ssh_aliases);
     let mut running = use_signal(|| false);
@@ -268,7 +286,7 @@ pub fn AgentLauncher() -> Element {
     let mut allow_dirty = use_signal(|| false);
     let mut error: Signal<Option<String>> = use_signal(|| None);
     let retained: Signal<Option<String>> = use_signal(|| None);
-    let retry: Signal<Option<CommandSpec>> = use_signal(|| None);
+    let retry: Signal<Option<(CommandSpec, String)>> = use_signal(|| None);
 
     rsx! {
         div { class: "agent-launch-overlay",
@@ -361,9 +379,15 @@ pub fn AgentLauncher() -> Element {
                         span { if draft.read().remote { "Remote repository path" } else { "Repository path" } }
                         input {
                             id: "agent-repository",
+                            list: "recent-repositories",
                             placeholder: if draft.read().remote { "/srv/projects/api" } else { "/home/me/projects/api" },
                             value: "{draft.read().repository}",
                             oninput: move |event| draft.write().set_repository(event.value()),
+                        }
+                        datalist { id: "recent-repositories",
+                            for repo in prefs.read().recent_repositories.iter() {
+                                option { key: "{repo}", value: "{repo}" }
+                            }
                         }
                     }
                     label { class: "agent-launch-field agent-launch-wide",
@@ -455,14 +479,18 @@ pub fn AgentLauncher() -> Element {
                             class: "btn btn-primary",
                             disabled: running(),
                             onclick: move |_| {
-                                let command = retry.read().clone().expect("retry command");
+                                let (command, repo) = retry.read().clone().expect("retry command");
+                                let cli = cli.clone();
                                 running.set(true);
                                 error.set(None);
                                 spawn(async move {
                                     let outcome = tokio::task::spawn_blocking(move || open_terminal(&command)).await;
                                     running.set(false);
                                     match outcome {
-                                        Ok(Ok(())) => open.set(false),
+                                        Ok(Ok(())) => {
+                                            remember_repository(&mut prefs.write(), &cli, &repo);
+                                            open.set(false);
+                                        }
                                         Ok(Err(err)) => error.set(Some(err.to_string())),
                                         Err(err) => error.set(Some(format!("launcher worker failed: {err}"))),
                                     }
@@ -479,6 +507,8 @@ pub fn AgentLauncher() -> Element {
                                     draft.read().request(cli.port),
                                     sessions.clone(),
                                     allow_dirty(),
+                                    prefs,
+                                    cli.clone(),
                                     LaunchSignals {
                                         running,
                                         dirty_warning,
@@ -501,6 +531,27 @@ pub fn AgentLauncher() -> Element {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
+
+    fn tmp_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "nodestorm-agent-launcher-{}-{name}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn successful_terminal_retry_records_repository() {
+        let path = tmp_path("retry-prefs.json");
+        let cli = Cli::parse_from(["nodestorm", "--prefs", path.to_str().unwrap()]);
+        let mut prefs = Preferences::default();
+
+        remember_repository(&mut prefs, &cli, "  /work/api  ");
+
+        assert_eq!(prefs.recent_repositories, ["/work/api"]);
+        assert_eq!(crate::prefs::load_or_default(&path), prefs);
+        std::fs::remove_file(path).ok();
+    }
 
     #[test]
     fn draft_defaults_to_local_claude_new_worktree() {

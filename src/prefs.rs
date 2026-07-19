@@ -22,13 +22,31 @@ pub struct Preferences {
     /// Color mode; `auto` follows the OS.
     #[serde(default)]
     pub mode: Mode,
+    /// Repository paths used in the agent launcher, most-recent first.
+    /// Feeds the repository-path dropdown.
+    #[serde(default)]
+    pub recent_repositories: Vec<String>,
 }
 
 impl Preferences {
     pub const VERSION: u32 = 1;
+    const MAX_RECENT_REPOS: usize = 8;
 
     fn current_version() -> u32 {
         Self::VERSION
+    }
+
+    /// Move `repo` to the front of the recent list (trimmed, deduped,
+    /// capped). Returns whether the list changed, so callers can skip a save.
+    pub fn record_repository(&mut self, repo: &str) -> bool {
+        let repo = repo.trim();
+        if repo.is_empty() || self.recent_repositories.first().is_some_and(|r| r == repo) {
+            return false;
+        }
+        self.recent_repositories.retain(|r| r != repo);
+        self.recent_repositories.insert(0, repo.to_owned());
+        self.recent_repositories.truncate(Self::MAX_RECENT_REPOS);
+        true
     }
 }
 
@@ -42,6 +60,7 @@ impl Default for Preferences {
             version: Self::VERSION,
             theme: default_theme(),
             mode: Mode::default(),
+            recent_repositories: Vec::new(),
         }
     }
 }
@@ -113,6 +132,7 @@ mod tests {
             version: Preferences::VERSION,
             theme: "gruvbox".into(),
             mode: Mode::Light,
+            recent_repositories: vec!["/work/api".into()],
         };
         save(&path, &prefs).unwrap();
         assert_eq!(load_or_default(&path), prefs);
@@ -166,12 +186,36 @@ mod tests {
             version: 1,
             theme: "gruvbox".into(),
             mode: Mode::Light,
+            recent_repositories: Vec::new(),
         };
         save(&path, &prefs).unwrap();
         let raw = std::fs::read_to_string(&path).unwrap();
         assert!(raw.contains("\"theme\": \"gruvbox\""), "raw: {raw}");
         assert!(raw.contains("\"mode\": \"light\""), "raw: {raw}");
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn record_repository_moves_to_front_dedups_and_caps() {
+        let mut prefs = Preferences::default();
+        assert!(prefs.record_repository("/work/api"));
+        assert!(prefs.record_repository("/work/web"));
+        // Re-recording an existing repo moves it to the front without dupes.
+        assert!(prefs.record_repository("/work/api"));
+        assert_eq!(prefs.recent_repositories, ["/work/api", "/work/web"]);
+        // Already-front and blank inputs are no-ops.
+        assert!(!prefs.record_repository("/work/api"));
+        assert!(!prefs.record_repository("   "));
+        // Trims and caps at MAX_RECENT_REPOS, dropping the oldest.
+        for n in 0..Preferences::MAX_RECENT_REPOS {
+            assert!(prefs.record_repository(&format!("  /repo/{n}  ")));
+        }
+        assert_eq!(
+            prefs.recent_repositories.len(),
+            Preferences::MAX_RECENT_REPOS
+        );
+        assert_eq!(prefs.recent_repositories[0], "/repo/7");
+        assert!(!prefs.recent_repositories.iter().any(|r| r == "/work/web"));
     }
 
     #[test]

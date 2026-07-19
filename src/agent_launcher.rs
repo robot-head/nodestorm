@@ -500,6 +500,9 @@ fn spawn_command(spec: &CommandSpec) -> std::io::Result<()> {
     command.spawn().map(|_| ())
 }
 
+// Each `#[cfg]` arm needs its own `return` because sibling arms follow it in
+// source; only one compiles per target, so clippy sees the last as redundant.
+#[allow(clippy::needless_return)]
 pub fn open_terminal(child: &CommandSpec) -> anyhow::Result<()> {
     #[cfg(target_os = "windows")]
     {
