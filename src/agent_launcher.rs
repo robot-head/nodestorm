@@ -143,6 +143,16 @@ pub fn validate_request(req: &LaunchRequest) -> anyhow::Result<()> {
     }
     if let LaunchTarget::Ssh { alias } = &req.target {
         anyhow::ensure!(!alias.trim().is_empty(), "SSH host alias is required");
+        anyhow::ensure!(
+            req.repository.starts_with('/'),
+            "remote repository must be an absolute path"
+        );
+        if let GitMode::NewWorktree { path } = &req.git_mode {
+            anyhow::ensure!(
+                path.starts_with('/'),
+                "remote worktree path must be absolute"
+            );
+        }
     }
     if let GitMode::NewWorktree { path } = &req.git_mode {
         anyhow::ensure!(!path.trim().is_empty(), "worktree path is required");
@@ -275,6 +285,261 @@ pub fn prepare_local(req: &LaunchRequest, allow_dirty: bool) -> anyhow::Result<P
             })
         }
     }
+}
+
+fn diagnostic_shell(message: &str) -> String {
+    format!(
+        "{{ printf '%s\\n' {}; exec \"${{SHELL:-/bin/sh}}\" -l; }}",
+        posix_quote(message)
+    )
+}
+
+fn guarded(command: String, message: &str) -> String {
+    format!("{command} || {}", diagnostic_shell(message))
+}
+
+fn remote_parent(path: &str) -> anyhow::Result<&str> {
+    let (parent, name) = path
+        .rsplit_once('/')
+        .ok_or_else(|| anyhow::anyhow!("remote path must be absolute"))?;
+    anyhow::ensure!(!name.is_empty(), "remote path has no directory name");
+    Ok(if parent.is_empty() { "/" } else { parent })
+}
+
+fn remote_script(req: &LaunchRequest, slug: &str) -> anyhow::Result<String> {
+    validate_request(req)?;
+    let LaunchTarget::Ssh { .. } = &req.target else {
+        anyhow::bail!("remote agent command requires an SSH target");
+    };
+
+    let executable = req.agent.executable();
+    let repo = posix_quote(&req.repository);
+    let branch = posix_quote(&req.branch);
+    let reference = posix_quote(&format!("refs/heads/{}", req.branch));
+    let mut script = vec![
+        "set -u".to_owned(),
+        guarded(
+            format!("command -v {} >/dev/null 2>&1", posix_quote(executable)),
+            &format!("{executable} is not installed"),
+        ),
+        guarded(
+            "command -v 'git' >/dev/null 2>&1".to_owned(),
+            "git is not installed",
+        ),
+        guarded(
+            format!("git -C {repo} rev-parse --show-toplevel >/dev/null"),
+            "repository is not a Git checkout",
+        ),
+        guarded(
+            format!("git -C {repo} check-ref-format --branch {branch} >/dev/null"),
+            "branch name is invalid",
+        ),
+        format!(
+            "branch_status=0; git -C {repo} show-ref --verify --quiet {reference} || branch_status=$?"
+        ),
+        format!(
+            "if [ \"$branch_status\" -eq 0 ]; then {}; fi",
+            diagnostic_shell("branch already exists")
+        ),
+        format!(
+            "if [ \"$branch_status\" -ne 1 ]; then {}; fi",
+            diagnostic_shell("could not inspect remote branches")
+        ),
+    ];
+
+    let directory = match &req.git_mode {
+        GitMode::ExistingCheckout => {
+            script.push(format!(
+                "if [ -n \"$(git -C {repo} status --porcelain)\" ]; then printf '%s' 'This checkout has uncommitted changes. Carry them onto the new branch? [y/N] '; read answer; case \"$answer\" in y|Y|yes|YES) ;; *) {} ;; esac; fi",
+                diagnostic_shell("launch cancelled; uncommitted changes were not moved")
+            ));
+            script.push(guarded(
+                format!("git -C {repo} switch -c {branch}"),
+                "could not create branch",
+            ));
+            req.repository.clone()
+        }
+        GitMode::NewWorktree { path } => {
+            let worktree = posix_quote(path);
+            let parent = posix_quote(remote_parent(path)?);
+            script.push(format!(
+                "if [ -e {worktree} ]; then {}; fi",
+                diagnostic_shell("worktree destination already exists")
+            ));
+            script.push(guarded(
+                format!("mkdir -p {parent}"),
+                "could not create worktree parent directory",
+            ));
+            script.push(guarded(
+                format!("git -C {repo} worktree add -b {branch} {worktree} HEAD"),
+                "could not create worktree",
+            ));
+            path.clone()
+        }
+    };
+
+    script.push(guarded(
+        format!("cd -- {}", posix_quote(&directory)),
+        "could not enter prepared workspace",
+    ));
+    let prompt = compose_prompt(req, slug);
+    let agent = agent_command(req.agent, slug, &prompt, &directory);
+    let mut command = format!("exec {}", posix_quote(&agent.program));
+    for arg in &agent.args {
+        command.push(' ');
+        command.push_str(&posix_quote(arg));
+    }
+    script.push(command);
+
+    Ok(script.join("\n"))
+}
+
+pub fn remote_agent_command(req: &LaunchRequest, slug: &str) -> anyhow::Result<CommandSpec> {
+    let LaunchTarget::Ssh { alias } = &req.target else {
+        anyhow::bail!("remote agent command requires an SSH target");
+    };
+    let script = remote_script(req, slug)?;
+    Ok(CommandSpec {
+        program: "ssh".into(),
+        args: vec![
+            "-t".into(),
+            "-o".into(),
+            "ExitOnForwardFailure=yes".into(),
+            "-R".into(),
+            format!("4747:127.0.0.1:{}", req.mcp_port),
+            "--".into(),
+            alias.clone(),
+            format!("exec sh -lc {}", posix_quote(&script)),
+        ],
+        current_dir: None,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalFlavor {
+    WindowsTerminal,
+    MacTerminal,
+    LinuxXTerminal,
+    LinuxGnome,
+    LinuxKonsole,
+}
+
+fn posix_command(spec: &CommandSpec) -> String {
+    let mut command = spec
+        .current_dir
+        .as_ref()
+        .map(|dir| format!("cd -- {} && ", posix_quote(dir)))
+        .unwrap_or_default();
+    command.push_str("exec ");
+    command.push_str(&posix_quote(&spec.program));
+    for arg in &spec.args {
+        command.push(' ');
+        command.push_str(&posix_quote(arg));
+    }
+    command
+}
+
+pub fn terminal_command(flavor: TerminalFlavor, child: &CommandSpec) -> CommandSpec {
+    match flavor {
+        TerminalFlavor::WindowsTerminal => {
+            let mut args = vec!["-w".into(), "new".into(), "new-tab".into()];
+            if let Some(dir) = &child.current_dir {
+                args.extend(["-d".into(), dir.clone()]);
+            }
+            args.push(child.program.clone());
+            args.extend(child.args.clone());
+            CommandSpec {
+                program: "wt.exe".into(),
+                args,
+                current_dir: None,
+            }
+        }
+        TerminalFlavor::MacTerminal => CommandSpec {
+            program: "osascript".into(),
+            args: vec![
+                "-e".into(),
+                "on run argv".into(),
+                "-e".into(),
+                "tell application \"Terminal\" to activate".into(),
+                "-e".into(),
+                "tell application \"Terminal\" to do script (item 1 of argv)".into(),
+                "-e".into(),
+                "end run".into(),
+                "--".into(),
+                posix_command(child),
+            ],
+            current_dir: None,
+        },
+        TerminalFlavor::LinuxXTerminal => linux_terminal("x-terminal-emulator", &["-e"], child),
+        TerminalFlavor::LinuxGnome => linux_terminal("gnome-terminal", &["--"], child),
+        TerminalFlavor::LinuxKonsole => linux_terminal("konsole", &["-e"], child),
+    }
+}
+
+fn linux_terminal(program: &str, prefix: &[&str], child: &CommandSpec) -> CommandSpec {
+    let mut args = prefix
+        .iter()
+        .map(|arg| (*arg).to_owned())
+        .collect::<Vec<_>>();
+    args.push(child.program.clone());
+    args.extend(child.args.clone());
+    CommandSpec {
+        program: program.into(),
+        args,
+        current_dir: child.current_dir.clone(),
+    }
+}
+
+fn spawn_command(spec: &CommandSpec) -> std::io::Result<()> {
+    let mut command = std::process::Command::new(&spec.program);
+    command.args(&spec.args);
+    if let Some(dir) = &spec.current_dir {
+        command.current_dir(dir);
+    }
+    command.spawn().map(|_| ())
+}
+
+pub fn open_terminal(child: &CommandSpec) -> anyhow::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        return spawn_command(&terminal_command(TerminalFlavor::WindowsTerminal, child))
+            .map_err(|err| anyhow::anyhow!("could not open Windows Terminal: {err}"));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        return spawn_command(&terminal_command(TerminalFlavor::MacTerminal, child))
+            .map_err(|err| anyhow::anyhow!("could not open Terminal.app: {err}"));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        for flavor in [
+            TerminalFlavor::LinuxXTerminal,
+            TerminalFlavor::LinuxGnome,
+            TerminalFlavor::LinuxKonsole,
+        ] {
+            match spawn_command(&terminal_command(flavor, child)) {
+                Ok(()) => return Ok(()),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(err) => return Err(err.into()),
+            }
+        }
+        anyhow::bail!(
+            "no supported terminal found; install x-terminal-emulator, gnome-terminal, or konsole"
+        );
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        anyhow::bail!("this operating system has no terminal launcher")
+    }
+}
+
+pub fn read_ssh_aliases() -> Vec<String> {
+    let Some(base) = directories::BaseDirs::new() else {
+        return Vec::new();
+    };
+    std::fs::read_to_string(base.home_dir().join(".ssh/config"))
+        .map(|text| parse_ssh_aliases(&text))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -549,6 +814,106 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("unavailable")
+        );
+    }
+
+    #[test]
+    fn ssh_command_has_tty_tunnel_validation_and_quoted_values() {
+        let mut req = request(AgentKind::Claude);
+        req.target = LaunchTarget::Ssh {
+            alias: "build-box".into(),
+        };
+        req.repository = "/srv/repo with spaces".into();
+        req.git_mode = GitMode::NewWorktree {
+            path: "/srv/repo-worktrees/nodestorm/cache-redesign".into(),
+        };
+        let spec = remote_agent_command(&req, "cache-redesign").unwrap();
+        assert_eq!(spec.program, "ssh");
+        assert_eq!(
+            &spec.args[..6],
+            [
+                "-t",
+                "-o",
+                "ExitOnForwardFailure=yes",
+                "-R",
+                "4747:127.0.0.1:8123",
+                "--"
+            ]
+        );
+        assert_eq!(spec.args[6], "build-box");
+        let script = remote_script(&req, "cache-redesign").unwrap();
+        assert_eq!(
+            spec.args.last().unwrap(),
+            &format!("exec sh -lc {}", posix_quote(&script))
+        );
+        assert!(script.contains("command -v 'claude'"));
+        assert!(script.contains("'/srv/repo with spaces'"));
+        assert!(script.contains("worktree add -b"));
+        assert!(script.contains("exec 'claude'"));
+        assert!(script.contains(&posix_quote(&compose_prompt(&req, "cache-redesign"))));
+    }
+
+    #[test]
+    fn ssh_existing_checkout_prompts_before_carrying_dirty_changes() {
+        let mut req = request(AgentKind::Codex);
+        req.target = LaunchTarget::Ssh {
+            alias: "build-box".into(),
+        };
+        req.repository = "/srv/api".into();
+        req.git_mode = GitMode::ExistingCheckout;
+        let script = remote_script(&req, "cache-redesign").unwrap();
+        assert!(script.contains("uncommitted changes"));
+        assert!(script.contains("read answer"));
+        assert!(script.contains("switch -c"));
+        assert!(!script.contains("worktree add"));
+    }
+
+    #[test]
+    fn terminal_wrappers_preserve_program_and_arguments() {
+        let child = CommandSpec {
+            program: "codex".into(),
+            args: vec!["task with spaces".into()],
+            current_dir: Some("/work/tree".into()),
+        };
+        let windows = terminal_command(TerminalFlavor::WindowsTerminal, &child);
+        assert_eq!(windows.program, "wt.exe");
+        assert_eq!(
+            &windows.args[..5],
+            ["-w", "new", "new-tab", "-d", "/work/tree"]
+        );
+        assert!(
+            windows
+                .args
+                .ends_with(&["codex".into(), "task with spaces".into()])
+        );
+
+        let linux = terminal_command(TerminalFlavor::LinuxXTerminal, &child);
+        assert_eq!(linux.program, "x-terminal-emulator");
+        assert_eq!(&linux.args[..2], ["-e", "codex"]);
+        assert_eq!(linux.current_dir.as_deref(), Some("/work/tree"));
+
+        let mac = terminal_command(TerminalFlavor::MacTerminal, &child);
+        assert_eq!(mac.program, "osascript");
+        assert!(
+            mac.args
+                .last()
+                .unwrap()
+                .contains("cd -- '/work/tree' && exec 'codex' 'task with spaces'")
+        );
+    }
+
+    #[test]
+    fn remote_paths_must_be_absolute() {
+        let mut req = request(AgentKind::Pi);
+        req.target = LaunchTarget::Ssh {
+            alias: "build-box".into(),
+        };
+        req.repository = "relative/repo".into();
+        assert!(
+            validate_request(&req)
+                .unwrap_err()
+                .to_string()
+                .contains("absolute")
         );
     }
 }
