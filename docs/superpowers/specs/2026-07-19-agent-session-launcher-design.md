@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-19
 
-**Status:** Approved in conversation; awaiting written-spec review
+**Status:** Approved
 
 ## Goal
 
@@ -180,10 +180,13 @@ macOS, or Linux. The target agent continues to own its native interactive UI,
 authentication, permissions, resumption, and exit behavior. Linux is the only
 supported SSH target OS, regardless of the OS running Nodestorm.
 
-Local process execution uses executable-plus-argument arrays and does not
-invoke a shell. SSH necessarily passes one remote POSIX command; every dynamic
-value in that command is POSIX-escaped. There is no custom command or custom
-executable-path field in this version.
+Git validation and preparation use executable-plus-argument arrays and do not
+invoke a shell. Linux and Windows terminal adapters preserve that argument
+structure where the platform terminal supports it. macOS Terminal and any
+platform fallback that accepts only a command line receive a command serialized
+with the platform's escaping rules. SSH necessarily passes one remote POSIX
+command; every dynamic value in that command is POSIX-escaped. There is no
+custom command or custom executable-path field in this version.
 
 ## Errors and Partial Success
 
@@ -207,7 +210,8 @@ retained after a later failure.
   credentials.
 - System SSH retains host verification and authentication policy; Nodestorm
   never enables automatic host-key acceptance.
-- Local commands use argument arrays.
+- Git validation and preparation use argument arrays; serialized terminal
+  commands use platform-specific escaping covered by adversarial-input tests.
 - Remote values are POSIX-escaped and covered by adversarial-input tests.
 - Custom shells, agent commands, and executable paths are not accepted.
 - No agent transcript, task history, or launcher history is persisted by
@@ -253,4 +257,3 @@ The feature is complete when a user can:
    preparation and an automatic loopback reverse MCP tunnel.
 5. See actionable errors without silent cleanup or credential handling by
    Nodestorm.
-
