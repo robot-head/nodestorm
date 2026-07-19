@@ -14,6 +14,7 @@ use crate::cli::Cli;
 use crate::layout::{self, Layout};
 use crate::model::NodeId;
 use crate::sessions::Sessions;
+use crate::store::ToastLevel;
 
 use super::activity::ActivityFeed;
 use super::agent_launcher::AgentLauncher;
@@ -32,6 +33,7 @@ pub fn App() -> Element {
     let mut doc = use_signal(|| sessions.active_store().snapshot_doc());
     let mut meta = use_signal(|| sessions.active_store().snapshot_meta());
     let mut session_name = use_signal(|| sessions.active_name());
+    let mut connections = use_signal(|| sessions.connections());
 
     // Cross-component signals (topbar, panel, and canvas all touch them),
     // wrapped in newtypes because context is type-keyed.
@@ -68,6 +70,21 @@ pub fn App() -> Element {
     let mut timeline_open: Signal<bool> = use_signal(|| false);
     let mut queued_changes_open: Signal<bool> = use_signal(|| false);
     let mut questions_open: Signal<bool> = use_signal(|| false);
+
+    // Connection changes are independent of active-session generation so
+    // transport churn never resets canvas selection or panel state.
+    use_future({
+        let sessions = sessions.clone();
+        move || {
+            let sessions = sessions.clone();
+            async move {
+                let mut changes = sessions.subscribe_connections();
+                while changes.changed().await.is_ok() {
+                    connections.set(sessions.connections());
+                }
+            }
+        }
+    });
 
     // Store → UI bridge: revision changes re-snapshot; generation changes
     // re-subscribe to the new active store and reset per-session view state.
@@ -136,7 +153,7 @@ pub fn App() -> Element {
             class: "app",
             "data-theme": "{theme_prefs.read().theme}",
             "data-mode": "{theme_prefs.read().mode.as_str()}",
-            TopBar { doc, meta, selected, session_name, timeline_open, queued_changes_open, questions_open }
+            TopBar { doc, meta, connections, selected, session_name, timeline_open, queued_changes_open, questions_open }
             div { class: "main",
                 if has_nodes {
                     Canvas { doc, layout, selected, hovered_affects }
@@ -198,6 +215,24 @@ pub fn App() -> Element {
             }
             if launcher_open() {
                 AgentLauncher {}
+            }
+            if let Some(toast) = meta.read().toast.clone() {
+                div {
+                    class: match toast.level {
+                        ToastLevel::Warning => "delivery-toast delivery-toast-warning",
+                        ToastLevel::Error => "delivery-toast delivery-toast-error",
+                    },
+                    role: "alert",
+                    span { "{toast.message}" }
+                    button {
+                        aria_label: "Dismiss error",
+                        onclick: {
+                            let store = sessions.active_store();
+                            move |_| store.dismiss_toast()
+                        },
+                        "×"
+                    }
+                }
             }
         }
     }

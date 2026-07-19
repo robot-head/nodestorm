@@ -275,6 +275,19 @@ mod tests {
     }
 
     #[test]
+    fn claude_connections_send_receipt_and_error_toast_are_accessible() {
+        assert!(TOPBAR_SOURCE.contains(r#"aria_label: "Claude MCP connections""#));
+        assert!(TOPBAR_SOURCE.contains(r#"class: "connection-row""#));
+        assert!(APP_SOURCE.contains(r#"role: "alert""#));
+        assert!(APP_SOURCE.contains(r#"store.dismiss_toast()"#));
+        assert_block_contains(".connection-pop", "max-height: calc(100vh - 64px)");
+        assert_block_contains(".connection-row", "display: grid");
+        assert_block_contains(".delivery-toast", "position: fixed");
+        assert_block_contains(".delivery-toast", "z-index: 30");
+        assert_block_contains(".delivery-toast-error", "color: var(--status-removed)");
+    }
+
+    #[test]
     fn queue_panel_is_available_when_the_document_is_empty() {
         let empty_state = APP_SOURCE
             .find("} else {\n                    div { class: \"empty-state\"")
