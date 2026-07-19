@@ -280,6 +280,7 @@ mod tests {
         assert!(TOPBAR_SOURCE.contains(r#"class: "connection-row""#));
         assert!(APP_SOURCE.contains(r#"role: "alert""#));
         assert!(APP_SOURCE.contains(r#"store.dismiss_toast()"#));
+        assert!(APP_SOURCE.contains(r#"aria_label: "Dismiss notification""#));
         assert_block_contains(".connection-pop", "max-height: calc(100vh - 64px)");
         assert_block_contains(".connection-row", "display: grid");
         assert_block_contains(".delivery-toast", "position: fixed");

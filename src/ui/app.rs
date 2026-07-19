@@ -236,7 +236,7 @@ pub fn App() -> Element {
                     role: "alert",
                     span { "{toast.message}" }
                     button {
-                        aria_label: "Dismiss error",
+                        aria_label: "Dismiss notification",
                         onclick: {
                             let store = active_store.read().clone();
                             move |_| store.dismiss_toast()

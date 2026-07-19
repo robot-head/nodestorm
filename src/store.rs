@@ -165,6 +165,8 @@ pub enum StoreError {
     NoWaitingClient,
     #[error("cannot choose a Claude recipient: {0}")]
     AmbiguousWaitingClients(String),
+    #[error("this Claude session already has an active await_decisions request")]
+    ConnectionAlreadyWaiting,
 }
 
 /// Full session state guarded by the store mutex.
@@ -1381,7 +1383,7 @@ impl Store {
         let mut rev = self.subscribe();
         let connection_id = awaiter.connection_id;
         let agent = awaiter.agent.clone();
-        let _guard = WaitGuard::enter(self.clone(), awaiter);
+        let _guard = WaitGuard::enter(self.clone(), awaiter)?;
         let deadline = tokio::time::sleep(timeout);
         tokio::pin!(deadline);
         loop {
@@ -1417,16 +1419,22 @@ struct WaitGuard {
 }
 
 impl WaitGuard {
-    fn enter(store: Arc<Store>, awaiter: Awaiter) -> Self {
+    fn enter(store: Arc<Store>, awaiter: Awaiter) -> Result<Self, StoreError> {
         let connection_id = awaiter.connection_id;
-        let rebound = store.mutate(|s| register_waiter(s, awaiter));
+        let (rebound, revision) = {
+            let mut state = store.lock();
+            let rebound = register_waiter(&mut state, awaiter)?;
+            state.doc.revision += 1;
+            (rebound, state.doc.revision)
+        };
+        store.revision_tx.send_replace(revision);
         if rebound {
             store.notify_connection_projection();
         }
-        Self {
+        Ok(Self {
             store,
             connection_id,
-        }
+        })
     }
 }
 
@@ -1465,7 +1473,10 @@ impl Drop for WaitGuard {
     }
 }
 
-fn register_waiter(s: &mut SessionState, awaiter: Awaiter) -> bool {
+fn register_waiter(s: &mut SessionState, awaiter: Awaiter) -> Result<bool, StoreError> {
+    if s.waiters.contains_key(&awaiter.connection_id) {
+        return Err(StoreError::ConnectionAlreadyWaiting);
+    }
     if matches!(s.send_status, SendStatus::Sent | SendStatus::Failed) {
         s.send_status = SendStatus::Idle;
     }
@@ -1544,7 +1555,7 @@ fn register_waiter(s: &mut SessionState, awaiter: Awaiter) -> bool {
             });
             s.send_status = SendStatus::Sending;
         }
-        return rebound;
+        return Ok(rebound);
     }
 
     let unfinished_receipt = s
@@ -1567,7 +1578,7 @@ fn register_waiter(s: &mut SessionState, awaiter: Awaiter) -> bool {
         });
         s.send_status = SendStatus::Sending;
     }
-    rebound
+    Ok(rebound)
 }
 
 fn validated_targets(s: &SessionState) -> Result<Vec<ReceiptTarget>, StoreError> {
@@ -2981,7 +2992,7 @@ mod tests {
                 .message
                 .contains("waiting")
         );
-        let guard = WaitGuard::enter(store.clone(), awaiter(99, None));
+        let guard = WaitGuard::enter(store.clone(), awaiter(99, None)).unwrap();
         assert_eq!(store.snapshot_meta().send_status, SendStatus::Idle);
         assert!(store.snapshot_meta().toast.is_some());
         store.dismiss_toast();
@@ -3017,6 +3028,38 @@ mod tests {
         assert_eq!(store.read(|s| s.delivery_cursor), 0);
         a.abort();
         b.abort();
+    }
+
+    #[tokio::test]
+    async fn second_await_on_same_connection_is_rejected_without_replacing_first() {
+        let store = demo_store();
+        pick_first_choice(&store);
+        let first = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .await_flush(Duration::from_secs(30), awaiter(3, Some("alpha")))
+                    .await
+            }
+        });
+        wait_until(&store, 1).await;
+
+        let error = tokio::time::timeout(
+            Duration::from_millis(50),
+            store.await_flush(Duration::from_secs(30), awaiter(3, Some("beta"))),
+        )
+        .await
+        .expect("a duplicate await is rejected immediately")
+        .expect_err("a connection may own only one active await");
+
+        assert!(matches!(error, StoreError::ConnectionAlreadyWaiting));
+        assert_eq!(store.snapshot_meta().waiting_agents, 1);
+        store.request_flush(None).expect("original waiter remains");
+        assert!(matches!(
+            first.await.expect("first task").expect("first result"),
+            FlushOutcome::Delivered(batch) if batch.len() == 1
+        ));
+        assert_eq!(store.read(|state| state.delivery_cursor), 1);
     }
 
     #[tokio::test]
@@ -3085,7 +3128,7 @@ mod tests {
     fn removing_post_send_edit_preserves_active_receipt_claim() {
         let store = demo_store();
         pick_first_choice(&store);
-        let guard = WaitGuard::enter(store.clone(), awaiter(20, None));
+        let guard = WaitGuard::enter(store.clone(), awaiter(20, None)).unwrap();
         store.request_flush(None).unwrap();
         store.add_annotation(AnnotationKind::Note, 1.0, 2.0, 0.0, 0.0, "later".into());
 
@@ -3101,9 +3144,9 @@ mod tests {
     fn autoflush_preserves_unfinished_explicit_receipt() {
         let store = demo_store();
         pick_first_choice(&store);
-        let alpha = WaitGuard::enter(store.clone(), awaiter(21, Some("alpha")));
+        let alpha = WaitGuard::enter(store.clone(), awaiter(21, Some("alpha"))).unwrap();
         store.request_flush(None).unwrap();
-        let beta = WaitGuard::enter(store.clone(), awaiter(22, Some("beta")));
+        let beta = WaitGuard::enter(store.clone(), awaiter(22, Some("beta"))).unwrap();
 
         store
             .dismiss_choice(
@@ -3139,9 +3182,9 @@ mod tests {
     fn receipt_completion_is_idle_for_later_waiter() {
         let store = demo_store();
         pick_first_choice(&store);
-        let alpha = WaitGuard::enter(store.clone(), awaiter(23, Some("alpha")));
+        let alpha = WaitGuard::enter(store.clone(), awaiter(23, Some("alpha"))).unwrap();
         store.request_flush(None).unwrap();
-        let beta = WaitGuard::enter(store.clone(), awaiter(24, Some("beta")));
+        let beta = WaitGuard::enter(store.clone(), awaiter(24, Some("beta"))).unwrap();
 
         assert!(store.try_deliver(ConnectionId(23)).is_some());
 
@@ -3430,7 +3473,7 @@ mod tests {
     #[tokio::test]
     async fn removing_a_queued_comment_is_blocked_while_delivering() {
         let store = demo_store();
-        let guard = WaitGuard::enter(store.clone(), awaiter(103, None));
+        let guard = WaitGuard::enter(store.clone(), awaiter(103, None)).unwrap();
         store.request_flush(Some("hold for review".into())).unwrap();
 
         assert!(matches!(
@@ -3479,7 +3522,7 @@ mod tests {
     async fn flush_delivers_exactly_once() {
         let store = demo_store();
         pick_first_choice(&store);
-        let guard = WaitGuard::enter(store.clone(), awaiter(104, None));
+        let guard = WaitGuard::enter(store.clone(), awaiter(104, None)).unwrap();
         store.request_flush(None).unwrap();
         let first = store.try_deliver(ConnectionId(104)).expect("pending flush");
         assert_eq!(first.len(), 1);
@@ -3516,7 +3559,7 @@ mod tests {
     #[tokio::test]
     async fn empty_flush_still_delivers() {
         let store = demo_store();
-        let guard = WaitGuard::enter(store.clone(), awaiter(106, None));
+        let guard = WaitGuard::enter(store.clone(), awaiter(106, None)).unwrap();
         store
             .request_flush(Some("looks good, proceed".into()))
             .unwrap();
@@ -4314,8 +4357,8 @@ mod tests {
     fn send_status_stays_sending_until_every_target_finishes() {
         let store = demo_store();
         pick_first_choice(&store);
-        let alpha = WaitGuard::enter(store.clone(), awaiter(201, Some("alpha")));
-        let beta = WaitGuard::enter(store.clone(), awaiter(202, Some("beta")));
+        let alpha = WaitGuard::enter(store.clone(), awaiter(201, Some("alpha"))).unwrap();
+        let beta = WaitGuard::enter(store.clone(), awaiter(202, Some("beta"))).unwrap();
         store.request_flush(None).unwrap();
 
         assert!(store.try_deliver(ConnectionId(201)).is_some());

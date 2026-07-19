@@ -708,6 +708,87 @@ async fn explicit_send_stays_pending_until_every_target_consumes() {
 }
 
 #[tokio::test]
+async fn one_connection_rejects_a_second_concurrent_await() {
+    let store = Store::new(SessionState::default());
+    let (port, _shutdown, sessions) = start_server(store.clone()).await;
+    let client = connect_client(port, "single connection").await;
+    client
+        .call_tool(
+            CallToolRequestParams::new("propose_graph").with_arguments(
+                json!({
+                    "session": "other", "title": "other",
+                    "nodes": [{"id": "other", "label": "Other"}]
+                })
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+            ),
+        )
+        .await
+        .expect("create other session");
+    let other = sessions.get("other").expect("other session");
+
+    let first_peer = client.peer().clone();
+    let first = tokio::spawn(async move {
+        first_peer
+            .call_tool(
+                CallToolRequestParams::new("await_decisions").with_arguments(
+                    json!({"timeout_seconds": 10, "agent": "alpha"})
+                        .as_object()
+                        .cloned()
+                        .unwrap_or_default(),
+                ),
+            )
+            .await
+    });
+    let mut changes = sessions.subscribe_connections();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while store.snapshot_meta().waiting_agents != 1 {
+            changes.changed().await.expect("connection watch open");
+        }
+    })
+    .await
+    .expect("first await becomes active");
+
+    let error = tokio::time::timeout(
+        Duration::from_secs(1),
+        client.call_tool(
+            CallToolRequestParams::new("await_decisions").with_arguments(
+                json!({"timeout_seconds": 10, "session": "other", "agent": "beta"})
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
+        ),
+    )
+    .await
+    .expect("second await is rejected immediately")
+    .expect_err("one transport cannot own two awaits");
+
+    assert!(
+        error.to_string().contains("active await_decisions"),
+        "concrete duplicate error: {error}"
+    );
+    assert_eq!(store.snapshot_meta().waiting_agents, 1);
+    assert_eq!(other.snapshot_meta().waiting_agents, 0);
+    assert!(matches!(
+        sessions.connections().first().map(|connection| &connection.state),
+        Some(ConnectionState::Waiting { session, agent })
+            if session == "default" && agent.as_deref() == Some("alpha")
+    ));
+
+    store
+        .request_flush(None)
+        .expect("deliver to original await");
+    let result = first
+        .await
+        .expect("first await task")
+        .expect("first await remains valid");
+    assert_eq!(tool_json(&result)["status"], "delivered");
+    client.cancel().await.expect("client shutdown");
+}
+
+#[tokio::test]
 async fn reestablished_agent_recovers_pending_delivery() {
     let store = Store::new(SessionState::default());
     let (port, _shutdown, sessions) = start_server(store).await;
@@ -1208,6 +1289,7 @@ async fn sessions_route_and_await_concurrently() {
         }
     });
 
+    let beta_client = connect_client(port, "beta session").await;
     let alpha_await = client.call_tool(
         CallToolRequestParams::new("await_decisions").with_arguments(
             json!({"timeout_seconds": 10, "session": "alpha"})
@@ -1216,7 +1298,7 @@ async fn sessions_route_and_await_concurrently() {
                 .unwrap_or_default(),
         ),
     );
-    let beta_await = client.call_tool(
+    let beta_await = beta_client.call_tool(
         CallToolRequestParams::new("await_decisions").with_arguments(
             json!({"timeout_seconds": 10, "session": "beta"})
                 .as_object()
@@ -1301,4 +1383,5 @@ async fn sessions_route_and_await_concurrently() {
     assert!(msg.contains("unknown session"), "{msg}");
 
     client.cancel().await.expect("client shutdown");
+    beta_client.cancel().await.expect("beta client shutdown");
 }
