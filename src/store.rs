@@ -7,7 +7,8 @@
 //! delivered to the agent **exactly once** via an append-only log and a
 //! delivery cursor advanced under the mutex; see [`Store::await_flush`].
 
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use chrono::Utc;
@@ -57,6 +58,77 @@ pub struct QueueEditTarget {
     pub choice_id: Option<ChoiceId>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ConnectionId(pub u64);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Awaiter {
+    pub connection_id: ConnectionId,
+    pub client_label: String,
+    pub agent: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SendStatus {
+    #[default]
+    Idle,
+    Sending,
+    Sent,
+    Reconnecting,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToastLevel {
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UiToast {
+    pub level: ToastLevel,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReconnectTarget {
+    pub connection_id: ConnectionId,
+    pub client_label: String,
+    pub agent: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum RecipientKey {
+    Agent(String),
+    Anonymous(ConnectionId),
+}
+
+#[derive(Debug, Clone)]
+struct Waiter {
+    awaiter: Awaiter,
+    recipient: RecipientKey,
+}
+
+#[derive(Debug, Clone)]
+struct ReceiptTarget {
+    key: RecipientKey,
+    connection_id: Option<ConnectionId>,
+    last_connection_id: ConnectionId,
+    client_label: String,
+    delivered: bool,
+}
+
+#[derive(Debug, Clone)]
+struct SendReceipt {
+    flush_seq: u64,
+    end_cursor: usize,
+    doc_at_send: SessionDoc,
+    targets: Vec<ReceiptTarget>,
+    /// A no-waiter autoflush remains independently claimable by named agents
+    /// under the persisted `agent_flush`/`agent_cursors` contract.
+    claimable: bool,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     #[error("unknown node `{0}`")]
@@ -87,6 +159,14 @@ pub enum StoreError {
     UnknownQueuedChange(String),
     #[error("queued changes cannot be replayed because their baseline is unavailable")]
     MissingQueuedBaseline,
+    #[error("this queued batch is currently being delivered")]
+    QueuedBatchDelivering,
+    #[error("no Claude session is waiting on this brainstorm")]
+    NoWaitingClient,
+    #[error("cannot choose a Claude recipient: {0}")]
+    AmbiguousWaitingClients(String),
+    #[error("this Claude session already has an active await_decisions request")]
+    ConnectionAlreadyWaiting,
 }
 
 /// Full session state guarded by the store mutex.
@@ -142,6 +222,14 @@ pub struct SessionState {
     /// Live `await_decisions` calls (transient; not persisted).
     #[serde(skip)]
     pub waiting_agents: usize,
+    #[serde(skip)]
+    waiters: BTreeMap<ConnectionId, Waiter>,
+    #[serde(skip)]
+    send_receipt: Option<SendReceipt>,
+    #[serde(skip)]
+    send_status: SendStatus,
+    #[serde(skip)]
+    toast: Option<UiToast>,
 }
 
 /// Lightweight snapshot for the top bar / panels.
@@ -155,6 +243,8 @@ pub struct UiMeta {
     pub declared_lanes: Vec<String>,
     pub undo_available: bool,
     pub redo_available: bool,
+    pub send_status: SendStatus,
+    pub toast: Option<UiToast>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -181,6 +271,7 @@ pub struct UpdateSummary {
 pub struct Store {
     state: Mutex<SessionState>,
     revision_tx: watch::Sender<u64>,
+    connection_tx: OnceLock<watch::Sender<u64>>,
 }
 
 impl Store {
@@ -195,10 +286,30 @@ impl Store {
                     .into(),
             );
         }
+        if state.send_receipt.is_none()
+            && (state.flush_seq > state.delivered_flush_seq
+                || state
+                    .doc
+                    .nodes
+                    .iter()
+                    .filter_map(|node| node.agent.as_ref())
+                    .any(|agent| {
+                        state.agent_flush.get(agent).copied().unwrap_or(0) < state.flush_seq
+                    }))
+        {
+            state.send_receipt = Some(SendReceipt {
+                flush_seq: state.flush_seq,
+                end_cursor: state.decision_log.len(),
+                doc_at_send: state.doc.clone(),
+                targets: vec![],
+                claimable: true,
+            });
+        }
         let (revision_tx, _) = watch::channel(state.doc.revision);
         Arc::new(Self {
             state: Mutex::new(state),
             revision_tx,
+            connection_tx: OnceLock::new(),
         })
     }
 
@@ -234,6 +345,19 @@ impl Store {
         self.revision_tx.subscribe()
     }
 
+    pub(crate) fn set_connection_notifier(&self, notifier: watch::Sender<u64>) {
+        assert!(
+            self.connection_tx.set(notifier).is_ok(),
+            "store already belongs to a session manager"
+        );
+    }
+
+    fn notify_connection_projection(&self) {
+        if let Some(notifier) = self.connection_tx.get() {
+            notifier.send_modify(|generation| *generation += 1);
+        }
+    }
+
     pub fn snapshot_doc(&self) -> SessionDoc {
         self.read(|s| s.doc.clone())
     }
@@ -252,7 +376,31 @@ impl Store {
             declared_lanes: s.declared_lanes.clone(),
             undo_available: !s.undo.is_empty(),
             redo_available: !s.redo.is_empty(),
+            send_status: s.send_status,
+            toast: s.toast.clone(),
         })
+    }
+
+    pub fn reconnecting_targets(&self) -> Vec<ReconnectTarget> {
+        self.read(|s| {
+            s.send_receipt
+                .iter()
+                .flat_map(|receipt| &receipt.targets)
+                .filter(|target| !target.delivered && target.connection_id.is_none())
+                .map(|target| ReconnectTarget {
+                    connection_id: target.last_connection_id,
+                    client_label: target.client_label.clone(),
+                    agent: match &target.key {
+                        RecipientKey::Agent(agent) => Some(agent.clone()),
+                        RecipientKey::Anonymous(_) => None,
+                    },
+                })
+                .collect()
+        })
+    }
+
+    pub fn dismiss_toast(&self) {
+        self.mutate(|s| s.toast = None);
     }
 
     /// Undo the most recent user step (edits and undelivered decisions
@@ -917,8 +1065,19 @@ impl Store {
 
     /// "Send to agent": flush everything undelivered (an empty flush is a
     /// valid "reviewed, proceed" signal).
-    pub fn request_flush(&self, comment: Option<String>) {
+    pub fn request_flush(&self, comment: Option<String>) -> Result<(), StoreError> {
         self.mutate(|s| {
+            let targets = match validated_targets(s) {
+                Ok(targets) => targets,
+                Err(err) => {
+                    s.send_status = SendStatus::Failed;
+                    s.toast = Some(UiToast {
+                        level: ToastLevel::Error,
+                        message: err.to_string(),
+                    });
+                    return Err(err);
+                }
+            };
             if comment.as_deref().is_some_and(|c| !c.trim().is_empty()) {
                 push_event(
                     s,
@@ -928,13 +1087,18 @@ impl Store {
                 );
             }
             s.flush_seq += 1;
-            clear_undo(s); // delivered decisions are facts
-            push_activity(
-                s,
-                ActivityOrigin::User,
-                "sent decisions to the agent".into(),
-            );
-        });
+            s.send_receipt = Some(SendReceipt {
+                flush_seq: s.flush_seq,
+                end_cursor: s.decision_log.len(),
+                doc_at_send: s.doc.clone(),
+                targets,
+                claimable: false,
+            });
+            s.send_status = SendStatus::Sending;
+            s.toast = None;
+            clear_undo(s);
+            Ok(())
+        })
     }
 
     // ---------- agent-facing mutations (called from MCP tools) ----------
@@ -1132,9 +1296,17 @@ impl Store {
                 .cloned()
                 .map(|event| QueuedChange {
                     id: format!("pending:{}", event.seq),
+                    interaction_error: s
+                        .send_receipt
+                        .as_ref()
+                        .filter(|receipt| {
+                            receipt.targets.iter().any(|target| !target.delivered)
+                                && event.seq <= receipt.end_cursor as u64
+                        })
+                        .map(|_| "This batch is currently being delivered.".into())
+                        .or_else(|| s.queue_edit_error.clone()),
                     event,
                     blocked_reason: None,
-                    interaction_error: s.queue_edit_error.clone(),
                 })
                 .chain(s.blocked_changes.iter().cloned().map(|mut change| {
                     change.interaction_error = None;
@@ -1151,16 +1323,29 @@ impl Store {
             if seq <= s.delivery_cursor as u64 {
                 return Err(StoreError::UnknownQueuedChange(seq.to_string()));
             }
-            let tail_index = s.decision_log[s.delivery_cursor..]
+            let active_receipt = s
+                .send_receipt
+                .as_ref()
+                .filter(|receipt| receipt.targets.iter().any(|target| !target.delivered));
+            if active_receipt.is_some_and(|receipt| seq <= receipt.end_cursor as u64) {
+                return Err(StoreError::QueuedBatchDelivering);
+            }
+            let replay_start = active_receipt
+                .map(|receipt| receipt.end_cursor)
+                .unwrap_or(s.delivery_cursor);
+            let tail_index = s.decision_log[replay_start..]
                 .iter()
                 .position(|event| event.seq == seq)
                 .ok_or_else(|| StoreError::UnknownQueuedChange(seq.to_string()))?;
-            let target = queue_edit_target(&s.decision_log[s.delivery_cursor + tail_index]);
-            let base = s
-                .pending_base
-                .take()
-                .ok_or(StoreError::MissingQueuedBaseline)?;
-            let mut survivors = s.decision_log[s.delivery_cursor..].to_vec();
+            let target = queue_edit_target(&s.decision_log[replay_start + tail_index]);
+            let base = match active_receipt {
+                Some(receipt) => receipt.doc_at_send.clone(),
+                None => s
+                    .pending_base
+                    .take()
+                    .ok_or(StoreError::MissingQueuedBaseline)?,
+            };
+            let mut survivors = s.decision_log[replay_start..].to_vec();
             survivors.remove(tail_index);
 
             let revision = s.doc.revision;
@@ -1181,13 +1366,21 @@ impl Store {
             }
             replayed_doc.revision = revision;
             s.doc = replayed_doc;
-            s.decision_log.truncate(s.delivery_cursor);
+            s.decision_log.truncate(replay_start);
             for (offset, event) in replayed_tail.iter_mut().enumerate() {
-                event.seq = s.delivery_cursor as u64 + offset as u64 + 1;
+                event.seq = replay_start as u64 + offset as u64 + 1;
             }
             s.decision_log.extend(replayed_tail);
-            s.pending_base = (!s.decision_log[s.delivery_cursor..].is_empty()).then_some(base);
-            s.flush_seq = s.delivered_flush_seq;
+            s.pending_base = (!s.decision_log[replay_start..].is_empty()).then_some(base);
+            if active_receipt.is_none() {
+                s.flush_seq = s.delivered_flush_seq;
+                if s.send_receipt
+                    .as_ref()
+                    .is_some_and(|receipt| receipt.claimable)
+                {
+                    s.send_receipt = None;
+                }
+            }
             clear_undo(s);
             push_activity(
                 s,
@@ -1243,15 +1436,11 @@ impl Store {
         })
     }
 
-    /// Atomically take the undelivered batch if a flush is pending, for the
-    /// default (unnamed) agent or a named one.
-    fn try_deliver(&self, agent: &Option<String>) -> Option<Vec<DecisionEvent>> {
+    /// Atomically take the fixed receipt slice assigned to this connection.
+    fn try_deliver(&self, connection_id: ConnectionId) -> Option<Vec<DecisionEvent>> {
         let taken = {
             let mut s = self.lock();
-            match agent {
-                None => try_deliver_locked(&mut s),
-                Some(a) => try_deliver_for_agent_locked(&mut s, a),
-            }
+            try_deliver_locked(&mut s, connection_id)
         };
         if taken.is_some() {
             // Repaint (undelivered count, pill) — bump revision via mutate.
@@ -1263,40 +1452,38 @@ impl Store {
     /// Block until the user flushes decisions, the timeout elapses, or the
     /// store shuts down. Must run on a tokio runtime (uses `tokio::time`).
     ///
-    /// Exactly-once: when several calls race one flush, one gets `Delivered`
-    /// and the rest run to their own deadlines. With a named `agent`, each
-    /// agent has its own cursor, so concurrent awaits for *different* agents on
-    /// the same session each receive their own slice (decisions addressed to
-    /// them, plus unclaimed ones) — while two awaits for the *same* agent still
-    /// deliver exactly once.
+    /// Exactly-once delivery is scoped to the connection targets captured by
+    /// the send receipt. A disconnected target can be rebound on reconnect.
     pub async fn await_flush(
         self: &Arc<Self>,
         timeout: Duration,
-        agent: Option<String>,
-    ) -> FlushOutcome {
+        awaiter: Awaiter,
+    ) -> Result<FlushOutcome, StoreError> {
         let mut rev = self.subscribe();
-        let _guard = WaitGuard::enter(self.clone());
+        let connection_id = awaiter.connection_id;
+        let agent = awaiter.agent.clone();
+        let _guard = WaitGuard::enter(self.clone(), awaiter)?;
         let deadline = tokio::time::sleep(timeout);
         tokio::pin!(deadline);
         loop {
-            if let Some(batch) = self.try_deliver(&agent) {
-                return FlushOutcome::Delivered(batch);
+            if let Some(batch) = self.try_deliver(connection_id) {
+                return Ok(FlushOutcome::Delivered(batch));
             }
             tokio::select! {
                 changed = rev.changed() => {
                     if changed.is_err() {
-                        return FlushOutcome::Shutdown;
+                        return Ok(FlushOutcome::Shutdown);
                     }
                 }
                 () = &mut deadline => {
                     // Final re-check closes the click-vs-timeout race: a flush
                     // that landed before this point is delivered, not dropped.
-                    if let Some(batch) = self.try_deliver(&agent) {
-                        return FlushOutcome::Delivered(batch);
+                    if let Some(batch) = self.try_deliver(connection_id) {
+                        return Ok(FlushOutcome::Delivered(batch));
                     }
-                    return FlushOutcome::TimedOut {
+                    return Ok(FlushOutcome::TimedOut {
                         preview: self.peek_undelivered_for(&agent),
-                    };
+                    });
                 }
             }
         }
@@ -1307,58 +1494,271 @@ impl Store {
 /// aborts because the future dropping runs `Drop`.
 struct WaitGuard {
     store: Arc<Store>,
+    connection_id: ConnectionId,
 }
 
 impl WaitGuard {
-    fn enter(store: Arc<Store>) -> Self {
-        store.mutate(|s| s.waiting_agents += 1);
-        Self { store }
+    fn enter(store: Arc<Store>, awaiter: Awaiter) -> Result<Self, StoreError> {
+        let connection_id = awaiter.connection_id;
+        let (rebound, revision) = {
+            let mut state = store.lock();
+            let rebound = register_waiter(&mut state, awaiter)?;
+            state.doc.revision += 1;
+            (rebound, state.doc.revision)
+        };
+        store.revision_tx.send_replace(revision);
+        if rebound {
+            store.notify_connection_projection();
+        }
+        Ok(Self {
+            store,
+            connection_id,
+        })
     }
 }
 
 impl Drop for WaitGuard {
     fn drop(&mut self) {
-        self.store
-            .mutate(|s| s.waiting_agents = s.waiting_agents.saturating_sub(1));
+        let orphaned = self.store.mutate(|s| {
+            let removed = s.waiters.remove(&self.connection_id);
+            s.waiting_agents = s.waiters.len();
+            let Some(target) = s.send_receipt.as_mut().and_then(|receipt| {
+                receipt.targets.iter_mut().find(|target| {
+                    !target.delivered && target.connection_id == Some(self.connection_id)
+                })
+            }) else {
+                return false;
+            };
+            target.last_connection_id = self.connection_id;
+            target.connection_id = None;
+            s.send_status = SendStatus::Reconnecting;
+            let label = removed
+                .as_ref()
+                .map(|waiter| waiter.awaiter.client_label.as_str())
+                .unwrap_or(target.client_label.as_str());
+            let recipient = match &target.key {
+                RecipientKey::Agent(agent) => format!("{label} ({agent})"),
+                RecipientKey::Anonymous(_) => label.to_owned(),
+            };
+            s.toast = Some(UiToast {
+                level: ToastLevel::Warning,
+                message: format!("{recipient} disconnected; waiting to reconnect"),
+            });
+            true
+        });
+        if orphaned {
+            self.store.notify_connection_projection();
+        }
     }
 }
 
-fn try_deliver_locked(s: &mut SessionState) -> Option<Vec<DecisionEvent>> {
-    if s.flush_seq > s.delivered_flush_seq {
-        let batch = s.decision_log[s.delivery_cursor..].to_vec();
-        s.delivery_cursor = s.decision_log.len();
-        s.delivered_flush_seq = s.flush_seq;
-        s.pending_base = None;
-        s.queue_edit_error = None;
-        Some(batch)
-    } else {
-        None
+fn register_waiter(s: &mut SessionState, awaiter: Awaiter) -> Result<bool, StoreError> {
+    if s.waiters.contains_key(&awaiter.connection_id) {
+        return Err(StoreError::ConnectionAlreadyWaiting);
     }
+    if matches!(s.send_status, SendStatus::Sent | SendStatus::Failed) {
+        s.send_status = SendStatus::Idle;
+    }
+    let connection_id = awaiter.connection_id;
+    let recipient = match &awaiter.agent {
+        Some(agent) => RecipientKey::Agent(agent.clone()),
+        None => RecipientKey::Anonymous(connection_id),
+    };
+    let mut rebound = false;
+
+    if let Some(receipt) = s.send_receipt.as_mut() {
+        let target = match &recipient {
+            RecipientKey::Agent(agent) => receipt.targets.iter_mut().find(|target| {
+                !target.delivered
+                    && target.connection_id.is_none()
+                    && target.key == RecipientKey::Agent(agent.clone())
+            }),
+            RecipientKey::Anonymous(_) => {
+                let orphan_count = receipt
+                    .targets
+                    .iter()
+                    .filter(|target| {
+                        !target.delivered
+                            && target.connection_id.is_none()
+                            && matches!(target.key, RecipientKey::Anonymous(_))
+                    })
+                    .count();
+                let other_anonymous_waiter = s
+                    .waiters
+                    .values()
+                    .any(|waiter| matches!(waiter.recipient, RecipientKey::Anonymous(_)));
+                (orphan_count == 1 && !other_anonymous_waiter)
+                    .then(|| {
+                        receipt.targets.iter_mut().find(|target| {
+                            !target.delivered
+                                && target.connection_id.is_none()
+                                && matches!(target.key, RecipientKey::Anonymous(_))
+                        })
+                    })
+                    .flatten()
+            }
+        };
+        if let Some(target) = target {
+            target.connection_id = Some(connection_id);
+            target.last_connection_id = connection_id;
+            target.client_label = awaiter.client_label.clone();
+            s.send_status = SendStatus::Sending;
+            rebound = true;
+        }
+    }
+
+    s.waiters.insert(
+        connection_id,
+        Waiter {
+            awaiter: awaiter.clone(),
+            recipient: recipient.clone(),
+        },
+    );
+    s.waiting_agents = s.waiters.len();
+
+    if let Some(receipt) = s.send_receipt.as_mut().filter(|receipt| receipt.claimable) {
+        let pending = match &recipient {
+            RecipientKey::Agent(agent) => {
+                s.agent_flush.get(agent).copied().unwrap_or(0) < receipt.flush_seq
+            }
+            RecipientKey::Anonymous(_) => s.delivered_flush_seq < receipt.flush_seq,
+        };
+        let already_targeted = receipt.targets.iter().any(|target| target.key == recipient);
+        if pending && !already_targeted {
+            receipt.targets.push(ReceiptTarget {
+                key: recipient,
+                connection_id: Some(connection_id),
+                last_connection_id: connection_id,
+                client_label: awaiter.client_label,
+                delivered: false,
+            });
+            s.send_status = SendStatus::Sending;
+        }
+        return Ok(rebound);
+    }
+
+    let unfinished_receipt = s
+        .send_receipt
+        .as_ref()
+        .is_some_and(|receipt| receipt.targets.iter().any(|target| !target.delivered));
+    if !unfinished_receipt && s.flush_seq > s.delivered_flush_seq {
+        s.send_receipt = Some(SendReceipt {
+            flush_seq: s.flush_seq,
+            end_cursor: s.decision_log.len(),
+            doc_at_send: s.doc.clone(),
+            targets: vec![ReceiptTarget {
+                key: recipient,
+                connection_id: Some(connection_id),
+                last_connection_id: connection_id,
+                client_label: awaiter.client_label,
+                delivered: false,
+            }],
+            claimable: true,
+        });
+        s.send_status = SendStatus::Sending;
+    }
+    Ok(rebound)
 }
 
-/// Per-named-agent delivery: exactly-once per agent (gated on `flush_seq`),
-/// filtered to the events addressed to that agent or unclaimed. Runs beside
-/// the default cursor without disturbing it, so single-agent behavior and
-/// queue editing are untouched.
-fn try_deliver_for_agent_locked(s: &mut SessionState, agent: &str) -> Option<Vec<DecisionEvent>> {
-    let last = s.agent_flush.get(agent).copied().unwrap_or(0);
-    if s.flush_seq <= last {
-        return None;
+fn validated_targets(s: &SessionState) -> Result<Vec<ReceiptTarget>, StoreError> {
+    if s.waiters.is_empty() {
+        return Err(StoreError::NoWaitingClient);
     }
-    let cursor = s
-        .agent_cursors
-        .get(agent)
-        .copied()
-        .unwrap_or(0)
-        .min(s.decision_log.len());
-    let batch: Vec<DecisionEvent> = s.decision_log[cursor..]
-        .iter()
-        .filter(|e| addressed_to(e, agent))
-        .cloned()
+    let anonymous: Vec<&Waiter> = s
+        .waiters
+        .values()
+        .filter(|waiter| matches!(waiter.recipient, RecipientKey::Anonymous(_)))
         .collect();
-    s.agent_cursors
-        .insert(agent.to_owned(), s.decision_log.len());
-    s.agent_flush.insert(agent.to_owned(), s.flush_seq);
+    let mut named: BTreeMap<&str, Vec<&Waiter>> = BTreeMap::new();
+    for waiter in s.waiters.values() {
+        if let RecipientKey::Agent(agent) = &waiter.recipient {
+            named.entry(agent).or_default().push(waiter);
+        }
+    }
+
+    if !named.is_empty() && !anonymous.is_empty() {
+        return Err(StoreError::AmbiguousWaitingClients(
+            "named and anonymous sessions are waiting together".into(),
+        ));
+    }
+    if anonymous.len() > 1 {
+        return Err(StoreError::AmbiguousWaitingClients(
+            "multiple anonymous sessions are waiting".into(),
+        ));
+    }
+    if let Some((agent, _)) = named.iter().find(|(_, waiters)| waiters.len() > 1) {
+        return Err(StoreError::AmbiguousWaitingClients(format!(
+            "multiple sessions claim agent {agent}"
+        )));
+    }
+
+    let target = |waiter: &Waiter| ReceiptTarget {
+        key: waiter.recipient.clone(),
+        connection_id: Some(waiter.awaiter.connection_id),
+        last_connection_id: waiter.awaiter.connection_id,
+        client_label: waiter.awaiter.client_label.clone(),
+        delivered: false,
+    };
+    if let Some(waiter) = anonymous.first() {
+        return Ok(vec![target(waiter)]);
+    }
+    Ok(named
+        .into_values()
+        .map(|waiters| target(waiters[0]))
+        .collect())
+}
+
+fn try_deliver_locked(
+    s: &mut SessionState,
+    connection_id: ConnectionId,
+) -> Option<Vec<DecisionEvent>> {
+    let receipt = s.send_receipt.as_mut()?;
+    let target_index = receipt
+        .targets
+        .iter()
+        .position(|target| !target.delivered && target.connection_id == Some(connection_id))?;
+    let target = &receipt.targets[target_index];
+    let end_cursor = receipt.end_cursor.min(s.decision_log.len());
+    let batch = match &target.key {
+        RecipientKey::Agent(agent) => {
+            let cursor = s
+                .agent_cursors
+                .get(agent)
+                .copied()
+                .unwrap_or(0)
+                .min(end_cursor);
+            let batch = s.decision_log[cursor..end_cursor]
+                .iter()
+                .filter(|event| addressed_to(event, agent))
+                .cloned()
+                .collect();
+            s.agent_cursors.insert(agent.clone(), end_cursor);
+            s.agent_flush.insert(agent.clone(), receipt.flush_seq);
+            batch
+        }
+        RecipientKey::Anonymous(_) => s.decision_log[s.delivery_cursor..end_cursor].to_vec(),
+    };
+    receipt.targets[target_index].delivered = true;
+    if receipt.targets.iter().all(|target| target.delivered) {
+        let actionable = s.decision_log.len() > receipt.end_cursor
+            || s.waiters.keys().any(|connection_id| {
+                !receipt
+                    .targets
+                    .iter()
+                    .any(|target| target.connection_id == Some(*connection_id))
+            });
+        s.delivery_cursor = receipt.end_cursor;
+        s.delivered_flush_seq = receipt.flush_seq;
+        s.pending_base =
+            (s.decision_log.len() > receipt.end_cursor).then(|| receipt.doc_at_send.clone());
+        s.queue_edit_error = None;
+        s.send_status = if actionable {
+            SendStatus::Idle
+        } else {
+            SendStatus::Sent
+        };
+        push_activity(s, ActivityOrigin::User, "sent decisions to Claude".into());
+    }
     Some(batch)
 }
 
@@ -1400,6 +1800,16 @@ fn addressed_to(event: &DecisionEvent, agent: &str) -> bool {
 }
 
 fn push_event(s: &mut SessionState, kind: DecisionKind) {
+    if matches!(s.send_status, SendStatus::Sent | SendStatus::Failed) {
+        s.send_status = SendStatus::Idle;
+        if s.send_receipt.as_ref().is_some_and(|receipt| {
+            !receipt.claimable
+                && !receipt.targets.is_empty()
+                && receipt.targets.iter().all(|target| target.delivered)
+        }) {
+            s.send_receipt = None;
+        }
+    }
     if s.decision_log.len() == s.delivery_cursor && s.pending_base.is_none() {
         s.pending_base = Some(s.doc.clone());
         s.queue_edit_error = None;
@@ -1724,13 +2134,55 @@ fn push_activity_as(
 /// explicit "Send to agent" click.
 fn autoflush(s: &mut SessionState) {
     if s.doc.open_choice_count() == 0 && s.delivery_cursor < s.decision_log.len() {
-        s.flush_seq += 1;
-        clear_undo(s); // delivered decisions are facts
-        push_activity(
-            s,
-            ActivityOrigin::System,
-            "all choices decided — sending to the agent".into(),
-        );
+        if s.send_receipt
+            .as_ref()
+            .is_some_and(|receipt| receipt.targets.iter().any(|target| !target.delivered))
+        {
+            return;
+        }
+        match validated_targets(s) {
+            Ok(targets) => {
+                s.flush_seq += 1;
+                s.send_receipt = Some(SendReceipt {
+                    flush_seq: s.flush_seq,
+                    end_cursor: s.decision_log.len(),
+                    doc_at_send: s.doc.clone(),
+                    targets,
+                    claimable: false,
+                });
+                s.send_status = SendStatus::Sending;
+                s.toast = None;
+                clear_undo(s);
+                push_activity(
+                    s,
+                    ActivityOrigin::System,
+                    "all choices decided — sending to the agent".into(),
+                );
+            }
+            Err(StoreError::NoWaitingClient) => {
+                s.flush_seq += 1;
+                s.send_receipt = Some(SendReceipt {
+                    flush_seq: s.flush_seq,
+                    end_cursor: s.decision_log.len(),
+                    doc_at_send: s.doc.clone(),
+                    targets: vec![],
+                    claimable: true,
+                });
+                clear_undo(s);
+                push_activity(
+                    s,
+                    ActivityOrigin::System,
+                    "all choices decided — sending to the agent".into(),
+                );
+            }
+            Err(err) => {
+                s.send_status = SendStatus::Failed;
+                s.toast = Some(UiToast {
+                    level: ToastLevel::Error,
+                    message: err.to_string(),
+                });
+            }
+        }
     }
 }
 
@@ -2385,19 +2837,29 @@ mod tests {
         );
     }
 
-    #[test]
-    fn flush_clears_stacks() {
+    #[tokio::test]
+    async fn flush_clears_stacks() {
         use crate::model::NodeKind;
         let store = demo_store();
         store
             .add_user_node("Widget".into(), NodeKind::Component, None)
             .unwrap();
         assert!(store.snapshot_meta().undo_available);
-        store.request_flush(None);
+        let waiting = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .await_flush(Duration::from_secs(30), awaiter(100, None))
+                    .await
+            }
+        });
+        wait_until(&store, 1).await;
+        store.request_flush(None).unwrap();
         let meta = store.snapshot_meta();
         assert!(!meta.undo_available, "delivered decisions are facts");
         assert!(!meta.redo_available);
         assert!(!store.undo(), "nothing to undo after a flush");
+        waiting.await.unwrap().unwrap();
     }
 
     #[test]
@@ -2734,6 +3196,306 @@ mod tests {
             .unwrap();
     }
 
+    fn awaiter(id: u64, agent: Option<&str>) -> Awaiter {
+        Awaiter {
+            connection_id: ConnectionId(id),
+            client_label: format!("Claude {id}"),
+            agent: agent.map(str::to_owned),
+        }
+    }
+
+    async fn wait_until(store: &Arc<Store>, count: usize) {
+        for _ in 0..50 {
+            if store.snapshot_meta().waiting_agents == count {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+        panic!(
+            "expected {count} waiters, got {}",
+            store.snapshot_meta().waiting_agents
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_send_rejects_no_waiter_without_consuming_queue() {
+        let store = demo_store();
+        pick_first_choice(&store);
+        let before = store.peek_undelivered();
+
+        let err = store.request_flush(None).unwrap_err();
+
+        assert!(matches!(err, StoreError::NoWaitingClient));
+        assert_eq!(store.peek_undelivered(), before);
+        assert_eq!(store.snapshot_meta().send_status, SendStatus::Failed);
+        assert!(
+            store
+                .snapshot_meta()
+                .toast
+                .unwrap()
+                .message
+                .contains("waiting")
+        );
+        let guard = WaitGuard::enter(store.clone(), awaiter(99, None)).unwrap();
+        assert_eq!(store.snapshot_meta().send_status, SendStatus::Idle);
+        assert!(store.snapshot_meta().toast.is_some());
+        store.dismiss_toast();
+        assert!(store.snapshot_meta().toast.is_none());
+        drop(guard);
+    }
+
+    #[tokio::test]
+    async fn explicit_send_rejects_duplicate_agent_claims() {
+        let store = demo_store();
+        pick_first_choice(&store);
+        let a = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .await_flush(Duration::from_secs(30), awaiter(1, Some("alpha")))
+                    .await
+            }
+        });
+        let b = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .await_flush(Duration::from_secs(30), awaiter(2, Some("alpha")))
+                    .await
+            }
+        });
+        wait_until(&store, 2).await;
+
+        let err = store.request_flush(None).unwrap_err();
+
+        assert!(matches!(err, StoreError::AmbiguousWaitingClients(_)));
+        assert_eq!(store.read(|s| s.delivery_cursor), 0);
+        a.abort();
+        b.abort();
+    }
+
+    #[tokio::test]
+    async fn second_await_on_same_connection_is_rejected_without_replacing_first() {
+        let store = demo_store();
+        pick_first_choice(&store);
+        let first = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .await_flush(Duration::from_secs(30), awaiter(3, Some("alpha")))
+                    .await
+            }
+        });
+        wait_until(&store, 1).await;
+
+        let error = tokio::time::timeout(
+            Duration::from_millis(50),
+            store.await_flush(Duration::from_secs(30), awaiter(3, Some("beta"))),
+        )
+        .await
+        .expect("a duplicate await is rejected immediately")
+        .expect_err("a connection may own only one active await");
+
+        assert!(matches!(error, StoreError::ConnectionAlreadyWaiting));
+        assert_eq!(store.snapshot_meta().waiting_agents, 1);
+        store.request_flush(None).expect("original waiter remains");
+        assert!(matches!(
+            first.await.expect("first task").expect("first result"),
+            FlushOutcome::Delivered(batch) if batch.len() == 1
+        ));
+        assert_eq!(store.read(|state| state.delivery_cursor), 1);
+    }
+
+    #[tokio::test]
+    async fn explicit_send_rejects_mixed_named_and_anonymous_waiters() {
+        let store = demo_store();
+        pick_first_choice(&store);
+        let named = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .await_flush(Duration::from_secs(30), awaiter(1, Some("alpha")))
+                    .await
+            }
+        });
+        let anonymous = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .await_flush(Duration::from_secs(30), awaiter(2, None))
+                    .await
+            }
+        });
+        wait_until(&store, 2).await;
+
+        assert!(matches!(
+            store.request_flush(None).unwrap_err(),
+            StoreError::AmbiguousWaitingClients(_)
+        ));
+        named.abort();
+        anonymous.abort();
+    }
+
+    #[tokio::test]
+    async fn receipt_excludes_edits_created_after_send() {
+        let store = demo_store();
+        pick_first_choice(&store);
+        let waiting = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .await_flush(Duration::from_secs(30), awaiter(1, None))
+                    .await
+            }
+        });
+        wait_until(&store, 1).await;
+        store.request_flush(None).unwrap();
+        store.add_annotation(AnnotationKind::Note, 1.0, 2.0, 0.0, 0.0, "later".into());
+
+        let FlushOutcome::Delivered(batch) = waiting.await.unwrap().unwrap() else {
+            panic!("expected delivery");
+        };
+        assert_eq!(
+            batch.len(),
+            1,
+            "post-send annotation stays out of the receipt"
+        );
+        assert_eq!(
+            store.peek_undelivered().len(),
+            1,
+            "later edit remains queued"
+        );
+        assert_eq!(store.snapshot_meta().send_status, SendStatus::Idle);
+    }
+
+    #[test]
+    fn removing_post_send_edit_preserves_active_receipt_claim() {
+        let store = demo_store();
+        pick_first_choice(&store);
+        let guard = WaitGuard::enter(store.clone(), awaiter(20, None)).unwrap();
+        store.request_flush(None).unwrap();
+        store.add_annotation(AnnotationKind::Note, 1.0, 2.0, 0.0, 0.0, "later".into());
+
+        store.remove_queued_change(2).unwrap();
+
+        assert_eq!(store.read(|s| (s.flush_seq, s.delivered_flush_seq)), (1, 0));
+        assert!(store.try_deliver(ConnectionId(20)).is_some());
+        assert_eq!(store.read(|s| (s.flush_seq, s.delivered_flush_seq)), (1, 1));
+        drop(guard);
+    }
+
+    #[test]
+    fn autoflush_preserves_unfinished_explicit_receipt() {
+        let store = demo_store();
+        pick_first_choice(&store);
+        let alpha = WaitGuard::enter(store.clone(), awaiter(21, Some("alpha"))).unwrap();
+        store.request_flush(None).unwrap();
+        let beta = WaitGuard::enter(store.clone(), awaiter(22, Some("beta"))).unwrap();
+
+        store
+            .dismiss_choice(
+                &NodeId::from("ws-gateway"),
+                &ChoiceId::from("ws-deployment"),
+                None,
+            )
+            .unwrap();
+
+        let batch = store
+            .try_deliver(ConnectionId(21))
+            .expect("original target receives the active receipt");
+        assert_eq!(batch.len(), 1, "final choice stays out of active receipt");
+        assert!(matches!(batch[0].kind, DecisionKind::OptionSelected { .. }));
+        assert!(
+            store.try_deliver(ConnectionId(22)).is_none(),
+            "a later waiter is not added to the active receipt"
+        );
+        assert_eq!(store.read(|s| (s.flush_seq, s.delivery_cursor)), (1, 1));
+        assert!(matches!(
+            store.peek_undelivered().as_slice(),
+            [DecisionEvent {
+                kind: DecisionKind::ChoiceDismissed { .. },
+                ..
+            }]
+        ));
+
+        drop(alpha);
+        drop(beta);
+    }
+
+    #[test]
+    fn receipt_completion_is_idle_for_later_waiter() {
+        let store = demo_store();
+        pick_first_choice(&store);
+        let alpha = WaitGuard::enter(store.clone(), awaiter(23, Some("alpha"))).unwrap();
+        store.request_flush(None).unwrap();
+        let beta = WaitGuard::enter(store.clone(), awaiter(24, Some("beta"))).unwrap();
+
+        assert!(store.try_deliver(ConnectionId(23)).is_some());
+
+        assert_eq!(store.peek_undelivered().len(), 0);
+        assert_eq!(store.snapshot_meta().send_status, SendStatus::Idle);
+        drop(alpha);
+        drop(beta);
+    }
+
+    #[tokio::test]
+    async fn named_agent_reconnect_claims_orphaned_receipt() {
+        let store = demo_store();
+        pick_first_choice(&store);
+        let first = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .await_flush(Duration::from_secs(30), awaiter(1, Some("alpha")))
+                    .await
+            }
+        });
+        wait_until(&store, 1).await;
+        store.request_flush(None).unwrap();
+        first.abort();
+        let _ = first.await;
+        assert_eq!(store.snapshot_meta().send_status, SendStatus::Reconnecting);
+        assert_eq!(
+            store.reconnecting_targets(),
+            vec![ReconnectTarget {
+                connection_id: ConnectionId(1),
+                client_label: "Claude 1".into(),
+                agent: Some("alpha".into()),
+            }]
+        );
+
+        let recovered = store
+            .await_flush(Duration::from_secs(1), awaiter(2, Some("alpha")))
+            .await
+            .unwrap();
+        assert!(matches!(recovered, FlushOutcome::Delivered(_)));
+        assert_eq!(store.snapshot_meta().send_status, SendStatus::Sent);
+    }
+
+    #[tokio::test]
+    async fn sole_anonymous_reconnect_claims_orphaned_receipt() {
+        let store = demo_store();
+        pick_first_choice(&store);
+        let first = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .await_flush(Duration::from_secs(30), awaiter(10, None))
+                    .await
+            }
+        });
+        wait_until(&store, 1).await;
+        store.request_flush(None).unwrap();
+        first.abort();
+        let _ = first.await;
+
+        let recovered = store
+            .await_flush(Duration::from_secs(1), awaiter(11, None))
+            .await
+            .unwrap();
+        assert!(matches!(recovered, FlushOutcome::Delivered(_)));
+    }
+
     #[test]
     fn removing_an_earlier_queued_change_replays_later_changes() {
         let store = demo_store();
@@ -2891,24 +3653,34 @@ mod tests {
         assert_eq!(remaining[0].id, blocked[0].id);
     }
 
-    #[test]
-    fn removed_queue_items_are_never_delivered() {
+    #[tokio::test]
+    async fn removed_queue_items_are_never_delivered() {
         let store = demo_store();
         pick_first_choice(&store);
         store
             .add_note(&NodeId::from("sync-engine"), "keep cache local".into())
             .unwrap();
         store.remove_queued_change(1).unwrap();
-        store.request_flush(None);
-
-        let delivered = store.try_deliver(&None).unwrap();
+        let waiting = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .await_flush(Duration::from_secs(30), awaiter(101, None))
+                    .await
+            }
+        });
+        wait_until(&store, 1).await;
+        store.request_flush(None).unwrap();
+        let FlushOutcome::Delivered(delivered) = waiting.await.unwrap().unwrap() else {
+            panic!("expected delivery");
+        };
 
         assert_eq!(delivered.len(), 1);
         assert!(matches!(delivered[0].kind, DecisionKind::NoteAdded { .. }));
     }
 
-    #[test]
-    fn removing_after_autoflush_cancels_delivery_until_a_new_send() {
+    #[tokio::test]
+    async fn removing_after_autoflush_cancels_delivery_until_a_new_send() {
         let store = demo_store();
         pick_first_choice(&store);
         store
@@ -2921,12 +3693,20 @@ mod tests {
 
         store.remove_queued_change(1).unwrap();
 
-        assert!(
-            store.try_deliver(&None).is_none(),
-            "removal cancels autoflush"
-        );
-        store.request_flush(None);
-        let delivered = store.try_deliver(&None).expect("fresh send delivers");
+        assert!(store.read(|s| s.flush_seq == s.delivered_flush_seq));
+        let waiting = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .await_flush(Duration::from_secs(30), awaiter(102, None))
+                    .await
+            }
+        });
+        wait_until(&store, 1).await;
+        store.request_flush(None).unwrap();
+        let FlushOutcome::Delivered(delivered) = waiting.await.unwrap().unwrap() else {
+            panic!("expected delivery");
+        };
         assert_eq!(delivered.len(), 1);
         assert!(matches!(
             delivered[0].kind,
@@ -2934,19 +3714,17 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn removing_a_queued_comment_cancels_delivery_until_a_new_send() {
+    #[tokio::test]
+    async fn removing_a_queued_comment_is_blocked_while_delivering() {
         let store = demo_store();
-        store.request_flush(Some("hold for review".into()));
+        let guard = WaitGuard::enter(store.clone(), awaiter(103, None)).unwrap();
+        store.request_flush(Some("hold for review".into())).unwrap();
 
-        store.remove_queued_change(1).unwrap();
-
-        assert!(
-            store.try_deliver(&None).is_none(),
-            "removal cancels the comment send"
-        );
-        store.request_flush(None);
-        assert_eq!(store.try_deliver(&None), Some(vec![]));
+        assert!(matches!(
+            store.remove_queued_change(1),
+            Err(StoreError::QueuedBatchDelivering)
+        ));
+        drop(guard);
     }
 
     #[test]
@@ -2984,24 +3762,31 @@ mod tests {
         assert_eq!(store.snapshot_meta().open_choices, 1);
     }
 
-    #[test]
-    fn flush_delivers_exactly_once() {
+    #[tokio::test]
+    async fn flush_delivers_exactly_once() {
         let store = demo_store();
         pick_first_choice(&store);
-        store.request_flush(None);
-        let first = store.try_deliver(&None).expect("pending flush");
+        let guard = WaitGuard::enter(store.clone(), awaiter(104, None)).unwrap();
+        store.request_flush(None).unwrap();
+        let first = store.try_deliver(ConnectionId(104)).expect("pending flush");
         assert_eq!(first.len(), 1);
-        assert!(
-            store.try_deliver(&None).is_none(),
-            "second take gets nothing"
-        );
+        assert!(store.try_deliver(ConnectionId(104)).is_none());
+        drop(guard);
     }
 
-    #[test]
-    fn autoflush_fires_when_last_choice_closes() {
+    #[tokio::test]
+    async fn autoflush_fires_when_last_choice_closes() {
         let store = demo_store();
         pick_first_choice(&store);
-        assert!(store.try_deliver(&None).is_none(), "one choice still open");
+        let waiting = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .await_flush(Duration::from_secs(30), awaiter(105, None))
+                    .await
+            }
+        });
+        wait_until(&store, 1).await;
         store
             .dismiss_choice(
                 &NodeId::from("ws-gateway"),
@@ -3009,47 +3794,62 @@ mod tests {
                 None,
             )
             .unwrap();
-        let batch = store.try_deliver(&None).expect("autoflush fired");
+        let FlushOutcome::Delivered(batch) = waiting.await.unwrap().unwrap() else {
+            panic!("expected delivery");
+        };
         assert_eq!(batch.len(), 2);
     }
 
-    #[test]
-    fn empty_flush_still_delivers() {
+    #[tokio::test]
+    async fn empty_flush_still_delivers() {
         let store = demo_store();
-        store.request_flush(Some("looks good, proceed".into()));
-        let batch = store.try_deliver(&None).expect("flush pending");
+        let guard = WaitGuard::enter(store.clone(), awaiter(106, None)).unwrap();
+        store
+            .request_flush(Some("looks good, proceed".into()))
+            .unwrap();
+        let batch = store.try_deliver(ConnectionId(106)).expect("flush pending");
         assert_eq!(batch.len(), 1, "comment rides as an event");
         assert!(matches!(batch[0].kind, DecisionKind::FlushRequested { .. }));
+        drop(guard);
     }
 
     #[tokio::test(start_paused = true)]
-    async fn racing_awaits_deliver_to_exactly_one() {
+    async fn multiple_anonymous_awaits_reject_send() {
         let store = demo_store();
         pick_first_choice(&store);
 
         let a = tokio::spawn({
             let store = store.clone();
-            async move { store.await_flush(Duration::from_secs(5), None).await }
+            async move {
+                store
+                    .await_flush(Duration::from_secs(5), awaiter(107, None))
+                    .await
+            }
         });
         let b = tokio::spawn({
             let store = store.clone();
-            async move { store.await_flush(Duration::from_secs(5), None).await }
+            async move {
+                store
+                    .await_flush(Duration::from_secs(5), awaiter(108, None))
+                    .await
+            }
         });
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(store.snapshot_meta().waiting_agents, 2);
-        store.request_flush(None);
+        assert!(matches!(
+            store.request_flush(None),
+            Err(StoreError::AmbiguousWaitingClients(_))
+        ));
 
         let (ra, rb) = tokio::join!(a, b);
-        let outcomes = [ra.unwrap(), rb.unwrap()];
-        let delivered = outcomes
-            .iter()
-            .filter(|o| matches!(o, FlushOutcome::Delivered(_)))
-            .count();
-        let timed_out = outcomes
-            .iter()
-            .filter(|o| matches!(o, FlushOutcome::TimedOut { .. }))
-            .count();
-        assert_eq!((delivered, timed_out), (1, 1));
+        let outcomes = [ra.unwrap().unwrap(), rb.unwrap().unwrap()];
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|o| matches!(o, FlushOutcome::TimedOut { .. }))
+                .count(),
+            2
+        );
         assert_eq!(store.snapshot_meta().waiting_agents, 0, "guards released");
     }
 
@@ -3057,14 +3857,26 @@ mod tests {
     async fn timeout_preview_does_not_consume() {
         let store = demo_store();
         pick_first_choice(&store);
-        let outcome = store.await_flush(Duration::from_secs(1), None).await;
+        let outcome = store
+            .await_flush(Duration::from_secs(1), awaiter(109, None))
+            .await
+            .unwrap();
         match outcome {
             FlushOutcome::TimedOut { preview } => assert_eq!(preview.len(), 1),
             other => panic!("expected timeout, got {other:?}"),
         }
         // The decision was NOT consumed: a later flush delivers it.
-        store.request_flush(None);
-        let outcome = store.await_flush(Duration::from_secs(1), None).await;
+        let waiting = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .await_flush(Duration::from_secs(1), awaiter(110, None))
+                    .await
+            }
+        });
+        tokio::task::yield_now().await;
+        store.request_flush(None).unwrap();
+        let outcome = waiting.await.unwrap().unwrap();
         match outcome {
             FlushOutcome::Delivered(batch) => assert_eq!(batch.len(), 1),
             other => panic!("expected delivery, got {other:?}"),
@@ -3075,19 +3887,28 @@ mod tests {
     async fn flush_after_timeout_is_returned_by_next_call_instantly() {
         let store = demo_store();
         pick_first_choice(&store);
-        let FlushOutcome::TimedOut { .. } =
-            store.await_flush(Duration::from_millis(10), None).await
+        let FlushOutcome::TimedOut { .. } = store
+            .await_flush(Duration::from_millis(10), awaiter(111, None))
+            .await
+            .unwrap()
         else {
             panic!("expected timeout");
         };
-        store.request_flush(None);
-        // Next call must return without waiting: deliver on entry.
-        let outcome = tokio::time::timeout(
-            Duration::from_millis(1),
-            store.await_flush(Duration::from_secs(600), None),
-        )
-        .await
-        .expect("await_flush should return immediately");
+        let waiting = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .await_flush(Duration::from_secs(600), awaiter(112, None))
+                    .await
+            }
+        });
+        tokio::task::yield_now().await;
+        store.request_flush(None).unwrap();
+        let outcome = tokio::time::timeout(Duration::from_millis(1), waiting)
+            .await
+            .expect("await_flush should return immediately")
+            .unwrap()
+            .unwrap();
         assert!(matches!(outcome, FlushOutcome::Delivered(b) if b.len() == 1));
     }
 
@@ -3096,7 +3917,11 @@ mod tests {
         let store = demo_store();
         let fut = {
             let store = store.clone();
-            async move { store.await_flush(Duration::from_secs(60), None).await }
+            async move {
+                store
+                    .await_flush(Duration::from_secs(60), awaiter(113, None))
+                    .await
+            }
         };
         let handle = tokio::spawn(fut);
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -3641,16 +4466,18 @@ mod tests {
         );
         // alpha still receives the decision it originally owned…
         let FlushOutcome::Delivered(a_batch) = store
-            .await_flush(Duration::from_secs(1), Some("alpha".into()))
+            .await_flush(Duration::from_secs(1), awaiter(1, Some("alpha")))
             .await
+            .expect("alpha await")
         else {
             panic!("alpha not delivered");
         };
         assert_eq!(a_batch.len(), 1, "original author still gets the decision");
         // …and beta does not.
         let FlushOutcome::Delivered(b_batch) = store
-            .await_flush(Duration::from_secs(1), Some("beta".into()))
+            .await_flush(Duration::from_secs(1), awaiter(2, Some("beta")))
             .await
+            .expect("beta await")
         else {
             panic!("beta not delivered");
         };
@@ -3691,13 +4518,15 @@ mod tests {
         b.origin = Origin::Agent;
         b.agent = Some("beta".into());
         b.choices = vec![mk("cb")];
+        let mut gate = user_node("gate");
+        gate.choices = vec![mk("cg")];
         let store = Store::with_doc(SessionDoc {
-            nodes: vec![a, b],
+            nodes: vec![a, b, gate],
             ..Default::default()
         });
 
-        // An unclaimed annotation plus a decision on each agent's node; the
-        // last decision autoflushes.
+        // An unclaimed annotation plus a decision on each agent's node. The
+        // user-owned gate remains open so this batch waits for explicit Send.
         store.add_annotation(AnnotationKind::Note, 0.0, 0.0, 0.0, 0.0, "shared".into());
         store
             .select_option(
@@ -3718,16 +4547,30 @@ mod tests {
 
         // Both agents await the SAME session; each gets its own slice plus the
         // unclaimed annotation — concurrent awaits are legal.
-        let FlushOutcome::Delivered(a_batch) = store
-            .await_flush(Duration::from_secs(1), Some("alpha".into()))
-            .await
-        else {
+        let alpha = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .await_flush(Duration::from_secs(30), awaiter(1, Some("alpha")))
+                    .await
+            }
+        });
+        let beta = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .await_flush(Duration::from_secs(30), awaiter(2, Some("beta")))
+                    .await
+            }
+        });
+        wait_until(&store, 2).await;
+        store.request_flush(None).unwrap();
+        assert_eq!(store.snapshot_meta().send_status, SendStatus::Sending);
+        let (a_outcome, b_outcome) = tokio::join!(alpha, beta);
+        let FlushOutcome::Delivered(a_batch) = a_outcome.unwrap().unwrap() else {
             panic!("alpha not delivered");
         };
-        let FlushOutcome::Delivered(b_batch) = store
-            .await_flush(Duration::from_secs(1), Some("beta".into()))
-            .await
-        else {
+        let FlushOutcome::Delivered(b_batch) = b_outcome.unwrap().unwrap() else {
             panic!("beta not delivered");
         };
         let picked_nodes = |batch: &[DecisionEvent]| {
@@ -3752,15 +4595,25 @@ mod tests {
             has_anno(&a_batch) && has_anno(&b_batch),
             "unclaimed reaches everyone"
         );
+        assert_eq!(store.snapshot_meta().send_status, SendStatus::Sent);
+        assert!(store.try_deliver(ConnectionId(1)).is_none());
+    }
 
-        // Exactly-once per agent: alpha's second attempt on the same flush is empty.
-        assert!(store.try_deliver(&Some("alpha".into())).is_none());
-        // The default (unnamed) path is unaffected and still delivers the whole batch.
-        let FlushOutcome::Delivered(all) = store.await_flush(Duration::from_secs(1), None).await
-        else {
-            panic!("default not delivered");
-        };
-        assert_eq!(all.len(), 3, "default agent gets everything");
+    #[test]
+    fn send_status_stays_sending_until_every_target_finishes() {
+        let store = demo_store();
+        pick_first_choice(&store);
+        let alpha = WaitGuard::enter(store.clone(), awaiter(201, Some("alpha"))).unwrap();
+        let beta = WaitGuard::enter(store.clone(), awaiter(202, Some("beta"))).unwrap();
+        store.request_flush(None).unwrap();
+
+        assert!(store.try_deliver(ConnectionId(201)).is_some());
+        assert_eq!(store.snapshot_meta().send_status, SendStatus::Sending);
+        assert!(store.try_deliver(ConnectionId(202)).is_some());
+        assert_eq!(store.snapshot_meta().send_status, SendStatus::Sent);
+
+        drop(alpha);
+        drop(beta);
     }
 
     fn ask(store: &Arc<Store>, id: &str, node: Option<&str>) {

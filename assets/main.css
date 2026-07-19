@@ -356,6 +356,18 @@ body {
   box-shadow: 0 0 12px var(--glow);
 }
 
+.btn-send.sent {
+  background: var(--badge-decided);
+  border-color: var(--badge-decided);
+  color: var(--on-badge);
+}
+
+.btn-send.failed {
+  background: var(--status-removed);
+  border-color: var(--status-removed);
+  color: var(--on-badge);
+}
+
 .btn-ghost {
   background: transparent;
   color: var(--text-dim);
@@ -1248,6 +1260,90 @@ fieldset.agent-launch-options {
 
 .export-menu {
   position: relative;
+}
+
+.connection-pod {
+  position: relative;
+}
+
+.connection-toggle {
+  min-width: 38px;
+  justify-content: center;
+}
+
+.connection-dot {
+  color: var(--text-dim);
+}
+
+.connection-dot.live {
+  color: var(--badge-decided);
+}
+
+.connection-pop {
+  right: 0;
+  min-width: min(280px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+}
+
+.connection-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 12px;
+  padding: 8px 10px;
+}
+
+.connection-client {
+  overflow-wrap: anywhere;
+}
+
+.connection-meta {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.connection-state {
+  color: var(--badge-decided);
+  font-size: 11px;
+  text-align: right;
+}
+
+.connection-state.reconnecting {
+  color: var(--badge-open);
+}
+
+.delivery-toast {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 30;
+  display: flex;
+  align-items: start;
+  gap: 12px;
+  max-width: min(440px, calc(100vw - 36px));
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-panel);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--shadow) 40%, transparent);
+}
+
+.delivery-toast-warning {
+  color: var(--badge-open);
+}
+
+.delivery-toast-error {
+  color: var(--status-removed);
+}
+
+.delivery-toast button {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
 }
 
 .export-dropdown {
@@ -2877,6 +2973,10 @@ fieldset.agent-launch-options {
 }
 
 @container topbar (max-width: 600px) {
+  .connection-count {
+    display: none;
+  }
+
   .seg-word {
     display: none;
   }

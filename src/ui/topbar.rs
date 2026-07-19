@@ -1,17 +1,103 @@
 //! Top bar: brand, session switcher, search, the fused status chip, the
 //! action pods, the ⋯ More menu mount, and the Send-to-agent control.
 
+use std::sync::Arc;
+
 use dioxus::prelude::*;
 
 use crate::model::{NodeId, NodeKind, SessionDoc};
-use crate::store::UiMeta;
+use crate::sessions::{ConnectionInfo, ConnectionState};
+use crate::store::{SendStatus, Store, UiMeta};
 
 use super::app::use_store;
+
+fn send_succeeded<E>(result: Result<(), E>) -> bool {
+    result.is_ok()
+}
+
+fn send_label(status: SendStatus) -> &'static str {
+    match status {
+        SendStatus::Idle => "Send",
+        SendStatus::Sending => "Sending...",
+        SendStatus::Sent => "Sent",
+        SendStatus::Reconnecting => "Reconnecting...",
+        SendStatus::Failed => "Failed - Retry",
+    }
+}
+
+fn connection_state_label(state: &ConnectionState) -> String {
+    let scoped = |label: &str, session: &str, agent: &Option<String>| match agent {
+        Some(agent) => format!("{label} · {session} · {agent}"),
+        None => format!("{label} · {session}"),
+    };
+    match state {
+        ConnectionState::Connected => "Connected".into(),
+        ConnectionState::Waiting { session, agent } => scoped("Waiting", session, agent),
+        ConnectionState::Receiving { session, agent } => scoped("Receiving", session, agent),
+        ConnectionState::Reconnecting { session, agent } => scoped("Reconnecting", session, agent),
+    }
+}
+
+fn submit_send(store: &Arc<Store>, mut comment: Signal<String>, mut compose_open: Signal<bool>) {
+    let text = comment.read().trim().to_owned();
+    if send_succeeded(store.request_flush((!text.is_empty()).then_some(text))) {
+        comment.set(String::new());
+        compose_open.set(false);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{connection_state_label, send_label, send_succeeded};
+    use crate::sessions::ConnectionState;
+    use crate::store::SendStatus;
+
+    #[test]
+    fn send_error_preserves_the_draft() {
+        assert!(send_succeeded(Ok::<(), ()>(())), "success clears the draft");
+        assert!(
+            !send_succeeded(Err::<(), ()>(())),
+            "failure preserves the draft"
+        );
+    }
+
+    #[test]
+    fn send_labels_are_receipt_driven() {
+        assert_eq!(send_label(SendStatus::Idle), "Send");
+        assert_eq!(send_label(SendStatus::Sending), "Sending...");
+        assert_eq!(send_label(SendStatus::Sent), "Sent");
+        assert_eq!(send_label(SendStatus::Reconnecting), "Reconnecting...");
+        assert_eq!(send_label(SendStatus::Failed), "Failed - Retry");
+    }
+
+    #[test]
+    fn connection_labels_name_state_session_and_agent() {
+        assert_eq!(
+            connection_state_label(&ConnectionState::Connected),
+            "Connected"
+        );
+        assert_eq!(
+            connection_state_label(&ConnectionState::Waiting {
+                session: "plan".into(),
+                agent: Some("alpha".into()),
+            }),
+            "Waiting · plan · alpha"
+        );
+        assert_eq!(
+            connection_state_label(&ConnectionState::Reconnecting {
+                session: "plan".into(),
+                agent: None,
+            }),
+            "Reconnecting · plan"
+        );
+    }
+}
 
 #[component]
 pub fn TopBar(
     doc: Signal<SessionDoc>,
     meta: Signal<UiMeta>,
+    connections: Signal<Vec<ConnectionInfo>>,
     selected: Signal<Option<NodeId>>,
     session_name: Signal<String>,
     timeline_open: Signal<bool>,
@@ -29,6 +115,7 @@ pub fn TopBar(
     let mut manage_open = use_signal(|| false);
     let mut delete_pending = use_signal(|| false);
     let mut launcher_open = use_context::<super::AgentLauncherOpen>().0;
+    let mut connections_open = use_signal(|| false);
     let mut compare_with = use_context::<super::CompareWith>().0;
     let d = doc.read();
     let m = meta.read();
@@ -47,7 +134,19 @@ pub fn TopBar(
     } else {
         d.title.clone()
     };
-    let can_send = m.undelivered > 0 || m.waiting_agents > 0;
+    let can_send = (m.undelivered > 0 || m.waiting_agents > 0)
+        && matches!(m.send_status, SendStatus::Idle | SendStatus::Failed);
+    let send_text = send_label(m.send_status);
+    let send_class = match m.send_status {
+        SendStatus::Sent => "btn btn-send sent",
+        SendStatus::Failed => "btn btn-send failed",
+        _ => "btn btn-send",
+    };
+    let connection_rows = connections.read().clone();
+    let live_connections = connection_rows
+        .iter()
+        .filter(|connection| !matches!(connection.state, ConnectionState::Reconnecting { .. }))
+        .count();
     // Blocked replay entries are also actionable queued changes, even though
     // they cannot be sent; retain access to their remove/edit controls.
     let queued_count = store.queued_changes().len();
@@ -577,18 +676,13 @@ pub fn TopBar(
                             oninput: move |ev| comment.set(ev.value()),
                         }
                         button {
-                            class: "btn btn-send",
+                            class: send_class,
                             disabled: !can_send,
                             onclick: {
                                 let store = store.clone();
-                                move |_| {
-                                    let text = comment.read().trim().to_owned();
-                                    store.request_flush(if text.is_empty() { None } else { Some(text) });
-                                    comment.set(String::new());
-                                    compose_open.set(false);
-                                }
+                                move |_| submit_send(&store, comment, compose_open)
                             },
-                            "Send with message"
+                            "{send_text}"
                         }
                     }
                 }
@@ -599,21 +693,62 @@ pub fn TopBar(
                 value: "{comment}",
                 oninput: move |ev| comment.set(ev.value()),
             }
+            div { class: "export-menu connection-pod",
+                button {
+                    class: "btn connection-toggle",
+                    aria_label: "Claude MCP connections",
+                    title: if live_connections > 0 {
+                        format!("{live_connections} connected Claude MCP client(s)")
+                    } else {
+                        "No connected Claude MCP clients".to_owned()
+                    },
+                    onclick: move |_| connections_open.toggle(),
+                    span {
+                        class: if live_connections > 0 { "connection-dot live" } else { "connection-dot" },
+                        "●"
+                    }
+                    span { class: "connection-count", "{live_connections}" }
+                }
+                if connections_open() {
+                    div {
+                        class: "menu-catcher",
+                        onclick: move |_| connections_open.set(false),
+                    }
+                    div { class: "export-dropdown connection-pop",
+                        for connection in connection_rows {
+                            {
+                                let state = connection_state_label(&connection.state);
+                                let state_class = if matches!(
+                                    connection.state,
+                                    ConnectionState::Reconnecting { .. }
+                                ) {
+                                    "connection-state reconnecting"
+                                } else {
+                                    "connection-state"
+                                };
+                                rsx! {
+                                    div { key: "{connection.id.0}", class: "connection-row",
+                                        span { class: "connection-client", "{connection.client_name}" }
+                                        span { class: state_class, "{state}" }
+                                        span { class: "connection-meta", "{connection.version}" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             button {
-                class: "btn btn-send",
+                class: send_class,
                 disabled: !can_send,
                 aria_label: "Send to agent",
                 title: "Deliver your decisions and notes to the waiting agent",
                 onclick: {
                     let store = store.clone();
-                    move |_| {
-                        let text = comment.read().trim().to_owned();
-                        store.request_flush(if text.is_empty() { None } else { Some(text) });
-                        comment.set(String::new());
-                    }
+                    move |_| submit_send(&store, comment, compose_open)
                 },
                 span { class: "send-bolt", "ϟ" }
-                "Send"
+                "{send_text}"
             }
         }
     }

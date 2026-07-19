@@ -198,6 +198,20 @@ you work in another**: every MCP tool takes an optional `session` name
 names, and `list_sessions` shows what exists. Only you switch what's on
 screen.
 
+The top-bar **Claude** indicator lists every live MCP transport and, when
+it is waiting, its named brainstorm and agent id. **Send** routes each
+queued decision slice only to its single unambiguous matching waiter;
+duplicate or anonymous ambiguity consumes nothing and can show **Failed -
+Retry** before a receipt starts. Once started, **Sending...** remains until
+every intended recipient consumes the receipt, unless an intended recipient
+disconnects (**Reconnecting...**). After all consume, it shows **Sent** only
+when nothing newer is actionable; newer queued decisions or another waiter
+that became actionable during delivery return it to **Send**. Status never
+changes on a timer. If a named agent disconnects during delivery, its
+decisions stay queued and delivery resumes when the same agent id reconnects.
+A rejected or interrupted Send also preserves the optional comment, and its
+concrete error appears in a dismissible toast.
+
 ![Creating sessions, switching between them, and comparing with Timeline view](docs/demo/05-sessions.gif)
 
 The menu's Manage block also **renames** the active session (the file

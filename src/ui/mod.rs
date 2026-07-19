@@ -59,6 +59,10 @@ use crate::store::Store;
 // Context wrappers: distinct types so same-shaped signals can coexist in
 // Dioxus's type-keyed context.
 
+/// Store identity paired with the snapshots currently rendered by [`app::App`].
+#[derive(Clone, Copy)]
+pub(crate) struct ActiveStore(pub Signal<Arc<Store>>);
+
 /// Connect mode: `Some(source)` while the user is picking a target card.
 #[derive(Clone, Copy)]
 pub(crate) struct ConnectFrom(pub Signal<Option<NodeId>>);

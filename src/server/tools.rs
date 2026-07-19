@@ -4,7 +4,9 @@
 //! nothing about MCP, which keeps it unit-testable and shields the rest of
 //! the crate from SDK churn.
 
+use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use rmcp::handler::server::wrapper::Parameters;
@@ -17,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use crate::model::{DecisionEvent, Edge, GraphOp, Node, NodeId, SessionDoc};
-use crate::store::{FlushOutcome, Store, StoreError, UpdateSummary};
+use crate::store::{Awaiter, ConnectionId, FlushOutcome, Store, StoreError, UpdateSummary};
 
 /// Progress heartbeat cadence while an `await_decisions` call blocks. Keeps
 /// Claude Code's HTTP idle-abort (default 5 min) from killing the call.
@@ -28,14 +30,77 @@ const HEARTBEAT_EVERY: Duration = Duration::from_secs(25);
 const DEFAULT_AWAIT_SECS: u64 = 240;
 const MAX_AWAIT_SECS: u64 = 3600;
 
-#[derive(Clone)]
-pub struct NodestormServer {
+struct ConnectionLease {
+    id: ConnectionId,
+    sessions: Arc<crate::sessions::Sessions>,
+    initialized: AtomicBool,
+    awaiting: AtomicBool,
+    transport_cancel: CancellationToken,
+}
+
+impl Drop for ConnectionLease {
+    fn drop(&mut self) {
+        if self.initialized.load(Ordering::Acquire) {
+            self.sessions.disconnect_client(self.id);
+        }
+    }
+}
+
+struct ConnectionStateGuard {
+    id: ConnectionId,
     sessions: Arc<crate::sessions::Sessions>,
 }
 
+struct ActiveAwaitGuard {
+    connection: Arc<ConnectionLease>,
+}
+
+impl ActiveAwaitGuard {
+    fn enter(connection: Arc<ConnectionLease>) -> Result<Self, ErrorData> {
+        connection
+            .awaiting
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| store_err(StoreError::ConnectionAlreadyWaiting))?;
+        Ok(Self { connection })
+    }
+}
+
+impl Drop for ActiveAwaitGuard {
+    fn drop(&mut self) {
+        self.connection.awaiting.store(false, Ordering::Release);
+    }
+}
+
+impl Drop for ConnectionStateGuard {
+    fn drop(&mut self) {
+        self.sessions.set_connection_connected(self.id);
+    }
+}
+
+#[derive(Clone)]
+pub struct NodestormServer {
+    sessions: Arc<crate::sessions::Sessions>,
+    transport_connections: Arc<super::TransportConnections>,
+    connection: Arc<ConnectionLease>,
+}
+
 impl NodestormServer {
-    pub fn new(sessions: Arc<crate::sessions::Sessions>) -> Self {
-        Self { sessions }
+    pub(super) fn new(
+        sessions: Arc<crate::sessions::Sessions>,
+        transport_connections: Arc<super::TransportConnections>,
+    ) -> Self {
+        let id = sessions.next_connection_id();
+        Self {
+            sessions: sessions.clone(),
+            transport_connections,
+            connection: Arc::new(ConnectionLease {
+                id,
+                sessions,
+                initialized: AtomicBool::new(false),
+                awaiting: AtomicBool::new(false),
+                transport_cancel: CancellationToken::new(),
+            }),
+        }
     }
 
     /// Route a tool call to its session's store: `None` → the active
@@ -104,8 +169,8 @@ pub struct AwaitDecisionsParams {
     /// simply call this tool again — decisions are never lost.
     #[serde(default = "default_await_secs")]
     pub timeout_seconds: u64,
-    /// Named session to wait on — waits on different sessions run
-    /// concurrently. Omit for the active one.
+    /// Named session to wait on. Different Claude connections can wait on
+    /// different sessions concurrently. Omit for the active one.
     #[serde(default)]
     pub session: Option<String>,
     /// Your agent id in a multi-agent session. You receive only decisions
@@ -234,6 +299,26 @@ fn json_result<S: Serialize>(value: S) -> Result<CallToolResult, ErrorData> {
     Ok(CallToolResult::success(vec![ContentBlock::json(value)?]))
 }
 
+async fn await_with_cancellation<F>(
+    await_flush: F,
+    request_cancel: &CancellationToken,
+    transport_cancel: &CancellationToken,
+) -> Result<FlushOutcome, ErrorData>
+where
+    F: Future<Output = Result<FlushOutcome, StoreError>>,
+{
+    tokio::select! {
+        biased;
+        () = request_cancel.cancelled() => {
+            Err(ErrorData::internal_error("request cancelled", None))
+        }
+        () = transport_cancel.cancelled() => {
+            Err(ErrorData::internal_error("transport disconnected", None))
+        }
+        outcome = await_flush => outcome.map_err(store_err),
+    }
+}
+
 // ---------- tools ----------
 
 #[tool_router]
@@ -314,16 +399,28 @@ impl NodestormServer {
         Parameters(p): Parameters<AwaitDecisionsParams>,
         meta: Meta,
         client: Peer<RoleServer>,
+        request_cancel: CancellationToken,
     ) -> Result<CallToolResult, ErrorData> {
         let timeout = Duration::from_secs(p.timeout_seconds.clamp(5, MAX_AWAIT_SECS));
 
-        let (_, session_store) = self.session_and_store(&p.session)?;
+        let (session, session_store) = self.session_and_store(&p.session)?;
+        let info = self
+            .sessions
+            .connection(self.connection.id)
+            .ok_or_else(|| ErrorData::internal_error("MCP client is not initialized", None))?;
+        let _await_guard = ActiveAwaitGuard::enter(self.connection.clone())?;
+        self.sessions
+            .set_connection_waiting(self.connection.id, session.clone(), p.agent.clone());
+        let _state_guard = ConnectionStateGuard {
+            id: self.connection.id,
+            sessions: self.sessions.clone(),
+        };
 
         // Best-effort heartbeat so long waits survive client idle-abort.
-        let cancel = CancellationToken::new();
+        let heartbeat_cancel = CancellationToken::new();
         if let Some(token) = meta.get_progress_token() {
             let store = session_store.clone();
-            let cancel = cancel.clone();
+            let heartbeat_cancel = heartbeat_cancel.clone();
             tokio::spawn(async move {
                 let mut elapsed = 0u64;
                 loop {
@@ -334,7 +431,7 @@ impl NodestormServer {
                         break;
                     }
                     tokio::select! {
-                        () = cancel.cancelled() => break,
+                        () = heartbeat_cancel.cancelled() => break,
                         () = tokio::time::sleep(HEARTBEAT_EVERY) => {
                             elapsed += HEARTBEAT_EVERY.as_secs();
                         }
@@ -343,16 +440,37 @@ impl NodestormServer {
             });
         }
 
-        let outcome = session_store.await_flush(timeout, p.agent.clone()).await;
-        cancel.cancel();
+        let await_flush = session_store.await_flush(
+            timeout,
+            Awaiter {
+                connection_id: self.connection.id,
+                client_label: format!("{} {}", info.client_name, info.version),
+                agent: p.agent.clone(),
+            },
+        );
+        let outcome = await_with_cancellation(
+            await_flush,
+            &request_cancel,
+            &self.connection.transport_cancel,
+        )
+        .await;
+        heartbeat_cancel.cancel();
+        let outcome = outcome?;
 
         let (open, revision) = session_store.read(|s| (s.doc.open_choice_count(), s.doc.revision));
         match outcome {
-            FlushOutcome::Delivered(decisions) => json_result(AwaitResult::Delivered {
-                decisions,
-                open_choice_count: open,
-                revision,
-            }),
+            FlushOutcome::Delivered(decisions) => {
+                self.sessions.set_connection_receiving(
+                    self.connection.id,
+                    session,
+                    p.agent.clone(),
+                );
+                json_result(AwaitResult::Delivered {
+                    decisions,
+                    open_choice_count: open,
+                    revision,
+                })
+            }
             FlushOutcome::TimedOut { preview } => json_result(AwaitResult::Timeout {
                 decisions_so_far: preview,
                 open_choice_count: open,
@@ -485,6 +603,31 @@ impl NodestormServer {
 
 #[tool_handler]
 impl ServerHandler for NodestormServer {
+    async fn on_initialized(&self, context: rmcp::service::NotificationContext<RoleServer>) {
+        let Some(info) = context.peer.peer_info() else {
+            return;
+        };
+        if !self.connection.initialized.swap(true, Ordering::AcqRel) {
+            self.sessions.connect_client(
+                self.connection.id,
+                info.client_info.name.clone(),
+                info.client_info.version.clone(),
+            );
+            if let Some(session_id) = context
+                .extensions
+                .get::<axum::http::request::Parts>()
+                .and_then(|parts| parts.headers.get(super::HEADER_SESSION_ID))
+                .and_then(|value| value.to_str().ok())
+            {
+                self.transport_connections.connect(
+                    session_id.to_owned(),
+                    self.connection.id,
+                    self.connection.transport_cancel.clone(),
+                );
+            }
+        }
+    }
+
     fn get_info(&self) -> ServerInfo {
         let mut info = ServerInfo::default();
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
@@ -505,5 +648,67 @@ impl ServerHandler for NodestormServer {
                 .into(),
         );
         info
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::AnnotationKind;
+    use crate::store::{SendStatus, SessionState};
+
+    #[tokio::test]
+    async fn ready_cancellation_does_not_consume_a_ready_receipt() {
+        let store = Store::new(SessionState::default());
+        store.add_annotation(AnnotationKind::Note, 0.0, 0.0, 0.0, 0.0, "ready".into());
+        let first = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .await_flush(
+                        Duration::from_secs(30),
+                        Awaiter {
+                            connection_id: ConnectionId(1),
+                            client_label: "Claude alpha".into(),
+                            agent: Some("alpha".into()),
+                        },
+                    )
+                    .await
+            }
+        });
+        while store.snapshot_meta().waiting_agents != 1 {
+            tokio::task::yield_now().await;
+        }
+        store.request_flush(None).expect("create active receipt");
+        first.abort();
+        let _ = first.await;
+        assert_eq!(store.snapshot_meta().send_status, SendStatus::Reconnecting);
+
+        let request_cancel = CancellationToken::new();
+        request_cancel.cancel();
+        let transport_cancel = CancellationToken::new();
+        let result = await_with_cancellation(
+            store.await_flush(
+                Duration::from_secs(30),
+                Awaiter {
+                    connection_id: ConnectionId(2),
+                    client_label: "Claude alpha reconnected".into(),
+                    agent: Some("alpha".into()),
+                },
+            ),
+            &request_cancel,
+            &transport_cancel,
+        )
+        .await;
+
+        assert!(
+            result
+                .expect_err("ready cancellation wins")
+                .to_string()
+                .contains("request cancelled")
+        );
+        assert_eq!(store.read(|state| state.delivery_cursor), 0);
+        assert_eq!(store.snapshot_meta().waiting_agents, 0);
+        assert_eq!(store.snapshot_meta().send_status, SendStatus::Reconnecting);
     }
 }

@@ -14,6 +14,7 @@ use crate::cli::Cli;
 use crate::layout::{self, Layout};
 use crate::model::NodeId;
 use crate::sessions::Sessions;
+use crate::store::ToastLevel;
 
 use super::activity::ActivityFeed;
 use super::agent_launcher::AgentLauncher;
@@ -29,9 +30,17 @@ use super::topbar::TopBar;
 pub fn App() -> Element {
     let cli = use_context::<Cli>();
     let sessions = use_context::<Arc<Sessions>>();
-    let mut doc = use_signal(|| sessions.active_store().snapshot_doc());
-    let mut meta = use_signal(|| sessions.active_store().snapshot_meta());
-    let mut session_name = use_signal(|| sessions.active_name());
+    let (initial_name, initial_store) = sessions
+        .resolve_named(None)
+        .expect("active session always exists");
+    let initial_doc = initial_store.snapshot_doc();
+    let initial_meta = initial_store.snapshot_meta();
+    let mut active_store =
+        use_context_provider(move || super::ActiveStore(Signal::new(initial_store))).0;
+    let mut doc = use_signal(move || initial_doc);
+    let mut meta = use_signal(move || initial_meta);
+    let mut session_name = use_signal(move || initial_name);
+    let mut connections = use_signal(|| sessions.connections());
 
     // Cross-component signals (topbar, panel, and canvas all touch them),
     // wrapped in newtypes because context is type-keyed.
@@ -70,6 +79,22 @@ pub fn App() -> Element {
     let mut queued_changes_open: Signal<bool> = use_signal(|| false);
     let mut questions_open: Signal<bool> = use_signal(|| false);
 
+    // Connection changes are independent of active-session generation so
+    // transport churn never resets canvas selection or panel state.
+    use_future({
+        let sessions = sessions.clone();
+        move || {
+            let sessions = sessions.clone();
+            async move {
+                let mut changes = sessions.subscribe_connections();
+                connections.set(sessions.connections());
+                while changes.changed().await.is_ok() {
+                    connections.set(sessions.connections());
+                }
+            }
+        }
+    });
+
     // Store → UI bridge: revision changes re-snapshot; generation changes
     // re-subscribe to the new active store and reset per-session view state.
     use_future({
@@ -79,11 +104,14 @@ pub fn App() -> Element {
             async move {
                 let mut generation = sessions.subscribe_generation();
                 loop {
-                    let store = sessions.active_store();
+                    let (name, store) = sessions
+                        .resolve_named(None)
+                        .expect("active session always exists");
+                    let mut rev = store.subscribe();
                     doc.set(store.snapshot_doc());
                     meta.set(store.snapshot_meta());
-                    session_name.set(sessions.active_name());
-                    let mut rev = store.subscribe();
+                    session_name.set(name);
+                    active_store.set(store.clone());
                     loop {
                         tokio::select! {
                             changed = rev.changed() => {
@@ -137,7 +165,7 @@ pub fn App() -> Element {
             class: "app",
             "data-theme": "{theme_prefs.read().theme}",
             "data-mode": "{theme_prefs.read().mode.as_str()}",
-            TopBar { doc, meta, selected, session_name, timeline_open, queued_changes_open, questions_open }
+            TopBar { doc, meta, connections, selected, session_name, timeline_open, queued_changes_open, questions_open }
             div { class: "main",
                 if has_nodes {
                     Canvas { doc, layout, selected, hovered_affects }
@@ -157,13 +185,13 @@ pub fn App() -> Element {
                                 class: "empty-cmd",
                                 title: "Copy the connect command",
                                 onclick: {
-                                    let sessions = sessions.clone();
+                                    let store = active_store.read().clone();
                                     let cmd = format!(
                                         "claude mcp add --transport http nodestorm {mcp_url}"
                                     );
                                     move |_| {
                                         super::copy_to_clipboard(
-                                            &sessions.active_store(),
+                                            &store,
                                             cmd.clone(),
                                             "copied the connect command",
                                         );
@@ -200,11 +228,29 @@ pub fn App() -> Element {
             if launcher_open() {
                 AgentLauncher {}
             }
+            if let Some(toast) = meta.read().toast.clone() {
+                div {
+                    class: match toast.level {
+                        ToastLevel::Warning => "delivery-toast delivery-toast-warning",
+                        ToastLevel::Error => "delivery-toast delivery-toast-error",
+                    },
+                    role: "alert",
+                    span { "{toast.message}" }
+                    button {
+                        aria_label: "Dismiss notification",
+                        onclick: {
+                            let store = active_store.read().clone();
+                            move |_| store.dismiss_toast()
+                        },
+                        "×"
+                    }
+                }
+            }
         }
     }
 }
 
-/// Convenience for child components: the ACTIVE session's store.
+/// Convenience for child components: the store backing the rendered snapshots.
 pub fn use_store() -> Arc<crate::store::Store> {
-    use_context::<Arc<Sessions>>().active_store()
+    use_context::<super::ActiveStore>().0.read().clone()
 }

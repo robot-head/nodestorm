@@ -289,6 +289,105 @@ mod tests {
     }
 
     #[test]
+    fn claude_connections_send_receipt_and_error_toast_are_accessible() {
+        assert!(TOPBAR_SOURCE.contains(r#"aria_label: "Claude MCP connections""#));
+        assert!(TOPBAR_SOURCE.contains(r#"class: "connection-row""#));
+        assert!(APP_SOURCE.contains(r#"role: "alert""#));
+        assert!(APP_SOURCE.contains(r#"store.dismiss_toast()"#));
+        assert!(APP_SOURCE.contains(r#"aria_label: "Dismiss notification""#));
+        assert_block_contains(".connection-pop", "max-height: calc(100vh - 64px)");
+        assert_block_contains(".connection-row", "display: grid");
+        assert_block_contains(".delivery-toast", "position: fixed");
+        assert_block_contains(".delivery-toast", "z-index: 30");
+        assert_block_contains(".delivery-toast-error", "color: var(--status-removed)");
+        assert_block_contains(".btn-send.sent", "color: var(--on-badge)");
+        assert_block_contains(".btn-send.failed", "color: var(--on-badge)");
+    }
+
+    #[test]
+    fn connection_bridge_subscribes_before_its_initial_resnapshot() {
+        let subscribe = APP_SOURCE
+            .find("let mut changes = sessions.subscribe_connections()")
+            .expect("connection bridge subscribes");
+        let bridge = &APP_SOURCE[subscribe..];
+        let resnapshot = bridge
+            .find("connections.set(sessions.connections())")
+            .expect("connection bridge immediately resnapshots");
+        let await_change = bridge
+            .find("while changes.changed().await.is_ok()")
+            .expect("connection bridge awaits later changes");
+
+        assert!(
+            resnapshot < await_change,
+            "the subscribe/snapshot gap must close before awaiting changes"
+        );
+    }
+
+    #[test]
+    fn rendered_handlers_use_the_snapshotted_store() {
+        let helper = APP_SOURCE
+            .find("pub fn use_store()")
+            .map(|start| &APP_SOURCE[start..])
+            .expect("render-bound store helper");
+        assert!(helper.contains("use_context::<super::ActiveStore>()"));
+
+        let toast = APP_SOURCE
+            .find("if let Some(toast)")
+            .map(|start| &APP_SOURCE[start..])
+            .expect("toast renderer");
+        assert!(toast.contains("let store = active_store.read().clone()"));
+    }
+
+    #[test]
+    fn active_session_name_and_store_resolve_together() {
+        let resolve = APP_SOURCE
+            .find("let (name, store) = sessions")
+            .map(|start| &APP_SOURCE[start..])
+            .expect("the bridge resolves the active name and store together");
+        assert!(resolve.contains(".resolve_named(None)"));
+        assert!(resolve.contains("session_name.set(name)"));
+    }
+
+    #[test]
+    fn active_store_bridge_subscribes_before_resnapshotting() {
+        let active = APP_SOURCE
+            .find("let (name, store) = sessions")
+            .map(|start| &APP_SOURCE[start..])
+            .expect("active store bridge");
+        let subscribe = active
+            .find("let mut rev = store.subscribe()")
+            .expect("store revision subscription");
+        let doc = active
+            .find("doc.set(store.snapshot_doc())")
+            .expect("doc snapshot");
+        let meta = active
+            .find("meta.set(store.snapshot_meta())")
+            .expect("metadata snapshot");
+
+        assert!(subscribe < doc && subscribe < meta);
+    }
+
+    #[test]
+    fn empty_state_copy_uses_the_snapshotted_store() {
+        let empty = APP_SOURCE
+            .find(r#"div { class: "empty-state""#)
+            .map(|start| &APP_SOURCE[start..])
+            .expect("empty-state renderer");
+        let handler_and_rest = empty
+            .find(r#"title: "Copy the connect command""#)
+            .map(|start| &empty[start..])
+            .expect("copy handler");
+        let handler = handler_and_rest
+            .find(r#"code { "claude mcp add"#)
+            .map(|end| &handler_and_rest[..end])
+            .expect("end of copy handler");
+
+        assert!(!handler.contains(r#"code { "claude mcp add"#));
+        assert!(handler.contains("let store = active_store.read().clone()"));
+        assert!(!handler.contains("sessions.active_store()"));
+    }
+
+    #[test]
     fn queue_panel_is_available_when_the_document_is_empty() {
         let empty_state = APP_SOURCE
             .find("} else {\n                    div { class: \"empty-state\"")
