@@ -1,4 +1,4 @@
-//! The eight nodestorm MCP tools.
+//! The nodestorm MCP tools.
 //!
 //! All rmcp contact stays in this module (and `server::mod`): the store knows
 //! nothing about MCP, which keeps it unit-testable and shields the rest of
@@ -77,6 +77,11 @@ pub struct ProposeGraphParams {
     /// session the user is looking at.
     #[serde(default)]
     pub session: Option<String>,
+    /// Your agent id in a multi-agent session. Nodes you propose are attributed
+    /// to you (color/badge) and the user's decisions on them route back to you.
+    /// Omit in single-agent sessions.
+    #[serde(default)]
+    pub agent: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -87,6 +92,9 @@ pub struct UpdateGraphParams {
     /// Named session to patch. Omit for the active one.
     #[serde(default)]
     pub session: Option<String>,
+    /// Your agent id in a multi-agent session (attributes upserted nodes).
+    #[serde(default)]
+    pub agent: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -100,6 +108,12 @@ pub struct AwaitDecisionsParams {
     /// concurrently. Omit for the active one.
     #[serde(default)]
     pub session: Option<String>,
+    /// Your agent id in a multi-agent session. You receive only decisions
+    /// addressed to you (on nodes you authored) plus unclaimed ones, and
+    /// several agents can wait on the same session at once. Omit to receive
+    /// every decision (single-agent).
+    #[serde(default)]
+    pub agent: Option<String>,
 }
 
 fn default_await_secs() -> u64 {
@@ -125,6 +139,17 @@ pub struct DiffParams {
     pub a: String,
     /// Session compared against the baseline.
     pub b: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DiffRecordParams {
+    /// Path to a decision-record `.md` file previously written by
+    /// `export_markdown` (it carries a hidden snapshot used as the baseline).
+    pub path: String,
+    /// Session to compare against the record. Omit for the active one.
+    #[serde(default)]
+    pub session: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -231,6 +256,8 @@ impl NodestormServer {
             focus: p.focus,
             nodes: p.nodes,
             edges: p.edges,
+            questions: vec![],
+            annotations: vec![],
         };
         // A named session is created on the spot — agents can spin up a
         // parallel brainstorm without a separate call.
@@ -241,7 +268,7 @@ impl NodestormServer {
                 .map_err(|e| ErrorData::internal_error(e.to_string(), None))?,
             None => (self.sessions.active_name(), self.sessions.active_store()),
         };
-        let summary = store.apply_propose(doc).map_err(store_err)?;
+        let summary = store.apply_propose_as(doc, p.agent).map_err(store_err)?;
         if let Some(msg) = p.announce {
             store.announce(msg);
         }
@@ -251,16 +278,27 @@ impl NodestormServer {
     #[tool(
         description = "Patch the current graph with an ordered list of ops (applied atomically): \
                        upsert_node, remove_node, upsert_edge, remove_edge, add_choice, \
-                       resolve_choice, set_status, set_focus, set_title, announce. After the user \
-                       decides something, use this to apply the ripple: mark impacted nodes \
-                       status=affected, open follow-up choices on them, and announce a summary."
+                       resolve_choice, ask (attach a free-form question for the user to answer in \
+                       text, optionally about a node), remove_question, set_status, \
+                       set_build (advance a node's implementation lifecycle: planned → building → \
+                       built → verified, or null to clear), \
+                       set_lane (assign a node to a labeled swimlane, or null to clear), \
+                       set_focus, \
+                       set_title, announce. After the user decides something, use this to apply \
+                       the ripple: mark impacted nodes status=affected, open follow-up choices on \
+                       them, and announce a summary. Use ask for open questions that need prose, \
+                       not a pick — answers come back as question_answered decisions. As you \
+                       implement, use set_build so the canvas becomes a live progress board. A \
+                       choice may declare depends_on other choices ({node, choice} refs): the UI \
+                       locks a dependent until its parents are decided, and reopening a parent \
+                       flags decided dependents for review — dependency cycles are rejected."
     )]
     async fn update_graph(
         &self,
         Parameters(p): Parameters<UpdateGraphParams>,
     ) -> Result<CallToolResult, ErrorData> {
         let (name, store) = self.session_and_store(&p.session)?;
-        let summary = store.apply_update(p.ops).map_err(store_err)?;
+        let summary = store.apply_update_as(p.ops, p.agent).map_err(store_err)?;
         json_result(GraphSummary::new(name, summary))
     }
 
@@ -305,7 +343,7 @@ impl NodestormServer {
             });
         }
 
-        let outcome = session_store.await_flush(timeout).await;
+        let outcome = session_store.await_flush(timeout, p.agent.clone()).await;
         cancel.cancel();
 
         let (open, revision) = session_store.read(|s| (s.doc.open_choice_count(), s.doc.revision));
@@ -382,6 +420,29 @@ impl NodestormServer {
         Ok(CallToolResult::success(vec![ContentBlock::text(
             crate::diff::diff_docs(&a_name, &a_doc, &b_name, &b_doc),
         )]))
+    }
+
+    #[tool(
+        description = "Compare a session against a previously exported decision-record `.md` file \
+                       (written by export_markdown, which embeds a hidden snapshot). Reports how \
+                       the current graph has drifted from what was recorded — components, edges, \
+                       and decisions added/removed/changed — as Markdown. Useful to see what has \
+                       changed since a record was committed to the repo."
+    )]
+    async fn diff_record(
+        &self,
+        Parameters(p): Parameters<DiffRecordParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let (name, store) = self.session_and_store(&p.session)?;
+        let text = std::fs::read_to_string(&p.path)
+            .map_err(|e| ErrorData::invalid_params(format!("cannot read {}: {e}", p.path), None))?;
+        let doc = store.snapshot_doc();
+        let record_name = std::path::Path::new(&p.path)
+            .file_name()
+            .map_or_else(|| p.path.clone(), |n| n.to_string_lossy().into_owned());
+        let diff = crate::diff::diff_doc_vs_record(&record_name, &text, &name, &doc)
+            .map_err(|e| ErrorData::invalid_params(e, None))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(diff)]))
     }
 
     #[tool(

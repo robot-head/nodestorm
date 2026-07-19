@@ -7,6 +7,7 @@ export const NODESTORM_TOOLS = Object.freeze([
   "export_markdown",
   "list_sessions",
   "diff_sessions",
+  "diff_record",
 ]);
 
 const MCP_URL = "http://127.0.0.1:4747/mcp";
@@ -37,7 +38,7 @@ export function createNodestormExtension({ url = MCP_URL, createClient = default
     pi.registerTool({
       name: "nodestorm",
       label: "Nodestorm",
-      description: "Call one of the eight tools exposed by the local Nodestorm MCP server.",
+      description: "Call one of the tools exposed by the local Nodestorm MCP server.",
       parameters: {
         type: "object",
         properties: {

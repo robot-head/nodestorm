@@ -16,6 +16,7 @@ pub fn TopBar(
     session_name: Signal<String>,
     timeline_open: Signal<bool>,
     queued_changes_open: Signal<bool>,
+    questions_open: Signal<bool>,
 ) -> Element {
     let store = use_store();
     let sessions = use_context::<std::sync::Arc<crate::sessions::Sessions>>();
@@ -33,6 +34,13 @@ pub fn TopBar(
     let has_nodes = !d.nodes.is_empty();
     let open = m.open_choices;
     let plural = if open == 1 { "" } else { "s" };
+    let open_q = d.open_question_count();
+    let build_tracked = d.nodes.iter().filter(|n| n.build.is_some()).count();
+    let build_shipped = d
+        .nodes
+        .iter()
+        .filter(|n| n.build.is_some_and(crate::model::BuildStatus::is_shipped))
+        .count();
     let title = if d.title.is_empty() {
         "untitled brainstorm".to_owned()
     } else {
@@ -361,8 +369,19 @@ pub fn TopBar(
                 span { class: "topbar-title-text", title: "{title}", "{title}" }
             }
             span { class: "topbar-spacer" }
-            if m.waiting_agents > 0 || open > 0 || queued_count > 0 {
+            if m.waiting_agents > 0 || open > 0 || open_q > 0 || build_tracked > 0 || queued_count > 0 {
                 span { class: "status-chip",
+                    if build_tracked > 0 {
+                        span {
+                            class: "seg seg-build",
+                            role: "status",
+                            aria_label: "{build_shipped} of {build_tracked} components shipped",
+                            title: "Implementation progress: built or verified out of tracked",
+                            span { class: "seg-glyph", "▸" }
+                            "{build_shipped}/{build_tracked}"
+                            span { class: "seg-word", " built" }
+                        }
+                    }
                     if m.waiting_agents > 0 {
                         span {
                             class: "seg seg-waiting",
@@ -383,6 +402,32 @@ pub fn TopBar(
                             span { class: "seg-word", " open" }
                         }
                     }
+                    if open_q > 0 {
+                        button {
+                            class: if questions_open() { "seg seg-questions btn-armed" } else { "seg seg-questions" },
+                            aria_label: "{open_q} open questions",
+                            title: "Answer the agent's free-form questions",
+                            onclick: {
+                                let mut selected = selected;
+                                let mut timeline_open = timeline_open;
+                                let mut queued_changes_open = queued_changes_open;
+                                let mut questions_open = questions_open;
+                                let mut compare_with = compare_with;
+                                move |_| {
+                                    if !questions_open() {
+                                        selected.set(None);
+                                        timeline_open.set(false);
+                                        queued_changes_open.set(false);
+                                        compare_with.set(None);
+                                    }
+                                    questions_open.toggle();
+                                }
+                            },
+                            span { class: "seg-glyph", "?" }
+                            "{open_q}"
+                            span { class: "seg-word", " to answer" }
+                        }
+                    }
                     if queued_count > 0 {
                         button {
                             class: if queued_changes_open() { "seg seg-queued btn-armed" } else { "seg seg-queued" },
@@ -392,11 +437,13 @@ pub fn TopBar(
                                 let mut selected = selected;
                                 let mut timeline_open = timeline_open;
                                 let mut queued_changes_open = queued_changes_open;
+                                let mut questions_open = questions_open;
                                 let mut compare_with = compare_with;
                                 move |_| {
                                     if !queued_changes_open() {
                                         selected.set(None);
                                         timeline_open.set(false);
+                                        questions_open.set(false);
                                         compare_with.set(None);
                                     }
                                     queued_changes_open.toggle();
@@ -442,9 +489,11 @@ pub fn TopBar(
                     let mut selected = selected;
                     let mut timeline_open = timeline_open;
                     let mut queued_changes_open = queued_changes_open;
+                    let mut questions_open = questions_open;
                     move |_| {
                         selected.set(None);
                         queued_changes_open.set(false);
+                        questions_open.set(false);
                         timeline_open.toggle();
                     }
                 },

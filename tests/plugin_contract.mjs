@@ -16,6 +16,7 @@ const tools = [
   "export_markdown",
   "list_sessions",
   "diff_sessions",
+  "diff_record",
 ];
 
 async function text(file) {

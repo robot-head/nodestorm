@@ -41,7 +41,17 @@ pub fn ActivityFeed(meta: Signal<UiMeta>) -> Element {
                             ActivityOrigin::User => "activity-dot dot-user",
                             ActivityOrigin::System => "activity-dot dot-system",
                         },
+                        style: entry.agent.as_deref().map(|a| {
+                            format!("color: {}", super::agent_color(a))
+                        }),
                         "●"
+                    }
+                    if let Some(agent) = &entry.agent {
+                        span {
+                            class: "activity-agent",
+                            style: "color: {super::agent_color(agent)};",
+                            "{agent}"
+                        }
                     }
                     span { class: "activity-text", "{entry.text}" }
                     span { class: "activity-time", {entry.at.format("%H:%M").to_string()} }

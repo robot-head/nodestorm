@@ -159,6 +159,23 @@ pub fn diff_docs(a_name: &str, a: &SessionDoc, b_name: &str, b: &SessionDoc) -> 
     out
 }
 
+/// Diff a live session against a previously exported decision-record file,
+/// using the machine-readable snapshot embedded in the record as the baseline.
+/// The record is the `a` side (baseline); the session is `b`.
+pub fn diff_doc_vs_record(
+    record_name: &str,
+    record_text: &str,
+    session_name: &str,
+    session: &SessionDoc,
+) -> Result<String, String> {
+    let record = crate::export::parse_record(record_text).ok_or_else(|| {
+        "no nodestorm snapshot found in this file — export a fresh decision record to \
+         enable diffing against it"
+            .to_string()
+    })?;
+    Ok(diff_docs(record_name, &record, session_name, session))
+}
+
 fn edge_kind_name(kind: crate::model::EdgeKind) -> &'static str {
     match kind {
         crate::model::EdgeKind::DependsOn => "depends_on",
@@ -284,6 +301,26 @@ mod tests {
             md.contains("newly dismissed: “Where should websocket connections terminate?”"),
             "in: {md}"
         );
+    }
+
+    #[test]
+    fn diff_against_exported_record_file() {
+        let record = crate::export::render_markdown(&demo_doc(), &[], chrono::Utc::now());
+        // An unchanged session vs its own record: no drift.
+        let same = diff_doc_vs_record("decisions.md", &record, "session", &demo_doc()).unwrap();
+        assert!(same.contains("_No differences._"), "{same}");
+        // A changed session drifts against the recorded baseline.
+        let mut changed = demo_doc();
+        changed.node_mut(&NodeId::from("redis")).unwrap().label = "Redis Cluster".into();
+        let drift = diff_doc_vs_record("decisions.md", &record, "session", &changed).unwrap();
+        assert!(
+            drift.starts_with("# Diff: decisions.md → session"),
+            "{drift}"
+        );
+        assert!(drift.contains("~ changed: **Redis Cluster**"), "{drift}");
+        // A file without a snapshot is a clear error, not a panic.
+        let err = diff_doc_vs_record("x.md", "plain markdown", "s", &demo_doc()).unwrap_err();
+        assert!(err.contains("no nodestorm snapshot"), "{err}");
     }
 
     #[test]

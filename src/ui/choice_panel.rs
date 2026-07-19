@@ -96,6 +96,7 @@ pub fn ChoicePanel(
     let mut label_draft = use_signal(|| node.label.clone());
     let mut kind_draft = use_signal(|| kind_value(node.kind).to_owned());
     let mut desc_draft = use_signal(|| node.description.clone());
+    let mut lane_draft = use_signal(|| node.lane.clone().unwrap_or_default());
     let mut edit_open = use_signal(|| false);
     let store = use_store();
     let mut connect_from = use_context::<super::ConnectFrom>().0;
@@ -138,6 +139,28 @@ pub fn ChoicePanel(
                 div { class: "panel-meta-row",
                     dt { "Status" }
                     dd { "{super::node_card::status_class(node.status)}" }
+                }
+                if let Some(build) = node.build {
+                    div { class: "panel-meta-row",
+                        dt { "Build" }
+                        dd {
+                            span { class: "node-build build-tag-{build.name()}",
+                                "{super::node_card::build_glyph(build)} {build.name()}"
+                            }
+                        }
+                    }
+                }
+                if let Some(agent) = &node.agent {
+                    div { class: "panel-meta-row",
+                        dt { "Agent" }
+                        dd {
+                            span {
+                                class: "node-agent",
+                                style: "color: {super::agent_color(agent)}; border-color: {super::agent_color(agent)};",
+                                "◆ {agent}"
+                            }
+                        }
+                    }
                 }
                 if let Some(group) = visible_group(node.group.as_deref()) {
                     div { class: "panel-meta-row",
@@ -218,6 +241,12 @@ pub fn ChoicePanel(
                         placeholder: "description",
                         oninput: move |ev| desc_draft.set(ev.value()),
                     }
+                    input {
+                        class: "edit-lane",
+                        value: "{lane_draft}",
+                        placeholder: "swimlane (optional)",
+                        oninput: move |ev| lane_draft.set(ev.value()),
+                    }
                     button {
                         class: "btn",
                         disabled: label_draft.read().trim().is_empty(),
@@ -226,11 +255,13 @@ pub fn ChoicePanel(
                             let node_id = node_id.clone();
                             move |_| {
                                 let label = label_draft.read().trim().to_owned();
+                                let lane = lane_draft.read().trim().to_owned();
                                 if let Err(err) = store.edit_node(
                                     &node_id,
                                     label,
                                     kind_from_value(&kind_draft.read()),
                                     desc_draft.read().trim().to_owned(),
+                                    (!lane.is_empty()).then_some(lane),
                                 ) {
                                     tracing::warn!(%err, "edit_node failed");
                                 }
@@ -282,8 +313,34 @@ pub fn ChoicePanel(
                     key: "{choice.id}",
                     node_id: node.id.clone(),
                     choice: choice.clone(),
+                    doc,
                     considered,
                     hovered_affects,
+                }
+            }
+
+            {
+                let node_questions: Vec<crate::model::Question> = doc
+                    .read()
+                    .questions
+                    .iter()
+                    .filter(|q| q.node_id.as_ref() == Some(&node.id))
+                    .cloned()
+                    .collect();
+                rsx! {
+                    if !node_questions.is_empty() {
+                        div { class: "panel-questions",
+                            h3 { "Questions from the agent" }
+                            for q in node_questions {
+                                super::questions_panel::QuestionBlock {
+                                    key: "{q.id}",
+                                    question: q,
+                                    show_attachment: false,
+                                    doc,
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -325,6 +382,7 @@ pub fn ChoicePanel(
 fn ChoiceBlock(
     node_id: NodeId,
     choice: Choice,
+    doc: Signal<SessionDoc>,
     considered: Signal<HashMap<ChoiceId, Vec<OptionId>>>,
     hovered_affects: Signal<Vec<NodeId>>,
 ) -> Element {
@@ -334,12 +392,50 @@ fn ChoiceBlock(
         ChoiceStatus::Decided => "decided",
         ChoiceStatus::Dismissed => "dismissed",
     };
+    // Resolve dependency blockers against the live doc.
+    let blockers: Vec<String> = {
+        let d = doc.read();
+        d.unmet_dependencies(&choice)
+            .iter()
+            .map(|dep| {
+                d.node(&dep.node)
+                    .and_then(|n| n.choice(&dep.choice))
+                    .map_or_else(
+                        || format!("{} / {}", dep.node, dep.choice),
+                        |c| c.prompt.clone(),
+                    )
+            })
+            .collect()
+    };
+    let locked = !blockers.is_empty();
+    let lock_class = if locked { " choice-locked" } else { "" };
+    let review_class = if choice.needs_review {
+        " choice-review"
+    } else {
+        ""
+    };
 
     rsx! {
-        section { class: "choice choice-{status_class}",
+        section { class: "choice choice-{status_class}{lock_class}{review_class}",
             div { class: "choice-head",
-                span { class: "choice-flag", "⚑" }
+                span { class: "choice-flag", if locked { "🔒" } else { "⚑" } }
                 h3 { "{choice.prompt}" }
+            }
+            if locked {
+                div { class: "choice-lock",
+                    "Waiting on: "
+                    for (i, b) in blockers.iter().enumerate() {
+                        span { class: "lock-dep", key: "{i}",
+                            if i > 0 { ", " }
+                            "{b}"
+                        }
+                    }
+                }
+            }
+            if choice.needs_review && !locked {
+                div { class: "choice-review-banner",
+                    "⚠ A dependency was reopened — this decision may need to change."
+                }
             }
             if let Some(rationale) = &choice.rationale {
                 p { class: "choice-rationale", "{rationale}" }
@@ -353,9 +449,14 @@ fn ChoiceBlock(
                         let choice_id = choice.id.clone();
                         let node_id = node_id.clone();
                         let store = store.clone();
+                        let option_class = match (picked, locked) {
+                            (_, true) => "option locked",
+                            (true, false) => "option picked",
+                            (false, false) => "option",
+                        };
                         rsx! {
                             div {
-                                class: if picked { "option picked" } else { "option" },
+                                class: "{option_class}",
                                 key: "{opt.id}",
                                 onmouseenter: {
                                     let affects = affects.clone();
@@ -363,6 +464,11 @@ fn ChoiceBlock(
                                 },
                                 onmouseleave: move |_| hovered_affects.set(Vec::new()),
                                 onclick: move |_| {
+                                    // A locked choice cannot be decided until its
+                                    // dependencies resolve.
+                                    if locked {
+                                        return;
+                                    }
                                     let trail = considered.with_mut(|map| {
                                         let trail = map.entry(choice_id.clone()).or_default();
                                         if trail.last() != Some(&option_id) {
@@ -422,7 +528,7 @@ fn ChoiceBlock(
                     }
                 }
             }
-            if choice.status == ChoiceStatus::Open {
+            if choice.status == ChoiceStatus::Open && !locked {
                 button {
                     class: "btn btn-ghost",
                     onclick: {
@@ -454,9 +560,12 @@ mod tests {
             kind: NodeKind::Component,
             description: String::new(),
             status: ElementStatus::Existing,
+            build: None,
             group: None,
+            lane: None,
             choices: vec![],
             notes: vec![],
+            agent: None,
             position: None,
             origin: Origin::Agent,
         }
