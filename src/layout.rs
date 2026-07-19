@@ -65,9 +65,10 @@ pub struct ClusterRect {
     pub member_count: usize,
 }
 
-/// A horizontal swimlane band spanning the graph width. Present only when some
-/// node carries a `lane`; the layered layout confines each lane's cards to its
-/// band. The unlabeled default lane (nodes without a `lane`) is omitted here.
+/// A horizontal swimlane band spanning the graph width. Present when a node
+/// carries a `lane` or the user declared the lane; the layered layout
+/// confines each lane's cards to its band. The unlabeled default lane (nodes
+/// without a `lane`) draws no band.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LaneBand {
     pub label: String,
@@ -201,14 +202,13 @@ pub fn compute_collapsed(doc: &SessionDoc, collapsed: &BTreeSet<String>) -> Layo
     compute_view(doc, collapsed, &[])
 }
 
-/// Layout with collapsed groups and user-declared swimlanes. `declared` lists
-/// lanes the user created (including empty ones) in display order; lanes only
-/// referenced by `node.lane` are appended after, in first-appearance order.
-///
-/// Layout with the named groups collapsed: each becomes one synthetic
-/// `group:<name>` node, member cards disappear, and edges re-route to the
-/// cluster (parallel edges onto one cluster merge into a `bundle_count`ed
-/// path labeled `×N`). Group-internal edges vanish.
+/// Layout with named groups collapsed and user-declared swimlanes. Each
+/// collapsed group becomes one synthetic `group:<name>` node, member cards
+/// disappear, and edges re-route to the cluster (parallel edges onto one
+/// cluster merge into a `bundle_count`ed path labeled `×N`); group-internal
+/// edges vanish. `declared` lists lanes the user created (including empty
+/// ones) in display order; lanes only referenced by `node.lane` are appended
+/// after, in first-appearance order, then the unlabeled default lane last.
 pub fn compute_view(doc: &SessionDoc, collapsed: &BTreeSet<String>, declared: &[String]) -> Layout {
     if collapsed.is_empty() {
         return compute_inner(doc, &[], declared);
@@ -582,10 +582,11 @@ const LANE_TITLE_H: f64 = 36.0;
 
 /// Lane-constrained placement: cards pack into labeled horizontal bands by
 /// their `lane` (the unlabeled default band holds nodes without one). Bands
-/// stack top-to-bottom in first-appearance order; within a (lane, rank) cell
-/// cards keep their barycenter order. Pinned nodes keep their exact position
-/// and sit outside the bands. Returns the rects plus the visible (labeled)
-/// bands.
+/// stack top-to-bottom with declared lanes first (in declared order), then
+/// lanes only referenced by nodes (first appearance), then the default lane
+/// last; within a (lane, rank) cell cards keep their barycenter order. Pinned
+/// nodes keep their exact position and sit outside the bands. Returns the
+/// rects plus the visible (labeled) bands.
 fn place_laned(
     doc: &SessionDoc,
     _ranks: &[usize],

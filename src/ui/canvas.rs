@@ -601,6 +601,7 @@ pub fn Canvas(
                         div {
                             class: "swimlane-label",
                             onmousedown: move |ev| ev.stop_propagation(),
+                            ondoubleclick: move |ev: MouseEvent| ev.stop_propagation(),
                             if editing_lane().as_deref() == Some(lane.label.as_str()) {
                                 input {
                                     class: "lane-name-edit",
