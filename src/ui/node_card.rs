@@ -124,7 +124,10 @@ pub fn NodeCard(
     rsx! {
         div {
             class: "node-card {zoom_class} status-{status}{sel}{hl}{hit}{dim}{bld}",
-            style: "left: {rect.x}px; top: {rect.y}px; width: {rect.w}px;",
+            // max-height clamps the card to its layout rect so it can never
+            // spill out of a swimlane band even if the CSS estimate drifts;
+            // Mid/Far tiers render shorter than the rect, which is fine.
+            style: "left: {rect.x}px; top: {rect.y}px; width: {rect.w}px; max-height: {rect.h}px;",
             onclick: move |ev| {
                 ev.stop_propagation();
                 on_select.call(ev);
