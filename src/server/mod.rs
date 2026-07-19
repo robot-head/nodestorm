@@ -36,11 +36,19 @@ pub async fn serve(
     sessions: Arc<Sessions>,
     mut shutdown: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
+    // Stateless transport: don't mint or require an `Mcp-Session-Id`. rmcp's
+    // default (stateful) keeps per-connection sessions in an in-memory manager
+    // that idle-reaps them, so any request on a lapsed session gets a
+    // `404 Session not found` the client can't recover from (Claude Code drops
+    // the whole server). Our tools carry no transport-session state — they
+    // route by the `session` param and persist to disk in `Sessions` — so each
+    // request is self-contained. `json_response` stays false so a long
+    // `await_decisions` can still stream progress heartbeats over its response.
     let service: StreamableHttpService<tools::NodestormServer, LocalSessionManager> =
         StreamableHttpService::new(
             move || Ok(tools::NodestormServer::new(sessions.clone())),
             Arc::new(LocalSessionManager::default()),
-            StreamableHttpServerConfig::default(),
+            StreamableHttpServerConfig::default().with_stateful_mode(false),
         );
     let router = axum::Router::new().nest_service("/mcp", service);
     let addr = listener.local_addr()?;

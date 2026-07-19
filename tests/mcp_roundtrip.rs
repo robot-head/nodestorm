@@ -621,6 +621,71 @@ async fn await_decisions_times_out_without_losing_anything() {
     client.cancel().await.expect("client shutdown");
 }
 
+/// Regression guard for the stateless-transport fix (`stateful_mode: false`).
+/// The server must neither mint nor require an `Mcp-Session-Id`, so a client
+/// that never tracks a session — or lost the one it had — can still call tools
+/// instead of getting a `404 Session not found`. That 404 is the failure mode
+/// that made Claude Code's HTTP MCP connection unrecoverable and forced the
+/// manual curl bypass.
+#[tokio::test]
+async fn stateless_tools_call_without_session_id() {
+    let store = Store::new(SessionState::default());
+    let (port, _shutdown, _sessions) = start_server(store).await;
+    let url = format!("http://127.0.0.1:{port}/mcp");
+    let http = reqwest::Client::new();
+    let accept = "application/json, text/event-stream";
+
+    // Handshake — a stateless server should not demand a prior session.
+    let init = http
+        .post(&url)
+        .header("content-type", "application/json")
+        .header("accept", accept)
+        .body(
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"stateless-probe","version":"1"}}}"#,
+        )
+        .send()
+        .await
+        .expect("initialize");
+    assert!(
+        init.status().is_success(),
+        "initialize status {}",
+        init.status()
+    );
+    // Proper client courtesy; a notification needs no session id either.
+    let _ = http
+        .post(&url)
+        .header("content-type", "application/json")
+        .header("accept", accept)
+        .body(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+        .send()
+        .await;
+
+    // The crux: a tools/call carrying NO `Mcp-Session-Id` must return 200, not
+    // 404. Under the old stateful default this 404'd.
+    let resp = http
+        .post(&url)
+        .header("content-type", "application/json")
+        .header("accept", accept)
+        .body(
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_sessions","arguments":{}}}"#,
+        )
+        .send()
+        .await
+        .expect("tools/call");
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "tools/call without a session id must not 404 in stateless mode"
+    );
+    let body = resp.text().await.expect("body");
+    // The tool ran and returned a non-error result (envelope is unescaped;
+    // the inner payload is a JSON-stringified `sessions` listing).
+    assert!(
+        body.contains(r#""isError":false"#) && body.contains("sessions"),
+        "tool actually ran, got: {body}"
+    );
+}
+
 #[tokio::test]
 async fn invalid_propose_returns_actionable_error() {
     let store = Store::new(SessionState::default());
