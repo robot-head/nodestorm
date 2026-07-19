@@ -1,0 +1,558 @@
+//! Start a local or SSH coding-agent session from Nodestorm.
+
+use std::sync::Arc;
+
+use dioxus::prelude::*;
+
+use crate::agent_launcher::{
+    AgentKind, CommandSpec, GitMode, LaunchRequest, LaunchTarget, PreparedWorkspace, agent_command,
+    compose_prompt, ensure_executable, inspect_local, open_terminal, prepare_local,
+    read_ssh_aliases, remote_agent_command, suggest_branch, suggest_worktree, validate_request,
+};
+use crate::cli::Cli;
+use crate::sessions::Sessions;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LaunchDraft {
+    session_name: String,
+    task: String,
+    agent: AgentKind,
+    remote: bool,
+    ssh_alias: String,
+    repository: String,
+    branch: String,
+    worktree: bool,
+    worktree_path: String,
+    branch_edited: bool,
+    worktree_edited: bool,
+}
+
+impl Default for LaunchDraft {
+    fn default() -> Self {
+        Self {
+            session_name: String::new(),
+            task: String::new(),
+            agent: AgentKind::Claude,
+            remote: false,
+            ssh_alias: String::new(),
+            repository: String::new(),
+            branch: String::new(),
+            worktree: true,
+            worktree_path: String::new(),
+            branch_edited: false,
+            worktree_edited: false,
+        }
+    }
+}
+
+impl LaunchDraft {
+    fn set_session_name(&mut self, name: String) {
+        self.session_name = name;
+        if !self.branch_edited {
+            self.branch = if self.session_name.trim().is_empty() {
+                String::new()
+            } else {
+                suggest_branch(&self.session_name)
+            };
+        }
+        self.refresh_worktree();
+    }
+
+    fn set_repository(&mut self, repository: String) {
+        self.repository = repository;
+        self.refresh_worktree();
+    }
+
+    fn set_remote(&mut self, remote: bool) {
+        self.remote = remote;
+        self.refresh_worktree();
+    }
+
+    fn refresh_worktree(&mut self) {
+        if self.worktree_edited {
+            return;
+        }
+        self.worktree_path = if self.repository.trim().is_empty() || self.branch.is_empty() {
+            String::new()
+        } else {
+            suggest_worktree(&self.repository, &self.branch, self.remote).unwrap_or_default()
+        };
+    }
+
+    fn request(&self, mcp_port: u16) -> LaunchRequest {
+        LaunchRequest {
+            session_name: self.session_name.clone(),
+            task: self.task.clone(),
+            agent: self.agent,
+            target: if self.remote {
+                LaunchTarget::Ssh {
+                    alias: self.ssh_alias.clone(),
+                }
+            } else {
+                LaunchTarget::Local
+            },
+            repository: self.repository.clone(),
+            branch: self.branch.clone(),
+            git_mode: if self.worktree {
+                GitMode::NewWorktree {
+                    path: self.worktree_path.clone(),
+                }
+            } else {
+                GitMode::ExistingCheckout
+            },
+            mcp_port,
+        }
+    }
+}
+
+enum LaunchOutcome {
+    Started,
+    NeedsDirtyConfirmation,
+    Failed {
+        message: String,
+        retained: Option<String>,
+    },
+    TerminalFailed {
+        message: String,
+        retained: Option<String>,
+        command: CommandSpec,
+    },
+}
+
+fn failed(error: impl std::fmt::Display, retained: Option<String>) -> LaunchOutcome {
+    LaunchOutcome::Failed {
+        message: error.to_string(),
+        retained,
+    }
+}
+
+fn perform_launch(
+    request: LaunchRequest,
+    sessions: Arc<Sessions>,
+    allow_dirty: bool,
+) -> LaunchOutcome {
+    let prepared = match &request.target {
+        LaunchTarget::Local => {
+            if let Err(err) = ensure_executable("git") {
+                return failed(err, None);
+            }
+            if let Err(err) = ensure_executable(request.agent.executable()) {
+                return failed(err, None);
+            }
+            let inspection = match inspect_local(&request) {
+                Ok(inspection) => inspection,
+                Err(err) => return failed(err, None),
+            };
+            if matches!(request.git_mode, GitMode::ExistingCheckout)
+                && inspection.dirty
+                && !allow_dirty
+            {
+                return LaunchOutcome::NeedsDirtyConfirmation;
+            }
+            match prepare_local(&request, allow_dirty) {
+                Ok(prepared) => Some(prepared),
+                Err(err) => return failed(err, None),
+            }
+        }
+        LaunchTarget::Ssh { .. } => {
+            if let Err(err) = ensure_executable("ssh") {
+                return failed(err, None);
+            }
+            if let Err(err) = validate_request(&request) {
+                return failed(err, None);
+            }
+            None
+        }
+    };
+
+    let retained = prepared
+        .as_ref()
+        .map(|workspace| workspace.retained_path.clone());
+    let slug = match sessions.create(&request.session_name) {
+        Ok(slug) => slug,
+        Err(err) => return failed(err, retained),
+    };
+    if let Err(err) = sessions.switch(&slug) {
+        return failed(err, retained);
+    }
+
+    let command = match &request.target {
+        LaunchTarget::Local => {
+            let PreparedWorkspace { directory, .. } = prepared.expect("local workspace prepared");
+            let prompt = compose_prompt(&request, &slug);
+            agent_command(request.agent, &slug, &prompt, &directory)
+        }
+        LaunchTarget::Ssh { .. } => match remote_agent_command(&request, &slug) {
+            Ok(command) => command,
+            Err(err) => return failed(err, retained),
+        },
+    };
+
+    match open_terminal(&command) {
+        Ok(()) => LaunchOutcome::Started,
+        Err(err) => LaunchOutcome::TerminalFailed {
+            message: err.to_string(),
+            retained,
+            command,
+        },
+    }
+}
+
+fn agent_from_value(value: &str) -> AgentKind {
+    match value {
+        "codex" => AgentKind::Codex,
+        "opencode" => AgentKind::OpenCode,
+        "pi" => AgentKind::Pi,
+        _ => AgentKind::Claude,
+    }
+}
+
+#[derive(Clone, Copy)]
+struct LaunchSignals {
+    running: Signal<bool>,
+    dirty_warning: Signal<bool>,
+    error: Signal<Option<String>>,
+    retained: Signal<Option<String>>,
+    retry: Signal<Option<CommandSpec>>,
+    open: Signal<bool>,
+}
+
+fn start_attempt(
+    request: LaunchRequest,
+    sessions: Arc<Sessions>,
+    allow_dirty: bool,
+    mut signals: LaunchSignals,
+) {
+    signals.running.set(true);
+    signals.error.set(None);
+    signals.retained.set(None);
+    signals.retry.set(None);
+    spawn(async move {
+        let outcome =
+            tokio::task::spawn_blocking(move || perform_launch(request, sessions, allow_dirty))
+                .await
+                .unwrap_or_else(|err| failed(format!("launcher worker failed: {err}"), None));
+        signals.running.set(false);
+        match outcome {
+            LaunchOutcome::Started => signals.open.set(false),
+            LaunchOutcome::NeedsDirtyConfirmation => signals.dirty_warning.set(true),
+            LaunchOutcome::Failed {
+                message,
+                retained: path,
+            } => {
+                signals.error.set(Some(message));
+                signals.retained.set(path);
+            }
+            LaunchOutcome::TerminalFailed {
+                message,
+                retained: path,
+                command,
+            } => {
+                signals.error.set(Some(message));
+                signals.retained.set(path);
+                signals.retry.set(Some(command));
+            }
+        }
+    });
+}
+
+#[component]
+pub fn AgentLauncher() -> Element {
+    let sessions = use_context::<Arc<Sessions>>();
+    let cli = use_context::<Cli>();
+    let mut open = use_context::<super::AgentLauncherOpen>().0;
+    let mut draft = use_signal(LaunchDraft::default);
+    let aliases = use_signal(read_ssh_aliases);
+    let mut running = use_signal(|| false);
+    let dirty_warning = use_signal(|| false);
+    let mut allow_dirty = use_signal(|| false);
+    let mut error: Signal<Option<String>> = use_signal(|| None);
+    let retained: Signal<Option<String>> = use_signal(|| None);
+    let retry: Signal<Option<CommandSpec>> = use_signal(|| None);
+
+    rsx! {
+        div { class: "agent-launch-overlay",
+            div {
+                class: "agent-launch-dialog",
+                role: "dialog",
+                aria_modal: "true",
+                aria_labelledby: "agent-launch-title",
+                tabindex: "0",
+                onkeydown: move |event| {
+                    if event.key() == Key::Escape && !running() {
+                        open.set(false);
+                    }
+                },
+                div { class: "agent-launch-heading",
+                    div {
+                        h2 { id: "agent-launch-title", "Start agentic session" }
+                        p { "Create an isolated branch and open an interactive coding agent." }
+                    }
+                    button {
+                        class: "panel-close",
+                        aria_label: "Close agent launcher",
+                        disabled: running(),
+                        onclick: move |_| open.set(false),
+                        "✕"
+                    }
+                }
+
+                div { class: "agent-launch-grid",
+                    label { class: "agent-launch-field",
+                        span { "Session name" }
+                        input {
+                            id: "agent-session-name",
+                            placeholder: "cache redesign",
+                            value: "{draft.read().session_name}",
+                            oninput: move |event| draft.write().set_session_name(event.value()),
+                        }
+                    }
+                    label { class: "agent-launch-field",
+                        span { "Agent" }
+                        select {
+                            id: "agent-kind",
+                            value: "{draft.read().agent.id()}",
+                            oninput: move |event| draft.write().agent = agent_from_value(&event.value()),
+                            option { value: "claude", "Claude Code" }
+                            option { value: "codex", "Codex" }
+                            option { value: "opencode", "OpenCode" }
+                            option { value: "pi", "Pi" }
+                        }
+                    }
+                    fieldset { class: "agent-launch-field agent-launch-options",
+                        legend { "Target" }
+                        label {
+                            input {
+                                r#type: "radio",
+                                name: "agent-target",
+                                checked: !draft.read().remote,
+                                oninput: move |_| draft.write().set_remote(false),
+                            }
+                            "Local"
+                        }
+                        label {
+                            input {
+                                r#type: "radio",
+                                name: "agent-target",
+                                checked: draft.read().remote,
+                                oninput: move |_| draft.write().set_remote(true),
+                            }
+                            "SSH"
+                        }
+                    }
+                    if draft.read().remote {
+                        label { class: "agent-launch-field",
+                            span { "SSH host alias" }
+                            input {
+                                id: "ssh-host-alias",
+                                list: "ssh-hosts",
+                                placeholder: "build-box",
+                                value: "{draft.read().ssh_alias}",
+                                oninput: move |event| draft.write().ssh_alias = event.value(),
+                            }
+                            datalist { id: "ssh-hosts",
+                                for alias in aliases.read().iter() {
+                                    option { key: "{alias}", value: "{alias}" }
+                                }
+                            }
+                        }
+                    }
+                    label { class: "agent-launch-field agent-launch-wide",
+                        span { if draft.read().remote { "Remote repository path" } else { "Repository path" } }
+                        input {
+                            id: "agent-repository",
+                            placeholder: if draft.read().remote { "/srv/projects/api" } else { "/home/me/projects/api" },
+                            value: "{draft.read().repository}",
+                            oninput: move |event| draft.write().set_repository(event.value()),
+                        }
+                    }
+                    label { class: "agent-launch-field agent-launch-wide",
+                        span { "Initial task" }
+                        textarea {
+                            id: "agent-task",
+                            placeholder: "Describe what the agent should design or build…",
+                            value: "{draft.read().task}",
+                            oninput: move |event| draft.write().task = event.value(),
+                        }
+                    }
+                    label { class: "agent-launch-field agent-launch-wide",
+                        span { "Branch name" }
+                        input {
+                            id: "agent-branch",
+                            placeholder: "nodestorm/cache-redesign",
+                            value: "{draft.read().branch}",
+                            oninput: move |event| {
+                                let mut value = draft.write();
+                                value.branch = event.value();
+                                value.branch_edited = true;
+                                value.refresh_worktree();
+                            },
+                        }
+                    }
+                    fieldset { class: "agent-launch-field agent-launch-options agent-launch-wide",
+                        legend { "Git workspace" }
+                        label {
+                            input {
+                                r#type: "radio",
+                                name: "agent-workspace",
+                                checked: !draft.read().worktree,
+                                oninput: move |_| draft.write().worktree = false,
+                            }
+                            "Branch in existing checkout"
+                        }
+                        label {
+                            input {
+                                r#type: "radio",
+                                name: "agent-workspace",
+                                checked: draft.read().worktree,
+                                oninput: move |_| draft.write().worktree = true,
+                            }
+                            "New worktree (recommended)"
+                        }
+                    }
+                    if draft.read().worktree {
+                        label { class: "agent-launch-field agent-launch-wide",
+                            span { if draft.read().remote { "Remote worktree path" } else { "Worktree path" } }
+                            input {
+                                id: "agent-worktree",
+                                value: "{draft.read().worktree_path}",
+                                oninput: move |event| {
+                                    let mut value = draft.write();
+                                    value.worktree_path = event.value();
+                                    value.worktree_edited = true;
+                                },
+                            }
+                        }
+                    }
+                }
+
+                if dirty_warning() {
+                    label { class: "agent-launch-warning",
+                        input {
+                            r#type: "checkbox",
+                            checked: allow_dirty(),
+                            oninput: move |event| allow_dirty.set(event.checked()),
+                        }
+                        "This checkout has uncommitted changes. Carry them onto the new branch."
+                    }
+                }
+                if let Some(message) = error.read().as_ref() {
+                    div { class: "agent-launch-error", role: "alert", "{message}" }
+                }
+                if let Some(path) = retained.read().as_ref() {
+                    p { class: "agent-launch-retained", "Created workspace retained at {path}." }
+                }
+
+                div { class: "agent-launch-actions",
+                    button {
+                        class: "btn",
+                        disabled: running(),
+                        onclick: move |_| open.set(false),
+                        "Cancel"
+                    }
+                    if retry.read().is_some() {
+                        button {
+                            class: "btn btn-primary",
+                            disabled: running(),
+                            onclick: move |_| {
+                                let command = retry.read().clone().expect("retry command");
+                                running.set(true);
+                                error.set(None);
+                                spawn(async move {
+                                    let outcome = tokio::task::spawn_blocking(move || open_terminal(&command)).await;
+                                    running.set(false);
+                                    match outcome {
+                                        Ok(Ok(())) => open.set(false),
+                                        Ok(Err(err)) => error.set(Some(err.to_string())),
+                                        Err(err) => error.set(Some(format!("launcher worker failed: {err}"))),
+                                    }
+                                });
+                            },
+                            if running() { "Opening…" } else { "Retry terminal" }
+                        }
+                    } else {
+                        button {
+                            class: "btn btn-primary",
+                            disabled: running() || (dirty_warning() && !allow_dirty()),
+                            onclick: move |_| {
+                                start_attempt(
+                                    draft.read().request(cli.port),
+                                    sessions.clone(),
+                                    allow_dirty(),
+                                    LaunchSignals {
+                                        running,
+                                        dirty_warning,
+                                        error,
+                                        retained,
+                                        retry,
+                                        open,
+                                    },
+                                );
+                            },
+                            if running() { "Preparing…" } else { "Create branch & start agent" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn draft_defaults_to_local_claude_new_worktree() {
+        let draft = LaunchDraft::default();
+        assert_eq!(draft.agent, crate::agent_launcher::AgentKind::Claude);
+        assert!(!draft.remote);
+        assert!(draft.worktree);
+    }
+
+    #[test]
+    fn derived_fields_follow_session_and_repository_until_edited() {
+        let mut draft = LaunchDraft::default();
+        draft.set_repository("/work/api".into());
+        draft.set_session_name("Cache Redesign".into());
+        assert_eq!(draft.branch, "nodestorm/cache-redesign");
+        assert_eq!(
+            draft.worktree_path,
+            "/work/api-worktrees/nodestorm/cache-redesign"
+        );
+
+        draft.branch = "feature/custom".into();
+        draft.branch_edited = true;
+        draft.worktree_path = "/custom/tree".into();
+        draft.worktree_edited = true;
+        draft.set_session_name("Other Session".into());
+        assert_eq!(draft.branch, "feature/custom");
+        assert_eq!(draft.worktree_path, "/custom/tree");
+    }
+
+    #[test]
+    fn request_uses_remote_target_and_default_worktree() {
+        let mut draft = LaunchDraft::default();
+        draft.set_repository("/srv/api".into());
+        draft.set_session_name("Remote Build".into());
+        draft.task = "Implement the API".into();
+        draft.set_remote(true);
+        draft.ssh_alias = "build-box".into();
+
+        let request = draft.request(9000);
+        assert_eq!(request.session_name, "Remote Build");
+        assert_eq!(request.mcp_port, 9000);
+        assert_eq!(
+            request.target,
+            crate::agent_launcher::LaunchTarget::Ssh {
+                alias: "build-box".into()
+            }
+        );
+        assert_eq!(
+            request.git_mode,
+            crate::agent_launcher::GitMode::NewWorktree {
+                path: "/srv/api-worktrees/nodestorm/remote-build".into()
+            }
+        );
+    }
+}

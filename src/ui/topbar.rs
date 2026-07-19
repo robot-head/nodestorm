@@ -28,6 +28,7 @@ pub fn TopBar(
     let mut rename_draft = use_signal(String::new);
     let mut manage_open = use_signal(|| false);
     let mut delete_pending = use_signal(|| false);
+    let mut launcher_open = use_context::<super::AgentLauncherOpen>().0;
     let mut compare_with = use_context::<super::CompareWith>().0;
     let d = doc.read();
     let m = meta.read();
@@ -161,6 +162,18 @@ pub fn TopBar(
                                     }
                                 }
                             }
+                        }
+                        button {
+                            class: "session-manage-toggle",
+                            onclick: move |_| {
+                                new_session_draft.set(String::new());
+                                rename_draft.set(String::new());
+                                manage_open.set(false);
+                                delete_pending.set(false);
+                                sessions_open.set(false);
+                                launcher_open.set(true);
+                            },
+                            "Start agent"
                         }
                         button {
                             class: "session-manage-toggle",
