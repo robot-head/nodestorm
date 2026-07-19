@@ -154,20 +154,25 @@ if [[ "$TARGET_OS" == "linux" ]]; then
     echo "Downloaded binary version does not match $VERSION." >&2
     exit 1
   }
-  if [[ "${XDG_DATA_HOME:-}" == /* ]]; then
+  if [[ "${XDG_DATA_HOME:-}" == /* && "$XDG_DATA_HOME" != *"="* ]]; then
     DATA_HOME=$XDG_DATA_HOME
   else
     DATA_HOME="$HOME/.local/share"
   fi
-  for size in 128 256 512; do
+  for size in 48 128 256 512; do
     staged_icon="$TEMP_DIR/icons/${size}x${size}/nodestorm.png"
     [[ -f "$staged_icon" ]] || { echo "Release archive has no ${size}px launcher icon." >&2; exit 1; }
   done
 
   INSTALL_DIR="$DATA_HOME/nodestorm/${VERSION}"
+  desktop_exec="$INSTALL_DIR/nodestorm"
+  if [[ "$desktop_exec" != /* || "$desktop_exec" == *"="* ]]; then
+    echo "Desktop executable path cannot be represented in a desktop entry." >&2
+    exit 1
+  fi
   mkdir -p "$INSTALL_DIR"
   install -m 0755 "$STAGED_BINARY" "$INSTALL_DIR/nodestorm"
-  for size in 128 256 512; do
+  for size in 48 128 256 512; do
     staged_icon="$TEMP_DIR/icons/${size}x${size}/nodestorm.png"
     icon_dir="$DATA_HOME/icons/hicolor/${size}x${size}/apps"
     mkdir -p "$icon_dir"
@@ -176,7 +181,6 @@ if [[ "$TARGET_OS" == "linux" ]]; then
 
   desktop_dir="$DATA_HOME/applications"
   mkdir -p "$desktop_dir"
-  desktop_exec="$INSTALL_DIR/nodestorm"
   desktop_exec=${desktop_exec//\\/\\\\}
   desktop_exec=${desktop_exec//\"/\\\"}
   desktop_exec=${desktop_exec//\$/\\$}

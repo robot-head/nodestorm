@@ -2,11 +2,11 @@ use image::{Rgba, RgbaImage};
 
 pub const VIEW_BOX: &str = "0 0 256 256";
 pub const BOLT_POINTS: [(f32, f32); 4] =
-    [(170.0, 34.0), (88.0, 112.0), (150.0, 112.0), (70.0, 222.0)];
+    [(171.0, 49.0), (102.0, 115.0), (154.0, 115.0), (87.0, 207.0)];
 pub const NODE_INDICES: [usize; 3] = [0, 2, 3];
-pub const STROKE_WIDTH: f32 = 30.0;
+pub const STROKE_WIDTH: f32 = 26.0;
 pub const STROKE_RADIUS: f32 = STROKE_WIDTH / 2.0;
-pub const NODE_RADIUS: f32 = 20.0;
+pub const NODE_RADIUS: f32 = 17.0;
 pub const TILE_BG: [u8; 4] = [36, 39, 45, 255];
 
 pub fn svg_points() -> String {
@@ -104,6 +104,21 @@ mod tests {
         assert_eq!(NODE_INDICES, [0, 2, 3]);
         for index in NODE_INDICES {
             assert!(index < BOLT_POINTS.len());
+        }
+    }
+
+    #[test]
+    fn every_node_has_at_least_24_units_of_tile_padding() {
+        const TILE_MIN: f32 = 8.0;
+        const TILE_MAX: f32 = 248.0;
+        const MIN_PADDING: f32 = 24.0;
+
+        for index in NODE_INDICES {
+            let (x, y) = BOLT_POINTS[index];
+            assert!(x - NODE_RADIUS - TILE_MIN >= MIN_PADDING);
+            assert!(y - NODE_RADIUS - TILE_MIN >= MIN_PADDING);
+            assert!(TILE_MAX - (x + NODE_RADIUS) >= MIN_PADDING);
+            assert!(TILE_MAX - (y + NODE_RADIUS) >= MIN_PADDING);
         }
     }
 

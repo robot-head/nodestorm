@@ -13,7 +13,7 @@
 - The mark is an open, right-leaning three-segment lightning path; it must not form a triangle, enclosure, or letter-like silhouette.
 - Circular nodes are fused to both endpoints and the main bend.
 - The standalone in-app mark uses `currentColor`, remains decorative (`aria-hidden`), and preserves the existing 17px topbar footprint and responsive wordmark behavior.
-- The OS-facing mark is white on a neutral charcoal rounded tile with generous padding, no glow, no decorative outline, and no platform-specific redraw.
+- The OS-facing mark is white on a neutral charcoal rounded tile with at least 24 design units between every node extent and the `8..248` tile boundary, no glow, no decorative outline, and no platform-specific redraw.
 - One geometry definition drives inline SVG, generated SVG, native titlebar PNG, Windows assets, macOS `.icns`, and Linux hicolor PNGs.
 - Icon generation is deterministic, local, and network-free.
 - Do not change app behavior, menus, or window sizing.
@@ -104,15 +104,15 @@
 
   pub const VIEW_BOX: &str = "0 0 256 256";
   pub const BOLT_POINTS: [(f32, f32); 4] = [
-      (170.0, 34.0),
-      (88.0, 112.0),
-      (150.0, 112.0),
-      (70.0, 222.0),
+      (171.0, 49.0),
+      (102.0, 115.0),
+      (154.0, 115.0),
+      (87.0, 207.0),
   ];
   pub const NODE_INDICES: [usize; 3] = [0, 2, 3];
-  pub const STROKE_WIDTH: f32 = 30.0;
+  pub const STROKE_WIDTH: f32 = 26.0;
   pub const STROKE_RADIUS: f32 = STROKE_WIDTH / 2.0;
-  pub const NODE_RADIUS: f32 = 20.0;
+  pub const NODE_RADIUS: f32 = 17.0;
   pub const TILE_BG: [u8; 4] = [36, 39, 45, 255];
 
   pub fn svg_points() -> String {
@@ -143,6 +143,8 @@
           })
   }
   ```
+
+  These centered inset constants keep the tile at `8..248` and place the endpoint-node extents at `y=32..224`, giving exactly 24 design units of internal tile padding at the top and bottom.
 
   Add this exact tile hit-test and 4×4 supersampled renderer. The tile and mark coverage are sampled independently; white mark samples replace charcoal tile samples, and uncovered samples remain transparent:
 
@@ -421,12 +423,12 @@
 - Modify: `tests/release_gates.mjs`
 
 **Interfaces:**
-- Consumes: `assets/icons/nodestorm-{128,256,512}.png` from Task 1.
-- Produces: archive entries under `icons/<size>x<size>/nodestorm.png`, installed hicolor icons, and `$XDG_DATA_HOME/applications/nodestorm.desktop` with `Icon=nodestorm` and an absolute `Exec` path.
+- Consumes: `assets/icons/nodestorm-{48,128,256,512}.png` from Task 1.
+- Produces: archive entries under `icons/<size>x<size>/nodestorm.png`, installed hicolor icons, and `$XDG_DATA_HOME/applications/nodestorm.desktop` with `Icon=nodestorm` and a representable absolute `Exec` path.
 
 - [ ] **Step 1: Extend the Linux fixture and add a failing success-path test**
 
-  Extend the existing `node:fs/promises` import with `access` and `copyFile`. In `linuxFailureFixture`, create `staging/icons/{128x128,256x256,512x512}`, copy the matching committed PNG into each directory as `nodestorm.png`, add `chmod` to the linked test commands, and change the tar inputs from just `"nodestorm"` to `"nodestorm", "icons"`. Then add:
+  Extend the existing `node:fs/promises` import with `access` and `copyFile`. In `linuxFailureFixture`, create `staging/icons/{48x48,128x128,256x256,512x512}`, copy the matching committed PNG into each directory as `nodestorm.png`, add `chmod` to the linked test commands, and change the tar inputs from just `"nodestorm"` to `"nodestorm", "icons"`. Then add:
 
   ```js
   test("Linux setup installs launcher and hicolor icons", async () => {
@@ -439,7 +441,7 @@
     assert.equal(result.status, 0, result.stderr);
     const data = fixture.env.XDG_DATA_HOME;
     assert.equal(await readFile(path.join(data, "applications", "nodestorm.desktop"), "utf8").then((s) => s.includes("Icon=nodestorm")), true);
-    for (const size of [128, 256, 512]) {
+    for (const size of [48, 128, 256, 512]) {
       await access(path.join(data, "icons", "hicolor", `${size}x${size}`, "apps", "nodestorm.png"));
     }
   });
@@ -453,20 +455,24 @@
 
 - [ ] **Step 3: Package and install the Linux launcher artwork**
 
-  In the Linux workflow, create `dist/icons/{128x128,256x256,512x512}` and copy the generated PNGs as `nodestorm.png`; include `icons` in the tar command.
+  In the Linux workflow, create `dist/icons/{48x48,128x128,256x256,512x512}` and copy the generated PNGs as `nodestorm.png`; include `icons` in the tar command.
 
   In `setup.sh`, after installing the binary:
 
   ```bash
-  for size in 128 256 512; do
+  for size in 48 128 256 512; do
     staged_icon="$TEMP_DIR/icons/${size}x${size}/nodestorm.png"
     [[ -f "$staged_icon" ]] || { echo "Release archive has no ${size}px launcher icon." >&2; exit 1; }
-    icon_dir="${XDG_DATA_HOME:-${HOME}/.local/share}/icons/hicolor/${size}x${size}/apps"
+    icon_dir="$DATA_HOME/icons/hicolor/${size}x${size}/apps"
     mkdir -p "$icon_dir"
     install -m 0644 "$staged_icon" "$icon_dir/nodestorm.png"
   done
+  ```
 
-  desktop_dir="${XDG_DATA_HOME:-${HOME}/.local/share}/applications"
+  Resolve `XDG_DATA_HOME` only when it is absolute and does not contain `=`; otherwise fall back to `${HOME}/.local/share`. Before creating any destination, fail if `$INSTALL_DIR/nodestorm` is not absolute or still contains `=`, because freedesktop `Exec` executable paths cannot represent that character.
+
+  ```bash
+  desktop_dir="$DATA_HOME/applications"
   mkdir -p "$desktop_dir"
   desktop_exec="$INSTALL_DIR/nodestorm"
   desktop_exec=${desktop_exec//\\/\\\\}
@@ -481,7 +487,7 @@
   chmod 0644 "$desktop_dir/nodestorm.desktop"
   ```
 
-  Add release-gate source assertions that the Linux tar includes `icons` and the setup script contains `Icon=nodestorm` plus all three hicolor sizes.
+  Add release-gate source assertions that the Linux tar includes `icons` and the setup script contains `Icon=nodestorm` plus all four hicolor sizes.
 
 - [ ] **Step 4: Verify Linux installation and release contracts**
 

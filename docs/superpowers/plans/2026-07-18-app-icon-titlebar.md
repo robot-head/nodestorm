@@ -1,5 +1,8 @@
 # App Icon and Titlebar Branding Implementation Plan
 
+> [!WARNING]
+> **Superseded by the [App Icon Redesign Implementation Plan](2026-07-18-app-icon-redesign.md).** The masked/enclosed geometry and asset instructions below are historical and must not be implemented.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a shared monochrome node-graph/lightning-bolt brand mark to Nodestorm's in-app topbar and native desktop window icon.

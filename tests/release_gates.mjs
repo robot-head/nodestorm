@@ -107,15 +107,15 @@ test("Linux release packages and installs launcher artwork", async () => {
   const linuxWorkflow = workflow.slice(workflow.indexOf("\n  linux:"), workflow.indexOf("\n  macos:"));
   const script = await readFile(path.join(scripts, "setup.sh"), "utf8");
 
-  assert.match(linuxWorkflow, /mkdir -p dist\/icons\/\{128x128,256x256,512x512\}/);
-  for (const size of [128, 256, 512]) {
+  assert.match(linuxWorkflow, /mkdir -p dist\/icons\/\{48x48,128x128,256x256,512x512\}/);
+  for (const size of [48, 128, 256, 512]) {
     assert.ok(
       linuxWorkflow.includes(`cp assets/icons/nodestorm-${size}.png dist/icons/${size}x${size}/nodestorm.png`),
       `missing Linux ${size}px icon mapping`,
     );
   }
   assert.match(linuxWorkflow, /tar -C dist .* nodestorm icons/);
-  assert.match(script, /for size in 128 256 512/);
+  assert.match(script, /for size in 48 128 256 512/);
   assert.match(script, /icons\/hicolor\/\$\{size\}x\$\{size\}\/apps/);
   assert.match(script, /Icon=nodestorm/);
 });
