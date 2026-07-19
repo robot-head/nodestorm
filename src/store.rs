@@ -127,6 +127,12 @@ pub struct SessionState {
     /// session, never part of the doc, invisible to agents.
     #[serde(default)]
     pub collapsed_groups: Vec<String>,
+    /// User-declared swimlanes, in display order. View state: persisted per
+    /// session, never part of the doc, invisible to agents — mirrors
+    /// `collapsed_groups`. A lane may exist here with no member nodes (an
+    /// empty lane awaiting cards).
+    #[serde(default)]
+    pub declared_lanes: Vec<String>,
     /// Undo/redo stacks (transient; cleared by any flush or agent turn —
     /// the undo window is "since the agent last spoke").
     #[serde(skip)]
@@ -146,6 +152,7 @@ pub struct UiMeta {
     pub open_choices: usize,
     pub activity: Vec<ActivityEntry>,
     pub collapsed_groups: Vec<String>,
+    pub declared_lanes: Vec<String>,
     pub undo_available: bool,
     pub redo_available: bool,
 }
@@ -242,6 +249,7 @@ impl Store {
             open_choices: s.doc.open_choice_count(),
             activity: s.activity.clone(),
             collapsed_groups: s.collapsed_groups.clone(),
+            declared_lanes: s.declared_lanes.clone(),
             undo_available: !s.undo.is_empty(),
             redo_available: !s.redo.is_empty(),
         })
@@ -300,6 +308,70 @@ impl Store {
         self.mutate(|s| {
             if let Some(n) = s.doc.node_mut(node) {
                 n.position = Some(position);
+            }
+        });
+    }
+
+    /// Re-parent a node into a swimlane (or clear it with `None`). Called on
+    /// drag-drop; like `set_position` it does not checkpoint — the drag's
+    /// start-of-drag checkpoint already captured the old lane, so a single
+    /// undo reverts the whole drag. Blank names normalize to `None`.
+    pub fn set_lane(&self, node: &NodeId, lane: Option<String>) {
+        let lane = lane.and_then(|l| {
+            let t = l.trim();
+            (!t.is_empty()).then(|| t.to_owned())
+        });
+        self.mutate(|s| {
+            if let Some(n) = s.doc.node_mut(node) {
+                n.lane = lane;
+            }
+        });
+    }
+
+    /// Append a new empty swimlane with a unique default name and return it.
+    /// View state only (like `toggle_group_collapsed`): no decision event, no
+    /// undo entry, invisible to agents.
+    pub fn add_lane(&self) -> String {
+        self.mutate(|s| {
+            let name = unique_lane_name(&s.declared_lanes);
+            s.declared_lanes.push(name.clone());
+            name
+        })
+    }
+
+    /// Rename a swimlane: rewrite the declared entry and `lane` on every
+    /// member node so membership follows. A blank or unchanged name is a
+    /// no-op; a name that collides with an existing lane merges into it.
+    pub fn rename_lane(&self, old: &str, new: &str) {
+        let new = new.trim().to_owned();
+        if new.is_empty() || new == old {
+            return;
+        }
+        self.mutate(|s| {
+            for slot in s.declared_lanes.iter_mut() {
+                if slot == old {
+                    *slot = new.clone();
+                }
+            }
+            dedupe_in_place(&mut s.declared_lanes);
+            for n in s.doc.nodes.iter_mut() {
+                if n.lane.as_deref() == Some(old) {
+                    n.lane = Some(new.clone());
+                }
+            }
+        });
+    }
+
+    /// Delete a swimlane: remove the declared entry and clear `lane` on its
+    /// members (cards fall back to the default lane). View state + doc, but
+    /// no undo entry — consistent with the view-state model.
+    pub fn delete_lane(&self, label: &str) {
+        self.mutate(|s| {
+            s.declared_lanes.retain(|l| l != label);
+            for n in s.doc.nodes.iter_mut() {
+                if n.lane.as_deref() == Some(label) {
+                    n.lane = None;
+                }
             }
         });
     }
@@ -1357,6 +1429,24 @@ fn push_undo(s: &mut SessionState, label: &str) {
     s.redo.clear();
 }
 
+/// First free name in the `New lane`, `New lane 2`, … series.
+fn unique_lane_name(existing: &[String]) -> String {
+    let base = "New lane";
+    if !existing.iter().any(|l| l == base) {
+        return base.to_owned();
+    }
+    (2..)
+        .map(|i| format!("{base} {i}"))
+        .find(|c| !existing.iter().any(|l| l == c))
+        .expect("an infinite range always yields a free name")
+}
+
+/// Drop later duplicates, keeping first-appearance order.
+fn dedupe_in_place(v: &mut Vec<String>) {
+    let mut seen = std::collections::HashSet::new();
+    v.retain(|x| seen.insert(x.clone()));
+}
+
 fn blocked_change(event: DecisionEvent, reason: String) -> QueuedChange {
     QueuedChange {
         id: format!("blocked:{}", uuid::Uuid::new_v4()),
@@ -2368,6 +2458,101 @@ mod tests {
                 .position
                 .is_none(),
             "back to auto-layout"
+        );
+    }
+
+    #[test]
+    fn set_lane_sets_and_clears_membership() {
+        let store = demo_store();
+        store.set_lane(&NodeId::from("redis"), Some("  data  ".into()));
+        assert_eq!(
+            store
+                .snapshot_doc()
+                .node(&NodeId::from("redis"))
+                .unwrap()
+                .lane
+                .as_deref(),
+            Some("data"),
+            "lane is trimmed and set"
+        );
+        store.set_lane(&NodeId::from("redis"), Some("   ".into()));
+        assert_eq!(
+            store
+                .snapshot_doc()
+                .node(&NodeId::from("redis"))
+                .unwrap()
+                .lane,
+            None,
+            "blank lane clears membership"
+        );
+    }
+
+    #[test]
+    fn set_lane_folds_into_a_drag_checkpoint() {
+        let store = demo_store();
+        // demo fixture starts redis in the "Data" lane; clear it so the
+        // pre-drag baseline this test undoes back to is known to be `None`.
+        store.set_lane(&NodeId::from("redis"), None);
+        store.checkpoint_position(&NodeId::from("redis")); // drag start
+        store.set_position(&NodeId::from("redis"), Point { x: 5.0, y: 5.0 });
+        store.set_lane(&NodeId::from("redis"), Some("data".into()));
+        assert!(store.undo(), "one undo available for the drag");
+        let redis = store
+            .snapshot_doc()
+            .node(&NodeId::from("redis"))
+            .unwrap()
+            .clone();
+        assert_eq!(redis.lane, None, "undo reverts the lane change");
+    }
+
+    #[test]
+    fn add_lane_appends_unique_names() {
+        let store = demo_store();
+        assert_eq!(store.add_lane(), "New lane");
+        assert_eq!(store.add_lane(), "New lane 2");
+        assert_eq!(store.add_lane(), "New lane 3");
+        assert_eq!(
+            store.snapshot_meta().declared_lanes,
+            vec!["New lane", "New lane 2", "New lane 3"]
+        );
+    }
+
+    #[test]
+    fn rename_lane_rewrites_registry_and_members() {
+        let store = demo_store();
+        store.set_lane(&NodeId::from("redis"), Some("data".into()));
+        store.add_lane(); // "New lane"
+        store.rename_lane("New lane", "data"); // collides → merges
+        store.rename_lane("data", "backend");
+        assert_eq!(store.snapshot_meta().declared_lanes, vec!["backend"]);
+        assert_eq!(
+            store
+                .snapshot_doc()
+                .node(&NodeId::from("redis"))
+                .unwrap()
+                .lane
+                .as_deref(),
+            Some("backend")
+        );
+        store.rename_lane("backend", "  "); // blank ignored
+        assert_eq!(store.snapshot_meta().declared_lanes, vec!["backend"]);
+    }
+
+    #[test]
+    fn delete_lane_removes_registry_and_clears_members() {
+        let store = demo_store();
+        store.set_lane(&NodeId::from("redis"), Some("data".into()));
+        store.add_lane();
+        store.rename_lane("New lane", "data");
+        store.delete_lane("data");
+        assert!(store.snapshot_meta().declared_lanes.is_empty());
+        assert_eq!(
+            store
+                .snapshot_doc()
+                .node(&NodeId::from("redis"))
+                .unwrap()
+                .lane,
+            None
         );
     }
 
