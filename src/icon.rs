@@ -43,10 +43,8 @@ fn rounded_tile_contains(x: f32, y: f32) -> bool {
     const RADIUS: f32 = 42.0;
     let nearest_x = x.clamp(MIN + RADIUS, MAX - RADIUS);
     let nearest_y = y.clamp(MIN + RADIUS, MAX - RADIUS);
-    x >= MIN
-        && x <= MAX
-        && y >= MIN
-        && y <= MAX
+    (MIN..=MAX).contains(&x)
+        && (MIN..=MAX).contains(&y)
         && (x - nearest_x).powi(2) + (y - nearest_y).powi(2) <= RADIUS.powi(2)
 }
 
@@ -77,16 +75,13 @@ pub fn render_tile(size: u32) -> RgbaImage {
                 }
             }
             let count = SAMPLES * SAMPLES;
-            let pixel = if covered == 0 {
-                [0, 0, 0, 0]
-            } else {
-                [
-                    (rgb[0] / covered) as u8,
-                    (rgb[1] / covered) as u8,
-                    (rgb[2] / covered) as u8,
-                    (covered * 255 / count) as u8,
-                ]
-            };
+            let divisor = covered.max(1);
+            let pixel = [
+                (rgb[0] / divisor) as u8,
+                (rgb[1] / divisor) as u8,
+                (rgb[2] / divisor) as u8,
+                (covered * 255 / count) as u8,
+            ];
             image.put_pixel(px, py, Rgba(pixel));
         }
     }
