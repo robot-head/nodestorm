@@ -611,6 +611,7 @@ pub fn Canvas(
                                         let old = lane.label.clone();
                                         let store = store.clone();
                                         move |ev: KeyboardEvent| {
+                                            ev.stop_propagation();
                                             if ev.key() == Key::Enter {
                                                 store.rename_lane(&old, &lane_name_draft.read());
                                                 editing_lane.set(None);
@@ -623,8 +624,10 @@ pub fn Canvas(
                                         let old = lane.label.clone();
                                         let store = store.clone();
                                         move |_| {
-                                            store.rename_lane(&old, &lane_name_draft.read());
-                                            editing_lane.set(None);
+                                            if editing_lane().as_deref() == Some(old.as_str()) {
+                                                store.rename_lane(&old, &lane_name_draft.read());
+                                                editing_lane.set(None);
+                                            }
                                         }
                                     },
                                 }
