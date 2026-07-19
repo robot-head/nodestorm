@@ -61,7 +61,7 @@ pub struct NodestormServer {
 }
 
 impl NodestormServer {
-    pub fn new(sessions: Arc<crate::sessions::Sessions>) -> Self {
+    pub(super) fn new(sessions: Arc<crate::sessions::Sessions>) -> Self {
         let id = sessions.next_connection_id();
         Self {
             sessions: sessions.clone(),

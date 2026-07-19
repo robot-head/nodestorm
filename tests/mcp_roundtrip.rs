@@ -134,6 +134,94 @@ async fn connection_lifecycle_is_visible() {
 }
 
 #[tokio::test]
+async fn transport_shutdown_releases_waiter_for_reconnect() {
+    let store = Store::new(SessionState::default());
+    let (port, _shutdown, sessions) = start_server(store.clone()).await;
+    let uri = format!("http://127.0.0.1:{port}/mcp");
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(uri.clone()),
+    );
+    let client = ClientInfo::new(
+        ClientCapabilities::default(),
+        Implementation::new("claude-code", "1.2.3"),
+    )
+    .serve(transport)
+    .await
+    .expect("first handshake");
+    let awaiting = client
+        .send_cancellable_request(
+            ClientRequest::CallToolRequest(Request::new(
+                CallToolRequestParams::new("await_decisions").with_arguments(
+                    json!({"timeout_seconds": 30, "agent": "alpha"})
+                        .as_object()
+                        .cloned()
+                        .unwrap_or_default(),
+                ),
+            )),
+            PeerRequestOptions::no_options(),
+        )
+        .await
+        .expect("start first await_decisions");
+    let mut changes = sessions.subscribe_connections();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while store.snapshot_meta().waiting_agents != 1 {
+            changes.changed().await.expect("connection watch open");
+        }
+    })
+    .await
+    .expect("first client becomes waiting");
+
+    client.cancel().await.expect("transport shutdown");
+    drop(awaiting);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while store.snapshot_meta().waiting_agents != 0 || !sessions.connections().is_empty() {
+            changes.changed().await.expect("connection watch open");
+        }
+    })
+    .await
+    .expect("transport shutdown releases waiter and connection");
+
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(uri),
+    );
+    let reconnected = ClientInfo::new(
+        ClientCapabilities::default(),
+        Implementation::new("claude-code", "1.2.3"),
+    )
+    .serve(transport)
+    .await
+    .expect("reconnect handshake");
+    let peer = reconnected.peer().clone();
+    let delivery = tokio::spawn(async move {
+        peer.call_tool(
+            CallToolRequestParams::new("await_decisions").with_arguments(
+                json!({"timeout_seconds": 10, "agent": "alpha"})
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
+        )
+        .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while store.snapshot_meta().waiting_agents != 1 {
+            changes.changed().await.expect("connection watch open");
+        }
+    })
+    .await
+    .expect("reconnected client becomes waiting");
+    store
+        .request_flush(None)
+        .expect("send to reconnected client");
+    let result = delivery
+        .await
+        .expect("delivery task")
+        .expect("await_decisions response");
+    assert_eq!(tool_json(&result)["status"], "delivered");
+    reconnected.cancel().await.expect("reconnected shutdown");
+}
+
+#[tokio::test]
 async fn full_decision_roundtrip() {
     let store = Store::new(SessionState::default());
     let (port, _shutdown, _sessions) = start_server(store.clone()).await;
