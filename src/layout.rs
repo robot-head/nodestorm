@@ -71,7 +71,13 @@ pub struct ClusterRect {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LaneBand {
     pub label: String,
+    /// The drawn band: the base strip grown to enclose the lane's pinned
+    /// members, so a dropped card is visibly contained.
     pub rect: Rect,
+    /// The stable base strip (independent of pinned cards). Drop hit-testing
+    /// and the drag-target highlight use this so the target does not chase a
+    /// card being dragged.
+    pub hit: Rect,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -187,16 +193,25 @@ fn wrap_lines(text: &str, per_line: usize) -> usize {
 }
 
 pub fn compute(doc: &SessionDoc) -> Layout {
-    compute_collapsed(doc, &BTreeSet::new())
+    compute_view(doc, &BTreeSet::new(), &[])
 }
 
+/// Layout with named groups collapsed. See [`compute_view`].
+pub fn compute_collapsed(doc: &SessionDoc, collapsed: &BTreeSet<String>) -> Layout {
+    compute_view(doc, collapsed, &[])
+}
+
+/// Layout with collapsed groups and user-declared swimlanes. `declared` lists
+/// lanes the user created (including empty ones) in display order; lanes only
+/// referenced by `node.lane` are appended after, in first-appearance order.
+///
 /// Layout with the named groups collapsed: each becomes one synthetic
 /// `group:<name>` node, member cards disappear, and edges re-route to the
 /// cluster (parallel edges onto one cluster merge into a `bundle_count`ed
 /// path labeled `×N`). Group-internal edges vanish.
-pub fn compute_collapsed(doc: &SessionDoc, collapsed: &BTreeSet<String>) -> Layout {
+pub fn compute_view(doc: &SessionDoc, collapsed: &BTreeSet<String>, declared: &[String]) -> Layout {
     if collapsed.is_empty() {
-        return compute_inner(doc, &[]);
+        return compute_inner(doc, &[], declared);
     }
 
     // Which groups actually have members, in first-appearance order.
@@ -291,7 +306,7 @@ pub fn compute_collapsed(doc: &SessionDoc, collapsed: &BTreeSet<String>) -> Layo
         questions: vec![],
         annotations: vec![],
     };
-    let mut layout = compute_inner(&syn_doc, &counts);
+    let mut layout = compute_inner(&syn_doc, &counts, declared);
 
     let mut clusters = Vec::new();
     for g in group_order {
@@ -308,7 +323,7 @@ pub fn compute_collapsed(doc: &SessionDoc, collapsed: &BTreeSet<String>) -> Layo
 }
 
 /// `counts[i]` is the bundle size of `doc.edges[i]` (empty slice → all 1).
-fn compute_inner(doc: &SessionDoc, counts: &[usize]) -> Layout {
+fn compute_inner(doc: &SessionDoc, counts: &[usize], declared: &[String]) -> Layout {
     let index: HashMap<&NodeId, usize> = doc
         .nodes
         .iter()
@@ -340,10 +355,10 @@ fn compute_inner(doc: &SessionDoc, counts: &[usize]) -> Layout {
     let order = barycenter_order(&dag, &ranks);
     // Swimlanes constrain vertical packing into labeled bands; without any
     // `lane` the layout is unchanged (centered ranks).
-    let (rects, lanes) = if doc.nodes.iter().any(|n| n.lane.is_some()) {
-        place_laned(doc, &ranks, &order)
-    } else {
+    let (rects, lanes) = if declared.is_empty() && !doc.nodes.iter().any(|n| n.lane.is_some()) {
         (place(doc, &ranks, &order), Vec::new())
+    } else {
+        place_laned(doc, &ranks, &order, declared)
     };
     let rank_of: HashMap<&NodeId, usize> = doc
         .nodes
@@ -575,21 +590,35 @@ fn place_laned(
     doc: &SessionDoc,
     _ranks: &[usize],
     order: &[Vec<usize>],
+    declared: &[String],
 ) -> (HashMap<NodeId, Rect>, Vec<LaneBand>) {
     const LANE_SEP: f64 = 18.0;
     const LANE_HPAD: f64 = 30.0;
     let heights: Vec<f64> = doc.nodes.iter().map(estimate_height).collect();
     let lane_key = |i: usize| doc.nodes[i].lane.clone().unwrap_or_default();
 
-    // Distinct lanes in first-appearance order; "" is the default lane.
+    // Lane order: declared lanes first (in the user's order), then lanes only
+    // referenced by nodes (first appearance), then the unlabeled default last.
     let mut lane_order: Vec<String> = Vec::new();
     let mut lane_index: HashMap<String, usize> = HashMap::new();
-    for (i, _) in doc.nodes.iter().enumerate() {
-        let key = lane_key(i);
-        if !lane_index.contains_key(&key) {
-            lane_index.insert(key.clone(), lane_order.len());
-            lane_order.push(key);
+    let push_lane = |order: &mut Vec<String>, index: &mut HashMap<String, usize>, key: String| {
+        if !index.contains_key(&key) {
+            index.insert(key.clone(), order.len());
+            order.push(key);
         }
+    };
+    for label in declared {
+        push_lane(&mut lane_order, &mut lane_index, label.clone());
+    }
+    for i in 0..doc.nodes.len() {
+        let key = lane_key(i);
+        if !key.is_empty() {
+            push_lane(&mut lane_order, &mut lane_index, key);
+        }
+    }
+    // The default lane is appended only if some node has no lane.
+    if doc.nodes.iter().any(|n| n.lane.is_none()) {
+        push_lane(&mut lane_order, &mut lane_index, String::new());
     }
     let num_lanes = lane_order.len();
     let num_ranks = order.len();
@@ -680,17 +709,35 @@ fn place_laned(
         if label.is_empty() {
             continue; // the default lane draws no band
         }
+        let base = Rect {
+            x: -LANE_HPAD,
+            y: lane_y[li],
+            w: graph_w + 2.0 * LANE_HPAD,
+            h: band_h[li],
+        };
+        // Grow the drawn band to enclose this lane's pinned members.
+        let mut grown = base;
+        for (i, node) in doc.nodes.iter().enumerate() {
+            if node.position.is_some() && lane_key(i) == *label {
+                grown = union_rect(grown, rects[&node.id]);
+            }
+        }
         lanes.push(LaneBand {
             label: label.clone(),
-            rect: Rect {
-                x: -LANE_HPAD,
-                y: lane_y[li],
-                w: graph_w + 2.0 * LANE_HPAD,
-                h: band_h[li],
-            },
+            rect: grown,
+            hit: base,
         });
     }
     (rects, lanes)
+}
+
+/// The lane whose stable hit-strip contains `(x, y)` in plane coords, or
+/// `None` if the point is outside every band (the drop-outside case).
+pub fn lane_at(lanes: &[LaneBand], x: f64, y: f64) -> Option<String> {
+    lanes
+        .iter()
+        .find(|l| x >= l.hit.x && x < l.hit.x + l.hit.w && y >= l.hit.y && y < l.hit.y + l.hit.h)
+        .map(|l| l.label.clone())
 }
 
 /// Vertical spacing between channel lanes for rank-spanning edges.
@@ -1218,5 +1265,89 @@ mod tests {
         assert_eq!(wrap_lines("short", 20), 1);
         assert_eq!(wrap_lines("two words", 5), 2);
         assert_eq!(wrap_lines("supercalifragilistic", 10), 2);
+    }
+
+    #[test]
+    fn declared_empty_lane_gets_a_band_in_declared_order() {
+        // No node references "review"; it exists only in the declared list.
+        let mut d = doc(&["a", "b"], &[("a", "b")]);
+        d.node_mut(&NodeId::from("a")).unwrap().lane = Some("build".into());
+        let layout = compute_view(
+            &d,
+            &std::collections::BTreeSet::new(),
+            &["review".to_owned(), "build".to_owned()],
+        );
+        let labels: Vec<&str> = layout.lanes.iter().map(|l| l.label.as_str()).collect();
+        // Declared order wins; the empty "review" lane still renders a band.
+        assert_eq!(labels, vec!["review", "build"]);
+        let review = layout.lanes.iter().find(|l| l.label == "review").unwrap();
+        assert!(
+            review.rect.h > 0.0,
+            "empty declared lane has a visible band"
+        );
+    }
+
+    #[test]
+    fn referenced_only_lane_follows_declared_lanes() {
+        let mut d = doc(&["a", "b"], &[("a", "b")]);
+        d.node_mut(&NodeId::from("a")).unwrap().lane = Some("adhoc".into()); // not declared
+        let layout = compute_view(
+            &d,
+            &std::collections::BTreeSet::new(),
+            &["build".to_owned()], // declared but unreferenced
+        );
+        let labels: Vec<&str> = layout.lanes.iter().map(|l| l.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec!["build", "adhoc"],
+            "declared before referenced-only"
+        );
+    }
+
+    #[test]
+    fn pinned_card_is_enclosed_by_its_grown_band() {
+        let mut d = doc(&["a", "b"], &[("a", "b")]);
+        d.node_mut(&NodeId::from("a")).unwrap().lane = Some("build".into());
+        d.node_mut(&NodeId::from("b")).unwrap().lane = Some("build".into());
+        // Pin b far below where the auto strip would sit.
+        d.node_mut(&NodeId::from("b")).unwrap().position = Some(Point { x: 40.0, y: 400.0 });
+        let layout = compute_view(
+            &d,
+            &std::collections::BTreeSet::new(),
+            &["build".to_owned()],
+        );
+        let band = layout.lanes.iter().find(|l| l.label == "build").unwrap();
+        let rb = layout.rects[&NodeId::from("b")];
+        assert!(
+            band.rect.y <= rb.y && band.rect.y + band.rect.h >= rb.y + rb.h,
+            "grown band {:?} must enclose pinned card {:?}",
+            band.rect,
+            rb
+        );
+        // The hit strip stays put (does not chase the pinned card down to y=400).
+        assert!(
+            band.hit.y + band.hit.h < 300.0,
+            "hit strip is the stable base band"
+        );
+    }
+
+    #[test]
+    fn lane_at_hits_bands_and_misses_the_gap() {
+        let mut d = doc(&["a", "b"], &[("a", "b")]);
+        d.node_mut(&NodeId::from("a")).unwrap().lane = Some("build".into());
+        let layout = compute_view(
+            &d,
+            &std::collections::BTreeSet::new(),
+            &["build".to_owned()],
+        );
+        let band = layout.lanes.iter().find(|l| l.label == "build").unwrap();
+        let cx = band.hit.x + band.hit.w / 2.0;
+        let cy = band.hit.y + band.hit.h / 2.0;
+        assert_eq!(lane_at(&layout.lanes, cx, cy).as_deref(), Some("build"));
+        assert_eq!(
+            lane_at(&layout.lanes, cx, band.hit.y - 5000.0),
+            None,
+            "far away = no lane"
+        );
     }
 }
