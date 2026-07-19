@@ -10,6 +10,7 @@ use crate::agent_launcher::{
     read_ssh_aliases, remote_agent_command, suggest_branch, suggest_worktree, validate_request,
 };
 use crate::cli::Cli;
+use crate::prefs::Preferences;
 use crate::sessions::Sessions;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,8 +222,11 @@ fn start_attempt(
     request: LaunchRequest,
     sessions: Arc<Sessions>,
     allow_dirty: bool,
+    mut prefs: Signal<Preferences>,
+    cli: Cli,
     mut signals: LaunchSignals,
 ) {
+    let repo = request.repository.clone();
     signals.running.set(true);
     signals.error.set(None);
     signals.retained.set(None);
@@ -234,7 +238,19 @@ fn start_attempt(
                 .unwrap_or_else(|err| failed(format!("launcher worker failed: {err}"), None));
         signals.running.set(false);
         match outcome {
-            LaunchOutcome::Started => signals.open.set(false),
+            LaunchOutcome::Started => {
+                let changed = prefs.write().record_repository(&repo);
+                if changed {
+                    let snapshot = prefs.read().clone();
+                    if let Err(err) = cli
+                        .prefs_path()
+                        .and_then(|path| crate::prefs::save(&path, &snapshot))
+                    {
+                        tracing::warn!(%err, "saving recent repositories failed");
+                    }
+                }
+                signals.open.set(false);
+            }
             LaunchOutcome::NeedsDirtyConfirmation => signals.dirty_warning.set(true),
             LaunchOutcome::Failed {
                 message,
@@ -261,6 +277,7 @@ pub fn AgentLauncher() -> Element {
     let sessions = use_context::<Arc<Sessions>>();
     let cli = use_context::<Cli>();
     let mut open = use_context::<super::AgentLauncherOpen>().0;
+    let prefs = use_context::<super::ThemePref>().0;
     let mut draft = use_signal(LaunchDraft::default);
     let aliases = use_signal(read_ssh_aliases);
     let mut running = use_signal(|| false);
@@ -361,9 +378,15 @@ pub fn AgentLauncher() -> Element {
                         span { if draft.read().remote { "Remote repository path" } else { "Repository path" } }
                         input {
                             id: "agent-repository",
+                            list: "recent-repositories",
                             placeholder: if draft.read().remote { "/srv/projects/api" } else { "/home/me/projects/api" },
                             value: "{draft.read().repository}",
                             oninput: move |event| draft.write().set_repository(event.value()),
+                        }
+                        datalist { id: "recent-repositories",
+                            for repo in prefs.read().recent_repositories.iter() {
+                                option { key: "{repo}", value: "{repo}" }
+                            }
                         }
                     }
                     label { class: "agent-launch-field agent-launch-wide",
@@ -479,6 +502,8 @@ pub fn AgentLauncher() -> Element {
                                     draft.read().request(cli.port),
                                     sessions.clone(),
                                     allow_dirty(),
+                                    prefs,
+                                    cli.clone(),
                                     LaunchSignals {
                                         running,
                                         dirty_warning,
