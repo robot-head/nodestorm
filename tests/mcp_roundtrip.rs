@@ -11,7 +11,7 @@ use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use serde_json::{Value, json};
 
-use nodestorm::model::{ChoiceId, NodeId, NodeKind, OptionId};
+use nodestorm::model::{ChoiceId, NodeId, NodeKind, OptionId, QuestionId};
 use nodestorm::sessions::Sessions;
 use nodestorm::store::{SessionState, Store};
 
@@ -73,7 +73,7 @@ async fn full_decision_roundtrip() {
         .await
         .expect("mcp handshake");
 
-    // Tool discovery: all eight tools are advertised.
+    // Tool discovery: every tool is advertised.
     let tools = client.list_all_tools().await.expect("list tools");
     let names: Vec<_> = tools.iter().map(|t| t.name.as_ref()).collect();
     for expected in [
@@ -85,6 +85,7 @@ async fn full_decision_roundtrip() {
         "export_markdown",
         "list_sessions",
         "diff_sessions",
+        "diff_record",
     ] {
         assert!(
             names.contains(&expected),
@@ -253,6 +254,288 @@ async fn full_decision_roundtrip() {
     assert!(mermaid.starts_with("flowchart LR\n"), "got: {mermaid}");
     assert!(!mermaid.contains("# "), "no markdown headings: {mermaid}");
 
+    client.cancel().await.expect("client shutdown");
+}
+
+#[tokio::test]
+async fn agent_question_answered_roundtrip() {
+    let store = Store::new(SessionState::default());
+    let (port, _shutdown, _sessions) = start_server(store.clone()).await;
+
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(format!("http://127.0.0.1:{port}/mcp")),
+    );
+    let client = ClientInfo::default()
+        .serve(transport)
+        .await
+        .expect("mcp handshake");
+
+    // propose a one-node graph, then attach a free-form question to it.
+    client
+        .call_tool(
+            CallToolRequestParams::new("propose_graph").with_arguments(
+                json!({
+                    "title": "q graph",
+                    "nodes": [{"id": "api", "label": "API", "kind": "service"}]
+                })
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+            ),
+        )
+        .await
+        .expect("propose_graph");
+    client
+        .call_tool(
+            CallToolRequestParams::new("update_graph").with_arguments(
+                json!({
+                    "ops": [{"op": "ask", "question": {
+                        "id": "deploy-target",
+                        "prompt": "Which environment ships first?",
+                        "node_id": "api"
+                    }}]
+                })
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+            ),
+        )
+        .await
+        .expect("ask");
+
+    // Simulated user answers in text, then clicks Send (answers do not autoflush).
+    tokio::spawn({
+        let store = store.clone();
+        async move {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            store
+                .answer_question(&QuestionId::from("deploy-target"), "staging first".into())
+                .expect("answer");
+            store.request_flush(None);
+        }
+    });
+
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("await_decisions").with_arguments(
+                json!({"timeout_seconds": 10})
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
+        )
+        .await
+        .expect("await_decisions");
+    let outcome = tool_json(&result);
+    assert_eq!(outcome["status"], "delivered", "{outcome:#}");
+    let decisions = outcome["decisions"].as_array().expect("decisions array");
+    assert_eq!(decisions[0]["kind"], "question_answered");
+    assert_eq!(decisions[0]["question_id"], "deploy-target");
+    assert_eq!(decisions[0]["answer"], "staging first");
+
+    // The answer is durable in the doc and exported alongside decisions.
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("get_state")
+                .with_arguments(json!({}).as_object().cloned().unwrap_or_default()),
+        )
+        .await
+        .expect("get_state");
+    let state = tool_json(&result);
+    assert_eq!(state["doc"]["questions"][0]["answer"], "staging first");
+
+    client.cancel().await.expect("client shutdown");
+}
+
+#[tokio::test]
+async fn multi_agent_awaits_route_per_agent() {
+    let store = Store::new(SessionState::default());
+    let (port, _shutdown, _sessions) = start_server(store.clone()).await;
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(format!("http://127.0.0.1:{port}/mcp")),
+    );
+    let client = ClientInfo::default()
+        .serve(transport)
+        .await
+        .expect("mcp handshake");
+
+    // Agent alpha proposes node "a" with a choice; agent beta adds node "b".
+    client
+        .call_tool(CallToolRequestParams::new("propose_graph").with_arguments(
+            json!({
+                "title": "multi", "agent": "alpha",
+                "nodes": [{"id": "a", "label": "A", "choices": [
+                    {"id": "ca", "prompt": "A?", "options": [{"id": "x", "label": "X"}, {"id": "y", "label": "Y"}]}
+                ]}]
+            })
+            .as_object().cloned().unwrap_or_default(),
+        ))
+        .await
+        .expect("propose alpha");
+    client
+        .call_tool(CallToolRequestParams::new("update_graph").with_arguments(
+            json!({
+                "agent": "beta",
+                "ops": [{"op": "upsert_node", "node": {"id": "b", "label": "B", "choices": [
+                    {"id": "cb", "prompt": "B?", "options": [{"id": "p", "label": "P"}, {"id": "q", "label": "Q"}]}
+                ]}}]
+            })
+            .as_object().cloned().unwrap_or_default(),
+        ))
+        .await
+        .expect("update beta");
+
+    // Both nodes are attributed to their author.
+    let state = tool_json(
+        &client
+            .call_tool(
+                CallToolRequestParams::new("get_state")
+                    .with_arguments(json!({}).as_object().cloned().unwrap_or_default()),
+            )
+            .await
+            .expect("get_state"),
+    );
+    assert_eq!(state["doc"]["nodes"][0]["agent"], "alpha");
+    assert_eq!(state["doc"]["nodes"][1]["agent"], "beta");
+
+    // The user decides both; deciding the last open choice autoflushes.
+    tokio::spawn({
+        let store = store.clone();
+        async move {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            store
+                .select_option(
+                    &NodeId::from("a"),
+                    &ChoiceId::from("ca"),
+                    &OptionId::from("x"),
+                    vec![],
+                )
+                .expect("select a");
+            store
+                .select_option(
+                    &NodeId::from("b"),
+                    &ChoiceId::from("cb"),
+                    &OptionId::from("q"),
+                    vec![],
+                )
+                .expect("select b");
+        }
+    });
+
+    // alpha and beta each await the same session and get only their decision.
+    let alpha = tool_json(
+        &client
+            .call_tool(
+                CallToolRequestParams::new("await_decisions").with_arguments(
+                    json!({"timeout_seconds": 10, "agent": "alpha"})
+                        .as_object()
+                        .cloned()
+                        .unwrap_or_default(),
+                ),
+            )
+            .await
+            .expect("alpha await"),
+    );
+    assert_eq!(alpha["status"], "delivered", "{alpha:#}");
+    let a_dec = alpha["decisions"].as_array().unwrap();
+    assert_eq!(a_dec.len(), 1, "alpha sees only its own: {a_dec:#?}");
+    assert_eq!(a_dec[0]["node_id"], "a");
+
+    let beta = tool_json(
+        &client
+            .call_tool(
+                CallToolRequestParams::new("await_decisions").with_arguments(
+                    json!({"timeout_seconds": 10, "agent": "beta"})
+                        .as_object()
+                        .cloned()
+                        .unwrap_or_default(),
+                ),
+            )
+            .await
+            .expect("beta await"),
+    );
+    assert_eq!(beta["status"], "delivered", "{beta:#}");
+    let b_dec = beta["decisions"].as_array().unwrap();
+    assert_eq!(b_dec.len(), 1, "beta sees only its own: {b_dec:#?}");
+    assert_eq!(b_dec[0]["node_id"], "b");
+
+    client.cancel().await.expect("client shutdown");
+}
+
+#[tokio::test]
+async fn diff_against_exported_record_file() {
+    let store = Store::new(SessionState::default());
+    let (port, _shutdown, _sessions) = start_server(store.clone()).await;
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(format!("http://127.0.0.1:{port}/mcp")),
+    );
+    let client = ClientInfo::default()
+        .serve(transport)
+        .await
+        .expect("mcp handshake");
+
+    client
+        .call_tool(CallToolRequestParams::new("propose_graph").with_arguments(
+            json!({"title": "rec", "nodes": [{"id": "api", "label": "API", "kind": "service"}]})
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+        ))
+        .await
+        .expect("propose");
+
+    // Export the record to a temp file.
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("export_markdown")
+                .with_arguments(json!({}).as_object().cloned().unwrap_or_default()),
+        )
+        .await
+        .expect("export");
+    let record = result.content[0].as_text().expect("text").text.clone();
+    let path = std::env::temp_dir().join(format!("nodestorm-rec-{}.md", std::process::id()));
+    std::fs::write(&path, &record).expect("write record");
+
+    // Unchanged session vs its own record → no differences.
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("diff_record").with_arguments(
+                json!({"path": path.to_string_lossy()})
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
+        )
+        .await
+        .expect("diff_record");
+    let diff = &result.content[0].as_text().expect("text").text;
+    assert!(diff.contains("_No differences._"), "{diff}");
+
+    // Add a component, then diff again → drift is reported.
+    client
+        .call_tool(CallToolRequestParams::new("update_graph").with_arguments(
+            json!({"ops": [{"op": "upsert_node", "node": {"id": "cache", "label": "Cache", "kind": "data_store"}}]})
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+        ))
+        .await
+        .expect("update");
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("diff_record").with_arguments(
+                json!({"path": path.to_string_lossy()})
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
+        )
+        .await
+        .expect("diff_record 2");
+    let diff = &result.content[0].as_text().expect("text").text;
+    assert!(diff.contains("+ added: **Cache**"), "{diff}");
+
+    let _ = std::fs::remove_file(&path);
     client.cancel().await.expect("client shutdown");
 }
 

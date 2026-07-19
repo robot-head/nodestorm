@@ -109,12 +109,14 @@ pub fn QueuedChangesPanel(
                                                                 node.position,
                                                             ) {
                                                                 Ok(id) => {
-                                                                    if !node.description.is_empty()
+                                                                    if (!node.description.is_empty()
+                                                                        || node.lane.is_some())
                                                                         && let Err(err) = store.edit_node(
                                                                             &id,
                                                                             label,
                                                                             node.kind,
                                                                             node.description,
+                                                                            node.lane,
                                                                         )
                                                                     {
                                                                         tracing::warn!(%err, "restore queued node details failed");
@@ -191,6 +193,7 @@ mod tests {
                     label: "Widget".into(),
                     node_kind: NodeKind::Component,
                     description: String::new(),
+                    lane: None,
                 },
             },
             blocked_reason: Some("node widget no longer exists".into()),
@@ -211,9 +214,12 @@ mod tests {
             kind: NodeKind::Component,
             description: "needs tuning".into(),
             status: ElementStatus::Proposed,
+            build: None,
             group: None,
+            lane: None,
             choices: vec![],
             notes: vec![],
+            agent: None,
             position: None,
             origin: Origin::User,
         };

@@ -14,9 +14,9 @@ use chrono::Utc;
 use tokio::sync::watch;
 
 use crate::model::{
-    ActivityEntry, ActivityOrigin, ChoiceId, ChoiceStatus, DecisionEvent, DecisionKind, Edge,
-    EdgeKind, ElementStatus, GraphOp, Node, NodeId, NodeKind, Note, NoteId, OptionId, Origin,
-    Point, SessionDoc,
+    ActivityEntry, ActivityOrigin, Annotation, AnnotationId, AnnotationKind, ChoiceId,
+    ChoiceStatus, DecisionEvent, DecisionKind, Edge, EdgeKind, ElementStatus, GraphOp, Node,
+    NodeId, NodeKind, Note, NoteId, OptionId, Origin, Point, QuestionId, SessionDoc,
 };
 
 const ACTIVITY_CAP: usize = 200;
@@ -63,12 +63,18 @@ pub enum StoreError {
     UnknownNode(NodeId),
     #[error("unknown choice `{choice}` on node `{node}`")]
     UnknownChoice { node: NodeId, choice: ChoiceId },
+    #[error("unknown question `{0}`")]
+    UnknownQuestion(QuestionId),
+    #[error("unknown annotation `{0}`")]
+    UnknownAnnotation(AnnotationId),
     #[error("unknown option `{option}` in choice `{choice}` on node `{node}`")]
     UnknownOption {
         node: NodeId,
         choice: ChoiceId,
         option: OptionId,
     },
+    #[error("choice `{choice}` on node `{node}` is locked until its dependencies are decided")]
+    ChoiceLocked { node: NodeId, choice: ChoiceId },
     #[error("document rejected: {}", errors.join("; "))]
     Invalid { errors: Vec<String> },
     #[error("edge {0} -> {1} of that kind already exists")]
@@ -107,6 +113,15 @@ pub struct SessionState {
     pub flush_seq: u64,
     /// The last `flush_seq` actually delivered to an `await_decisions` call.
     pub delivered_flush_seq: u64,
+    /// Multi-agent delivery: per-named-agent position in `decision_log` already
+    /// handed to that agent. The default (unnamed) agent uses
+    /// `delivery_cursor`; these run alongside it without disturbing it.
+    #[serde(default)]
+    pub agent_cursors: std::collections::HashMap<String, usize>,
+    /// Per-named-agent last `flush_seq` delivered (the per-agent exactly-once
+    /// gate, mirroring `delivered_flush_seq` for the default agent).
+    #[serde(default)]
+    pub agent_flush: std::collections::HashMap<String, u64>,
     pub activity: Vec<ActivityEntry>,
     /// Groups the user collapsed on the canvas. View state: persisted per
     /// session, never part of the doc, invisible to agents.
@@ -329,6 +344,12 @@ impl Store {
                         option: option.clone(),
                     }
                 })?;
+                if s.doc.is_choice_locked(c) {
+                    return Err(StoreError::ChoiceLocked {
+                        node: node.clone(),
+                        choice: choice.clone(),
+                    });
+                }
                 (n.label.clone(), o.label.clone())
             };
             push_undo(
@@ -376,10 +397,16 @@ impl Store {
                     .doc
                     .node(node)
                     .ok_or_else(|| StoreError::UnknownNode(node.clone()))?;
-                n.choice(choice).ok_or_else(|| StoreError::UnknownChoice {
+                let c = n.choice(choice).ok_or_else(|| StoreError::UnknownChoice {
                     node: node.clone(),
                     choice: choice.clone(),
                 })?;
+                if s.doc.is_choice_locked(c) {
+                    return Err(StoreError::ChoiceLocked {
+                        node: node.clone(),
+                        choice: choice.clone(),
+                    });
+                }
                 n.label.clone()
             };
             push_undo(s, &format!("dismissed a choice on {label}"));
@@ -437,6 +464,126 @@ impl Store {
         })
     }
 
+    /// Record the user's free-text answer to an agent question. Re-answering
+    /// is allowed; the doc keeps the latest answer and the log preserves the
+    /// history. Rides along with the next Send (does not autoflush).
+    pub fn answer_question(&self, id: &QuestionId, text: String) -> Result<(), StoreError> {
+        self.mutate(|s| {
+            let prompt = s
+                .doc
+                .question(id)
+                .map(|q| q.prompt.clone())
+                .ok_or_else(|| StoreError::UnknownQuestion(id.clone()))?;
+            push_undo(s, &format!("answered \u{201c}{prompt}\u{201d}"));
+            let q = s
+                .doc
+                .questions
+                .iter_mut()
+                .find(|q| &q.id == id)
+                .expect("validated above");
+            q.answer = Some(text.clone());
+            q.answered_at = Some(Utc::now());
+            push_event(
+                s,
+                DecisionKind::QuestionAnswered {
+                    question_id: id.clone(),
+                    answer: text,
+                },
+            );
+            push_activity(
+                s,
+                ActivityOrigin::User,
+                format!("answered \u{201c}{prompt}\u{201d}"),
+            );
+            Ok(())
+        })
+    }
+
+    // ---------- freehand annotations (called from the UI) ----------
+
+    /// Draw a user-owned annotation (sticky note, arrow, or highlight region).
+    /// Returns its generated id. Rides along with the next Send.
+    pub fn add_annotation(
+        &self,
+        kind: AnnotationKind,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        text: String,
+    ) -> AnnotationId {
+        self.mutate(|s| {
+            let id = AnnotationId::new(uuid::Uuid::new_v4().to_string());
+            let annotation = Annotation {
+                id: id.clone(),
+                kind,
+                x,
+                y,
+                w,
+                h,
+                text,
+                origin: Origin::User,
+            };
+            push_undo(s, "added an annotation");
+            s.doc.annotations.push(annotation.clone());
+            push_event(s, DecisionKind::AnnotationAdded { annotation });
+            push_activity(s, ActivityOrigin::User, "added an annotation".into());
+            id
+        })
+    }
+
+    /// Move or re-word an existing annotation.
+    pub fn edit_annotation(
+        &self,
+        id: &AnnotationId,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        text: String,
+    ) -> Result<(), StoreError> {
+        self.mutate(|s| {
+            if !s.doc.annotations.iter().any(|a| &a.id == id) {
+                return Err(StoreError::UnknownAnnotation(id.clone()));
+            }
+            push_undo(s, "edited an annotation");
+            let a = s
+                .doc
+                .annotations
+                .iter_mut()
+                .find(|a| &a.id == id)
+                .expect("validated above");
+            a.x = x;
+            a.y = y;
+            a.w = w;
+            a.h = h;
+            a.text = text;
+            let annotation = a.clone();
+            push_event(s, DecisionKind::AnnotationEdited { annotation });
+            push_activity(s, ActivityOrigin::User, "edited an annotation".into());
+            Ok(())
+        })
+    }
+
+    /// Erase an annotation.
+    pub fn delete_annotation(&self, id: &AnnotationId) -> Result<(), StoreError> {
+        self.mutate(|s| {
+            if !s.doc.annotations.iter().any(|a| &a.id == id) {
+                return Err(StoreError::UnknownAnnotation(id.clone()));
+            }
+            push_undo(s, "deleted an annotation");
+            s.doc.annotations.retain(|a| &a.id != id);
+            push_event(
+                s,
+                DecisionKind::AnnotationDeleted {
+                    annotation_id: id.clone(),
+                },
+            );
+            push_activity(s, ActivityOrigin::User, "deleted an annotation".into());
+            Ok(())
+        })
+    }
+
     /// Post an agent-authored message to the activity feed.
     pub fn announce(&self, message: String) {
         self.mutate(|s| push_activity(s, ActivityOrigin::Agent, message));
@@ -472,9 +619,12 @@ impl Store {
                 kind,
                 description: String::new(),
                 status: ElementStatus::Proposed,
+                build: None,
                 group: None,
+                lane: None,
                 choices: vec![],
                 notes: vec![],
+                agent: None,
                 position,
                 origin: Origin::User,
             };
@@ -498,16 +648,19 @@ impl Store {
         label: String,
         kind: NodeKind,
         description: String,
+        lane: Option<String>,
     ) -> Result<(), StoreError> {
         self.mutate(|s| {
             if s.doc.node(id).is_none() {
                 return Err(StoreError::UnknownNode(id.clone()));
             }
+            let lane = lane.filter(|l| !l.trim().is_empty());
             push_undo(s, &format!("edited \u{201c}{label}\u{201d}"));
             let n = s.doc.node_mut(id).expect("validated above");
             n.label = label.clone();
             n.kind = kind;
             n.description = description.clone();
+            n.lane = lane.clone();
             push_event(
                 s,
                 DecisionKind::NodeEdited {
@@ -515,6 +668,7 @@ impl Store {
                     label: label.clone(),
                     node_kind: kind,
                     description,
+                    lane,
                 },
             );
             push_activity(
@@ -709,16 +863,28 @@ impl Store {
     /// Replace the document, preserving user-owned state (positions, notes,
     /// decided choices) for nodes whose ids survive, and preserving whole
     /// user-authored nodes/edges the proposal did not mention.
-    pub fn apply_propose(&self, mut incoming: SessionDoc) -> Result<UpdateSummary, StoreError> {
+    pub fn apply_propose(&self, incoming: SessionDoc) -> Result<UpdateSummary, StoreError> {
+        self.apply_propose_as(incoming, None)
+    }
+
+    /// Like [`Self::apply_propose`], attributing the proposed nodes to `agent`
+    /// (a multi-agent session id). `None` clears attribution (single-agent).
+    pub fn apply_propose_as(
+        &self,
+        mut incoming: SessionDoc,
+        agent: Option<String>,
+    ) -> Result<UpdateSummary, StoreError> {
         let validation = incoming.validate();
         if !validation.is_ok() {
             return Err(StoreError::Invalid {
                 errors: validation.errors,
             });
         }
-        // Everything arriving over MCP is agent-authored, whatever it claims.
+        // Everything arriving over MCP is agent-authored, whatever it claims;
+        // attribution is forced from the caller's id, never trusted off the wire.
         for node in &mut incoming.nodes {
             node.origin = Origin::Agent;
+            node.agent = agent.clone();
         }
         for edge in &mut incoming.edges {
             edge.origin = Origin::Agent;
@@ -760,25 +926,58 @@ impl Store {
                     }
                 }
             }
+            // Questions (and the user's answers) are part of the running
+            // dialogue, not the graph a propose replaces: carry forward any
+            // the new proposal did not itself restate by id.
+            for prev in &previous.questions {
+                if !s.doc.questions.iter().any(|q| q.id == prev.id) {
+                    s.doc.questions.push(prev.clone());
+                }
+            }
+            // Freehand annotations are a user margin layer, not graph
+            // structure: they always survive a propose.
+            for prev in &previous.annotations {
+                if !s.doc.annotations.iter().any(|a| a.id == prev.id) {
+                    s.doc.annotations.push(prev.clone());
+                }
+            }
+            // A re-propose that drops or reopens a decided choice flags its
+            // decided dependents for review.
+            flag_reopened_dependents(&previous, &mut s.doc);
             let title = if s.doc.title.is_empty() {
                 "a graph".to_owned()
             } else {
                 format!("\u{201c}{}\u{201d}", s.doc.title)
             };
-            push_activity(s, ActivityOrigin::Agent, format!("proposed {title}"));
+            push_activity_as(
+                s,
+                ActivityOrigin::Agent,
+                agent.clone(),
+                format!("proposed {title}"),
+            );
             summary(s, warnings)
         }))
     }
 
     /// Apply a batch of ops atomically: all-or-nothing against validation.
     pub fn apply_update(&self, ops: Vec<GraphOp>) -> Result<UpdateSummary, StoreError> {
+        self.apply_update_as(ops, None)
+    }
+
+    /// Like [`Self::apply_update`], attributing upserted nodes and the feed
+    /// entry to `agent` (a multi-agent session id).
+    pub fn apply_update_as(
+        &self,
+        ops: Vec<GraphOp>,
+        agent: Option<String>,
+    ) -> Result<UpdateSummary, StoreError> {
         let mutates_document = ops.iter().any(|op| !matches!(op, GraphOp::Announce { .. }));
         // Stage on a clone so a failed op or failed validation commits nothing.
-        let staged = self.read(|s| s.doc.clone());
-        let mut doc = staged;
+        let old = self.read(|s| s.doc.clone());
+        let mut doc = old.clone();
         let mut announces: Vec<String> = Vec::new();
         for op in ops {
-            apply_op(&mut doc, op, &mut announces)?;
+            apply_op(&mut doc, op, &agent, &mut announces)?;
         }
         let validation = doc.validate();
         if !validation.is_ok() {
@@ -786,6 +985,8 @@ impl Store {
                 errors: validation.errors,
             });
         }
+        // Reopening a parent flags decided dependents for the agent to revisit.
+        flag_reopened_dependents(&old, &mut doc);
         Ok(self.mutate(|s| {
             clear_undo(s); // an agent turn invalidates the user's undo window
             if mutates_document {
@@ -794,10 +995,15 @@ impl Store {
             doc.revision = s.doc.revision;
             s.doc = doc;
             if announces.is_empty() {
-                push_activity(s, ActivityOrigin::Agent, "updated the graph".into());
+                push_activity_as(
+                    s,
+                    ActivityOrigin::Agent,
+                    agent.clone(),
+                    "updated the graph".into(),
+                );
             }
             for msg in announces {
-                push_activity(s, ActivityOrigin::Agent, msg);
+                push_activity_as(s, ActivityOrigin::Agent, agent.clone(), msg);
             }
             summary(s, validation.warnings.clone())
         }))
@@ -914,11 +1120,36 @@ impl Store {
         self.read(|s| s.decision_log[s.delivery_cursor..].to_vec())
     }
 
-    /// Atomically take the undelivered batch if a flush is pending.
-    fn try_deliver(&self) -> Option<Vec<DecisionEvent>> {
+    /// The undelivered tail an agent would receive: the whole tail for the
+    /// default (unnamed) agent, or the events targeting a named agent.
+    fn peek_undelivered_for(&self, agent: &Option<String>) -> Vec<DecisionEvent> {
+        self.read(|s| match agent {
+            None => s.decision_log[s.delivery_cursor..].to_vec(),
+            Some(a) => {
+                let cursor = s
+                    .agent_cursors
+                    .get(a)
+                    .copied()
+                    .unwrap_or(0)
+                    .min(s.decision_log.len());
+                s.decision_log[cursor..]
+                    .iter()
+                    .filter(|e| addressed_to(&s.doc, &e.kind, a))
+                    .cloned()
+                    .collect()
+            }
+        })
+    }
+
+    /// Atomically take the undelivered batch if a flush is pending, for the
+    /// default (unnamed) agent or a named one.
+    fn try_deliver(&self, agent: &Option<String>) -> Option<Vec<DecisionEvent>> {
         let taken = {
             let mut s = self.lock();
-            try_deliver_locked(&mut s)
+            match agent {
+                None => try_deliver_locked(&mut s),
+                Some(a) => try_deliver_for_agent_locked(&mut s, a),
+            }
         };
         if taken.is_some() {
             // Repaint (undelivered count, pill) — bump revision via mutate.
@@ -930,15 +1161,23 @@ impl Store {
     /// Block until the user flushes decisions, the timeout elapses, or the
     /// store shuts down. Must run on a tokio runtime (uses `tokio::time`).
     ///
-    /// Exactly-once: when several calls race one flush, one gets
-    /// `Delivered` and the rest run to their own deadlines.
-    pub async fn await_flush(self: &Arc<Self>, timeout: Duration) -> FlushOutcome {
+    /// Exactly-once: when several calls race one flush, one gets `Delivered`
+    /// and the rest run to their own deadlines. With a named `agent`, each
+    /// agent has its own cursor, so concurrent awaits for *different* agents on
+    /// the same session each receive their own slice (decisions addressed to
+    /// them, plus unclaimed ones) — while two awaits for the *same* agent still
+    /// deliver exactly once.
+    pub async fn await_flush(
+        self: &Arc<Self>,
+        timeout: Duration,
+        agent: Option<String>,
+    ) -> FlushOutcome {
         let mut rev = self.subscribe();
         let _guard = WaitGuard::enter(self.clone());
         let deadline = tokio::time::sleep(timeout);
         tokio::pin!(deadline);
         loop {
-            if let Some(batch) = self.try_deliver() {
+            if let Some(batch) = self.try_deliver(&agent) {
                 return FlushOutcome::Delivered(batch);
             }
             tokio::select! {
@@ -950,11 +1189,11 @@ impl Store {
                 () = &mut deadline => {
                     // Final re-check closes the click-vs-timeout race: a flush
                     // that landed before this point is delivered, not dropped.
-                    if let Some(batch) = self.try_deliver() {
+                    if let Some(batch) = self.try_deliver(&agent) {
                         return FlushOutcome::Delivered(batch);
                     }
                     return FlushOutcome::TimedOut {
-                        preview: self.peek_undelivered(),
+                        preview: self.peek_undelivered_for(&agent),
                     };
                 }
             }
@@ -992,6 +1231,68 @@ fn try_deliver_locked(s: &mut SessionState) -> Option<Vec<DecisionEvent>> {
         Some(batch)
     } else {
         None
+    }
+}
+
+/// Per-named-agent delivery: exactly-once per agent (gated on `flush_seq`),
+/// filtered to the events addressed to that agent or unclaimed. Runs beside
+/// the default cursor without disturbing it, so single-agent behavior and
+/// queue editing are untouched.
+fn try_deliver_for_agent_locked(s: &mut SessionState, agent: &str) -> Option<Vec<DecisionEvent>> {
+    let last = s.agent_flush.get(agent).copied().unwrap_or(0);
+    if s.flush_seq <= last {
+        return None;
+    }
+    let cursor = s
+        .agent_cursors
+        .get(agent)
+        .copied()
+        .unwrap_or(0)
+        .min(s.decision_log.len());
+    let batch: Vec<DecisionEvent> = s.decision_log[cursor..]
+        .iter()
+        .filter(|e| addressed_to(&s.doc, &e.kind, agent))
+        .cloned()
+        .collect();
+    s.agent_cursors
+        .insert(agent.to_owned(), s.decision_log.len());
+    s.agent_flush.insert(agent.to_owned(), s.flush_seq);
+    Some(batch)
+}
+
+/// Which agent a decision is addressed to: the agent that authored the
+/// node/choice/question it concerns (resolved against the live doc), or `None`
+/// for unclaimed decisions (user elements, annotations, flush) that every
+/// agent should hear about.
+fn event_target(doc: &SessionDoc, kind: &DecisionKind) -> Option<String> {
+    let node_agent = |id: &NodeId| doc.node(id).and_then(|n| n.agent.clone());
+    match kind {
+        DecisionKind::OptionSelected { node_id, .. }
+        | DecisionKind::ChoiceDismissed { node_id, .. }
+        | DecisionKind::NoteAdded { node_id, .. }
+        | DecisionKind::NodeEdited { node_id, .. }
+        | DecisionKind::NodeDeleted { node_id }
+        | DecisionKind::RemovalRequested { node_id } => node_agent(node_id),
+        DecisionKind::NodeAdded { node } => node.agent.clone().or_else(|| node_agent(&node.id)),
+        DecisionKind::EdgeAdded { from, .. } | DecisionKind::EdgeDeleted { from, .. } => {
+            node_agent(from)
+        }
+        DecisionKind::QuestionAnswered { question_id, .. } => doc
+            .question(question_id)
+            .and_then(|q| q.node_id.as_ref())
+            .and_then(node_agent),
+        DecisionKind::AnnotationAdded { .. }
+        | DecisionKind::AnnotationEdited { .. }
+        | DecisionKind::AnnotationDeleted { .. }
+        | DecisionKind::FlushRequested { .. } => None,
+    }
+}
+
+/// Whether `kind` should reach `agent`: addressed to it, or unclaimed.
+fn addressed_to(doc: &SessionDoc, kind: &DecisionKind, agent: &str) -> bool {
+    match event_target(doc, kind) {
+        Some(target) => target == agent,
+        None => true,
     }
 }
 
@@ -1074,6 +1375,16 @@ fn queue_edit_target(event: &DecisionEvent) -> QueueEditTarget {
             node_id: Some(node_id.clone()),
             choice_id: None,
         },
+        // A question answer targets whatever node the question hangs off, but
+        // the event alone does not carry it — the queue row still identifies
+        // it by text, so no node/choice anchor is needed here.
+        DecisionKind::QuestionAnswered { .. }
+        | DecisionKind::AnnotationAdded { .. }
+        | DecisionKind::AnnotationEdited { .. }
+        | DecisionKind::AnnotationDeleted { .. } => QueueEditTarget {
+            node_id: None,
+            choice_id: None,
+        },
         DecisionKind::NodeAdded { node } => QueueEditTarget {
             node_id: Some(node.id.clone()),
             choice_id: None,
@@ -1131,6 +1442,38 @@ fn replay_event(doc: &mut SessionDoc, event: &DecisionEvent) -> Result<(), Strin
                 .notes
                 .push(note.clone());
         }
+        DecisionKind::QuestionAnswered {
+            question_id,
+            answer,
+        } => {
+            let q = doc
+                .questions
+                .iter_mut()
+                .find(|q| &q.id == question_id)
+                .ok_or_else(|| format!("question {question_id} no longer exists"))?;
+            q.answer = Some(answer.clone());
+            q.answered_at = Some(event.at);
+        }
+        DecisionKind::AnnotationAdded { annotation } => {
+            if doc.annotations.iter().any(|a| a.id == annotation.id) {
+                return Err(format!("annotation {} already exists", annotation.id));
+            }
+            doc.annotations.push(annotation.clone());
+        }
+        DecisionKind::AnnotationEdited { annotation } => {
+            let existing = doc
+                .annotations
+                .iter_mut()
+                .find(|a| a.id == annotation.id)
+                .ok_or_else(|| format!("annotation {} no longer exists", annotation.id))?;
+            *existing = annotation.clone();
+        }
+        DecisionKind::AnnotationDeleted { annotation_id } => {
+            if !doc.annotations.iter().any(|a| &a.id == annotation_id) {
+                return Err(format!("annotation {annotation_id} no longer exists"));
+            }
+            doc.annotations.retain(|a| &a.id != annotation_id);
+        }
         DecisionKind::FlushRequested { .. } => {}
         DecisionKind::NodeAdded { node } => {
             if doc.node(&node.id).is_some() {
@@ -1143,6 +1486,7 @@ fn replay_event(doc: &mut SessionDoc, event: &DecisionEvent) -> Result<(), Strin
             label,
             node_kind,
             description,
+            lane,
         } => {
             let node = doc
                 .node_mut(node_id)
@@ -1150,6 +1494,7 @@ fn replay_event(doc: &mut SessionDoc, event: &DecisionEvent) -> Result<(), Strin
             node.label = label.clone();
             node.kind = *node_kind;
             node.description = description.clone();
+            node.lane = lane.clone();
         }
         DecisionKind::NodeDeleted { node_id } => {
             if doc.node(node_id).is_none() {
@@ -1227,10 +1572,22 @@ fn clear_undo(s: &mut SessionState) {
 }
 
 fn push_activity(s: &mut SessionState, origin: ActivityOrigin, text: String) {
+    push_activity_as(s, origin, None, text);
+}
+
+/// Like [`push_activity`], attributing the entry to a named agent for the feed
+/// color/badge (multi-agent sessions).
+fn push_activity_as(
+    s: &mut SessionState,
+    origin: ActivityOrigin,
+    agent: Option<String>,
+    text: String,
+) {
     s.activity.push(ActivityEntry {
         at: Utc::now(),
         origin,
         text,
+        agent,
     });
     if s.activity.len() > ACTIVITY_CAP {
         let excess = s.activity.len() - ACTIVITY_CAP;
@@ -1292,9 +1649,12 @@ fn placeholder_node() -> Node {
         kind: Default::default(),
         description: String::new(),
         status: Default::default(),
+        build: None,
         group: None,
+        lane: None,
         choices: vec![],
         notes: vec![],
+        agent: None,
         position: None,
         origin: Default::default(),
     }
@@ -1303,13 +1663,16 @@ fn placeholder_node() -> Node {
 fn apply_op(
     doc: &mut SessionDoc,
     op: GraphOp,
+    agent: &Option<String>,
     announces: &mut Vec<String>,
 ) -> Result<(), StoreError> {
     match op {
         GraphOp::UpsertNode { mut node } => {
             // Agent-supplied content is agent-authored; upserting a user
             // node's id adopts it (user-owned fields survive via the merge).
+            // Attribution is forced from the caller's id, never off the wire.
             node.origin = Origin::Agent;
+            node.agent = agent.clone();
             if let Some(existing) = doc.node_mut(&node.id) {
                 existing.merge_from_agent(node);
             } else {
@@ -1379,9 +1742,32 @@ fn apply_op(
                 c.status = ChoiceStatus::Decided;
             }
         }
+        GraphOp::Ask { question } => {
+            // The user's answer is user-owned: a re-ask (same id) refreshes
+            // the wording but never unsends the reply.
+            if let Some(existing) = doc.questions.iter_mut().find(|q| q.id == question.id) {
+                let (answer, answered_at) = (existing.answer.take(), existing.answered_at.take());
+                *existing = question;
+                existing.answer = answer;
+                existing.answered_at = answered_at;
+            } else {
+                doc.questions.push(question);
+            }
+        }
+        GraphOp::RemoveQuestion { id } => {
+            doc.questions.retain(|q| q.id != id);
+        }
         GraphOp::SetStatus { id, status } => {
             let node = doc.node_mut(&id).ok_or(StoreError::UnknownNode(id))?;
             node.status = status;
+        }
+        GraphOp::SetBuild { id, build } => {
+            let node = doc.node_mut(&id).ok_or(StoreError::UnknownNode(id))?;
+            node.build = build;
+        }
+        GraphOp::SetLane { id, lane } => {
+            let node = doc.node_mut(&id).ok_or(StoreError::UnknownNode(id))?;
+            node.lane = lane.filter(|l| !l.trim().is_empty());
         }
         GraphOp::SetFocus { id } => {
             doc.focus = id;
@@ -1394,6 +1780,44 @@ fn apply_op(
         }
     }
     Ok(())
+}
+
+/// When an agent turn reopens (or removes) a choice that other *decided*
+/// choices depended on, flag those dependents `needs_review` so the agent
+/// re-scopes them. Compares the pre-turn doc with the post-turn doc; re-scoping
+/// a dependent (a fresh add_choice/upsert) clears the flag on its own.
+fn flag_reopened_dependents(old: &SessionDoc, new: &mut SessionDoc) {
+    let mut reopened: std::collections::HashSet<(NodeId, ChoiceId)> =
+        std::collections::HashSet::new();
+    for node in &old.nodes {
+        for choice in &node.choices {
+            if choice.status != ChoiceStatus::Decided {
+                continue;
+            }
+            let still_decided = new
+                .node(&node.id)
+                .and_then(|n| n.choice(&choice.id))
+                .is_some_and(|c| c.status == ChoiceStatus::Decided);
+            if !still_decided {
+                reopened.insert((node.id.clone(), choice.id.clone()));
+            }
+        }
+    }
+    if reopened.is_empty() {
+        return;
+    }
+    for node in &mut new.nodes {
+        for choice in &mut node.choices {
+            if choice.status == ChoiceStatus::Decided
+                && choice
+                    .depends_on
+                    .iter()
+                    .any(|dep| reopened.contains(&(dep.node.clone(), dep.choice.clone())))
+            {
+                choice.needs_review = true;
+            }
+        }
+    }
 }
 
 /// A reopening upsert resets the choice to `Open`; the flag never persists.
@@ -1422,9 +1846,12 @@ mod tests {
             kind: crate::model::NodeKind::Component,
             description: String::new(),
             status: crate::model::ElementStatus::Proposed,
+            build: None,
             group: None,
+            lane: None,
             choices: vec![],
             notes: vec![],
+            agent: None,
             position: None,
             origin: crate::model::Origin::User,
         }
@@ -1572,6 +1999,7 @@ mod tests {
                 "Redis Cluster".into(),
                 NodeKind::DataStore,
                 "now clustered".into(),
+                None,
             )
             .unwrap();
         let doc = store.snapshot_doc();
@@ -1591,7 +2019,8 @@ mod tests {
                     &NodeId::from("ghost"),
                     "x".into(),
                     NodeKind::Component,
-                    String::new()
+                    String::new(),
+                    None,
                 )
                 .is_err()
         );
@@ -2026,7 +2455,13 @@ mod tests {
             .add_user_node("Widget".into(), NodeKind::Component, None)
             .unwrap();
         store
-            .edit_node(&node, "Renamed".into(), NodeKind::Service, "edited".into())
+            .edit_node(
+                &node,
+                "Renamed".into(),
+                NodeKind::Service,
+                "edited".into(),
+                None,
+            )
             .unwrap();
 
         store.remove_queued_change(1).unwrap();
@@ -2136,6 +2571,7 @@ mod tests {
                 "First edited".into(),
                 NodeKind::Component,
                 String::new(),
+                None,
             )
             .unwrap();
         store.remove_queued_change(1).unwrap();
@@ -2149,6 +2585,7 @@ mod tests {
                 "Second edited".into(),
                 NodeKind::Component,
                 String::new(),
+                None,
             )
             .unwrap();
         store.remove_queued_change(1).unwrap();
@@ -2177,7 +2614,7 @@ mod tests {
         store.remove_queued_change(1).unwrap();
         store.request_flush(None);
 
-        let delivered = store.try_deliver().unwrap();
+        let delivered = store.try_deliver(&None).unwrap();
 
         assert_eq!(delivered.len(), 1);
         assert!(matches!(delivered[0].kind, DecisionKind::NoteAdded { .. }));
@@ -2197,9 +2634,12 @@ mod tests {
 
         store.remove_queued_change(1).unwrap();
 
-        assert!(store.try_deliver().is_none(), "removal cancels autoflush");
+        assert!(
+            store.try_deliver(&None).is_none(),
+            "removal cancels autoflush"
+        );
         store.request_flush(None);
-        let delivered = store.try_deliver().expect("fresh send delivers");
+        let delivered = store.try_deliver(&None).expect("fresh send delivers");
         assert_eq!(delivered.len(), 1);
         assert!(matches!(
             delivered[0].kind,
@@ -2215,11 +2655,11 @@ mod tests {
         store.remove_queued_change(1).unwrap();
 
         assert!(
-            store.try_deliver().is_none(),
+            store.try_deliver(&None).is_none(),
             "removal cancels the comment send"
         );
         store.request_flush(None);
-        assert_eq!(store.try_deliver(), Some(vec![]));
+        assert_eq!(store.try_deliver(&None), Some(vec![]));
     }
 
     #[test]
@@ -2262,16 +2702,19 @@ mod tests {
         let store = demo_store();
         pick_first_choice(&store);
         store.request_flush(None);
-        let first = store.try_deliver().expect("pending flush");
+        let first = store.try_deliver(&None).expect("pending flush");
         assert_eq!(first.len(), 1);
-        assert!(store.try_deliver().is_none(), "second take gets nothing");
+        assert!(
+            store.try_deliver(&None).is_none(),
+            "second take gets nothing"
+        );
     }
 
     #[test]
     fn autoflush_fires_when_last_choice_closes() {
         let store = demo_store();
         pick_first_choice(&store);
-        assert!(store.try_deliver().is_none(), "one choice still open");
+        assert!(store.try_deliver(&None).is_none(), "one choice still open");
         store
             .dismiss_choice(
                 &NodeId::from("ws-gateway"),
@@ -2279,7 +2722,7 @@ mod tests {
                 None,
             )
             .unwrap();
-        let batch = store.try_deliver().expect("autoflush fired");
+        let batch = store.try_deliver(&None).expect("autoflush fired");
         assert_eq!(batch.len(), 2);
     }
 
@@ -2287,7 +2730,7 @@ mod tests {
     fn empty_flush_still_delivers() {
         let store = demo_store();
         store.request_flush(Some("looks good, proceed".into()));
-        let batch = store.try_deliver().expect("flush pending");
+        let batch = store.try_deliver(&None).expect("flush pending");
         assert_eq!(batch.len(), 1, "comment rides as an event");
         assert!(matches!(batch[0].kind, DecisionKind::FlushRequested { .. }));
     }
@@ -2299,11 +2742,11 @@ mod tests {
 
         let a = tokio::spawn({
             let store = store.clone();
-            async move { store.await_flush(Duration::from_secs(5)).await }
+            async move { store.await_flush(Duration::from_secs(5), None).await }
         });
         let b = tokio::spawn({
             let store = store.clone();
-            async move { store.await_flush(Duration::from_secs(5)).await }
+            async move { store.await_flush(Duration::from_secs(5), None).await }
         });
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(store.snapshot_meta().waiting_agents, 2);
@@ -2327,14 +2770,14 @@ mod tests {
     async fn timeout_preview_does_not_consume() {
         let store = demo_store();
         pick_first_choice(&store);
-        let outcome = store.await_flush(Duration::from_secs(1)).await;
+        let outcome = store.await_flush(Duration::from_secs(1), None).await;
         match outcome {
             FlushOutcome::TimedOut { preview } => assert_eq!(preview.len(), 1),
             other => panic!("expected timeout, got {other:?}"),
         }
         // The decision was NOT consumed: a later flush delivers it.
         store.request_flush(None);
-        let outcome = store.await_flush(Duration::from_secs(1)).await;
+        let outcome = store.await_flush(Duration::from_secs(1), None).await;
         match outcome {
             FlushOutcome::Delivered(batch) => assert_eq!(batch.len(), 1),
             other => panic!("expected delivery, got {other:?}"),
@@ -2345,7 +2788,8 @@ mod tests {
     async fn flush_after_timeout_is_returned_by_next_call_instantly() {
         let store = demo_store();
         pick_first_choice(&store);
-        let FlushOutcome::TimedOut { .. } = store.await_flush(Duration::from_millis(10)).await
+        let FlushOutcome::TimedOut { .. } =
+            store.await_flush(Duration::from_millis(10), None).await
         else {
             panic!("expected timeout");
         };
@@ -2353,7 +2797,7 @@ mod tests {
         // Next call must return without waiting: deliver on entry.
         let outcome = tokio::time::timeout(
             Duration::from_millis(1),
-            store.await_flush(Duration::from_secs(600)),
+            store.await_flush(Duration::from_secs(600), None),
         )
         .await
         .expect("await_flush should return immediately");
@@ -2365,7 +2809,7 @@ mod tests {
         let store = demo_store();
         let fut = {
             let store = store.clone();
-            async move { store.await_flush(Duration::from_secs(60)).await }
+            async move { store.await_flush(Duration::from_secs(60), None).await }
         };
         let handle = tokio::spawn(fut);
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -2478,5 +2922,498 @@ mod tests {
         assert!(s.doc.nodes.is_empty());
         assert!(s.decision_log.is_empty());
         assert!(s.doc.revision > rev_before);
+    }
+
+    #[test]
+    fn lane_set_by_user_edit_and_agent_op() {
+        let store = demo_store();
+        // User override through the edit form emits a node_edited with the lane.
+        store
+            .edit_node(
+                &NodeId::from("sync-engine"),
+                "Sync Engine".into(),
+                NodeKind::Component,
+                "desc".into(),
+                Some("realtime".into()),
+            )
+            .expect("edit");
+        assert_eq!(
+            store
+                .snapshot_doc()
+                .node(&NodeId::from("sync-engine"))
+                .unwrap()
+                .lane
+                .as_deref(),
+            Some("realtime")
+        );
+        assert!(matches!(
+            store.peek_undelivered().last().unwrap().kind,
+            DecisionKind::NodeEdited { lane: Some(_), .. }
+        ));
+        // Agent assigns a lane; a blank lane clears it.
+        store
+            .apply_update(vec![GraphOp::SetLane {
+                id: NodeId::from("web-ui"),
+                lane: Some("client".into()),
+            }])
+            .expect("set_lane");
+        assert_eq!(
+            store
+                .snapshot_doc()
+                .node(&NodeId::from("web-ui"))
+                .unwrap()
+                .lane
+                .as_deref(),
+            Some("client")
+        );
+        store
+            .apply_update(vec![GraphOp::SetLane {
+                id: NodeId::from("web-ui"),
+                lane: Some("   ".into()),
+            }])
+            .expect("clear lane");
+        assert_eq!(
+            store
+                .snapshot_doc()
+                .node(&NodeId::from("web-ui"))
+                .unwrap()
+                .lane,
+            None
+        );
+    }
+
+    #[test]
+    fn locked_choice_rejects_selection_until_parent_resolves() {
+        // demo: ws-deployment depends_on conflict-resolution; both start open.
+        let store = demo_store();
+        let ws = NodeId::from("ws-gateway");
+        let dep = ChoiceId::from("ws-deployment");
+        let err = store
+            .select_option(&ws, &dep, &OptionId::from("dedicated"), vec![])
+            .unwrap_err();
+        assert!(matches!(err, StoreError::ChoiceLocked { .. }), "{err}");
+        // Dismissing is also blocked while locked.
+        assert!(matches!(
+            store.dismiss_choice(&ws, &dep, None).unwrap_err(),
+            StoreError::ChoiceLocked { .. }
+        ));
+        // Decide the parent; the dependent then unlocks.
+        store
+            .select_option(
+                &NodeId::from("sync-engine"),
+                &ChoiceId::from("conflict-resolution"),
+                &OptionId::from("crdt"),
+                vec![],
+            )
+            .expect("decide parent");
+        store
+            .select_option(&ws, &dep, &OptionId::from("dedicated"), vec![])
+            .expect("dependent now decidable");
+    }
+
+    #[test]
+    fn reopening_a_parent_flags_decided_dependents() {
+        use crate::model::{Choice, ChoiceOption, ChoiceRef, ChoiceStatus};
+        let opt = |id: &str| ChoiceOption {
+            id: id.into(),
+            label: id.to_owned(),
+            summary: String::new(),
+            pros: vec![],
+            cons: vec![],
+            recommended: false,
+            affects: vec![],
+        };
+        let mk = |id: &str, deps: Vec<ChoiceRef>| Choice {
+            id: id.into(),
+            prompt: format!("{id}?"),
+            rationale: None,
+            options: vec![opt("x"), opt("y")],
+            selected: Some(OptionId::from("x")),
+            status: ChoiceStatus::Decided,
+            depends_on: deps,
+            needs_review: false,
+            reopen: false,
+        };
+        let mut n = user_node("n");
+        n.origin = crate::model::Origin::Agent;
+        n.choices = vec![
+            mk("a", vec![]),
+            mk(
+                "b",
+                vec![ChoiceRef {
+                    node: NodeId::from("n"),
+                    choice: ChoiceId::from("a"),
+                }],
+            ),
+        ];
+        let store = Store::with_doc(SessionDoc {
+            nodes: vec![n],
+            ..Default::default()
+        });
+        // Agent reopens the parent choice `a`.
+        let mut reopened = mk("a", vec![]);
+        reopened.reopen = true;
+        store
+            .apply_update(vec![GraphOp::AddChoice {
+                node_id: NodeId::from("n"),
+                choice: reopened,
+            }])
+            .expect("reopen");
+        let n = store
+            .snapshot_doc()
+            .node(&NodeId::from("n"))
+            .cloned()
+            .unwrap();
+        assert_eq!(
+            n.choice(&ChoiceId::from("a")).unwrap().status,
+            ChoiceStatus::Open,
+            "parent reopened"
+        );
+        assert!(
+            n.choice(&ChoiceId::from("b")).unwrap().needs_review,
+            "decided dependent flagged for review"
+        );
+    }
+
+    #[test]
+    fn set_build_advances_and_survives_unrelated_upsert() {
+        use crate::model::BuildStatus;
+        let store = demo_store();
+        let id = NodeId::from("sync-engine");
+        store
+            .apply_update(vec![GraphOp::SetBuild {
+                id: id.clone(),
+                build: Some(BuildStatus::Building),
+            }])
+            .expect("set_build");
+        assert_eq!(
+            store.snapshot_doc().node(&id).unwrap().build,
+            Some(BuildStatus::Building)
+        );
+        // An unrelated upsert (relabel, no build restated) preserves progress.
+        let mut relabel = store.snapshot_doc().node(&id).cloned().unwrap();
+        relabel.label = "Sync Engine v2".into();
+        relabel.build = None;
+        store
+            .apply_update(vec![GraphOp::UpsertNode { node: relabel }])
+            .expect("upsert");
+        let n = store.snapshot_doc().node(&id).cloned().unwrap();
+        assert_eq!(n.label, "Sync Engine v2");
+        assert_eq!(n.build, Some(BuildStatus::Building), "progress preserved");
+        // Clearing works via an explicit null.
+        store
+            .apply_update(vec![GraphOp::SetBuild {
+                id: id.clone(),
+                build: None,
+            }])
+            .expect("clear");
+        assert_eq!(store.snapshot_doc().node(&id).unwrap().build, None);
+    }
+
+    #[test]
+    fn annotations_add_edit_delete_and_survive_propose() {
+        let store = demo_store();
+        let id = store.add_annotation(AnnotationKind::Note, 10.0, 20.0, 0.0, 0.0, "hi".into());
+        assert_eq!(store.snapshot_doc().annotations.len(), 1);
+        assert!(matches!(
+            store.peek_undelivered().last().unwrap().kind,
+            DecisionKind::AnnotationAdded { .. }
+        ));
+        // Edit moves/re-words it.
+        store
+            .edit_annotation(&id, 30.0, 40.0, 0.0, 0.0, "updated".into())
+            .expect("edit");
+        let a = store.snapshot_doc().annotations[0].clone();
+        assert_eq!((a.x, a.y), (30.0, 40.0));
+        assert_eq!(a.text, "updated");
+        // A propose (which carries no annotations) keeps the user's margin layer.
+        let mut fresh = demo_doc();
+        fresh.annotations.clear();
+        store.apply_propose(fresh).expect("propose");
+        assert_eq!(
+            store.snapshot_doc().annotations.len(),
+            1,
+            "annotation survived propose"
+        );
+        // Delete removes it.
+        store.delete_annotation(&id).expect("delete");
+        assert!(store.snapshot_doc().annotations.is_empty());
+        assert!(matches!(
+            store.delete_annotation(&id).unwrap_err(),
+            StoreError::UnknownAnnotation(_)
+        ));
+    }
+
+    #[test]
+    fn propose_and_upsert_attribute_nodes_to_the_agent() {
+        let store = Store::new(SessionState::default());
+        store
+            .apply_propose_as(demo_doc(), Some("alpha".into()))
+            .expect("propose");
+        assert!(
+            store
+                .snapshot_doc()
+                .nodes
+                .iter()
+                .all(|n| n.agent.as_deref() == Some("alpha")),
+            "all proposed nodes attributed to alpha"
+        );
+        // A different agent's upsert re-attributes that node; a wire-supplied
+        // agent value is ignored (forced from the caller's id).
+        let mut n = store.snapshot_doc().nodes[0].clone();
+        n.agent = Some("spoofed".into());
+        let id = n.id.clone();
+        store
+            .apply_update_as(vec![GraphOp::UpsertNode { node: n }], Some("beta".into()))
+            .expect("upsert");
+        assert_eq!(
+            store.snapshot_doc().node(&id).unwrap().agent.as_deref(),
+            Some("beta")
+        );
+        // The feed entries are attributed to their author.
+        assert!(
+            store
+                .snapshot_meta()
+                .activity
+                .iter()
+                .any(|a| a.agent.as_deref() == Some("alpha"))
+        );
+    }
+
+    #[tokio::test]
+    async fn named_agents_receive_their_own_plus_unclaimed_decisions() {
+        use crate::model::{Choice, ChoiceOption, ChoiceStatus, Origin};
+        let opt = |id: &str| ChoiceOption {
+            id: id.into(),
+            label: id.to_owned(),
+            summary: String::new(),
+            pros: vec![],
+            cons: vec![],
+            recommended: false,
+            affects: vec![],
+        };
+        let mk = |id: &str| Choice {
+            id: id.into(),
+            prompt: format!("{id}?"),
+            rationale: None,
+            options: vec![opt("x"), opt("y")],
+            selected: None,
+            status: ChoiceStatus::Open,
+            depends_on: vec![],
+            needs_review: false,
+            reopen: false,
+        };
+        let mut a = user_node("a");
+        a.origin = Origin::Agent;
+        a.agent = Some("alpha".into());
+        a.choices = vec![mk("ca")];
+        let mut b = user_node("b");
+        b.origin = Origin::Agent;
+        b.agent = Some("beta".into());
+        b.choices = vec![mk("cb")];
+        let store = Store::with_doc(SessionDoc {
+            nodes: vec![a, b],
+            ..Default::default()
+        });
+
+        // An unclaimed annotation plus a decision on each agent's node; the
+        // last decision autoflushes.
+        store.add_annotation(AnnotationKind::Note, 0.0, 0.0, 0.0, 0.0, "shared".into());
+        store
+            .select_option(
+                &NodeId::from("a"),
+                &ChoiceId::from("ca"),
+                &OptionId::from("x"),
+                vec![],
+            )
+            .unwrap();
+        store
+            .select_option(
+                &NodeId::from("b"),
+                &ChoiceId::from("cb"),
+                &OptionId::from("y"),
+                vec![],
+            )
+            .unwrap();
+
+        // Both agents await the SAME session; each gets its own slice plus the
+        // unclaimed annotation — concurrent awaits are legal.
+        let FlushOutcome::Delivered(a_batch) = store
+            .await_flush(Duration::from_secs(1), Some("alpha".into()))
+            .await
+        else {
+            panic!("alpha not delivered");
+        };
+        let FlushOutcome::Delivered(b_batch) = store
+            .await_flush(Duration::from_secs(1), Some("beta".into()))
+            .await
+        else {
+            panic!("beta not delivered");
+        };
+        let picked_nodes = |batch: &[DecisionEvent]| {
+            batch
+                .iter()
+                .filter_map(|e| match &e.kind {
+                    DecisionKind::OptionSelected { node_id, .. } => {
+                        Some(node_id.as_str().to_owned())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(picked_nodes(&a_batch), vec!["a"], "alpha only sees a");
+        assert_eq!(picked_nodes(&b_batch), vec!["b"], "beta only sees b");
+        let has_anno = |batch: &[DecisionEvent]| {
+            batch
+                .iter()
+                .any(|e| matches!(e.kind, DecisionKind::AnnotationAdded { .. }))
+        };
+        assert!(
+            has_anno(&a_batch) && has_anno(&b_batch),
+            "unclaimed reaches everyone"
+        );
+
+        // Exactly-once per agent: alpha's second attempt on the same flush is empty.
+        assert!(store.try_deliver(&Some("alpha".into())).is_none());
+        // The default (unnamed) path is unaffected and still delivers the whole batch.
+        let FlushOutcome::Delivered(all) = store.await_flush(Duration::from_secs(1), None).await
+        else {
+            panic!("default not delivered");
+        };
+        assert_eq!(all.len(), 3, "default agent gets everything");
+    }
+
+    fn ask(store: &Arc<Store>, id: &str, node: Option<&str>) {
+        store
+            .apply_update(vec![GraphOp::Ask {
+                question: crate::model::Question {
+                    id: crate::model::QuestionId::from(id),
+                    prompt: format!("prompt for {id}"),
+                    node_id: node.map(NodeId::from),
+                    rationale: None,
+                    answer: None,
+                    answered_at: None,
+                },
+            }])
+            .expect("ask");
+    }
+
+    #[test]
+    fn answer_question_updates_doc_log_and_undo() {
+        let store = demo_store();
+        ask(&store, "deploy", Some("sync-engine"));
+        store
+            .answer_question(&crate::model::QuestionId::from("deploy"), "staging".into())
+            .expect("answer");
+        let s = store.snapshot_state();
+        let q = s
+            .doc
+            .question(&crate::model::QuestionId::from("deploy"))
+            .unwrap();
+        assert_eq!(q.answer.as_deref(), Some("staging"));
+        assert!(q.answered_at.is_some());
+        assert!(matches!(
+            s.decision_log.last().unwrap().kind,
+            DecisionKind::QuestionAnswered { .. }
+        ));
+        // Answering does not autoflush — it rides with the next Send.
+        assert_eq!(s.delivery_cursor, 0);
+        assert!(store.snapshot_meta().undo_available);
+        assert!(store.undo());
+        assert!(
+            store
+                .snapshot_doc()
+                .question(&crate::model::QuestionId::from("deploy"))
+                .unwrap()
+                .answer
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn answer_unknown_question_errors() {
+        let store = demo_store();
+        let err = store
+            .answer_question(&crate::model::QuestionId::from("nope"), "x".into())
+            .unwrap_err();
+        assert!(matches!(err, StoreError::UnknownQuestion(_)));
+    }
+
+    #[test]
+    fn ask_upsert_preserves_the_users_answer() {
+        let store = demo_store();
+        ask(&store, "deploy", None);
+        store
+            .answer_question(&crate::model::QuestionId::from("deploy"), "staging".into())
+            .expect("answer");
+        // The agent re-asks (re-words) the same question id.
+        store
+            .apply_update(vec![GraphOp::Ask {
+                question: crate::model::Question {
+                    id: crate::model::QuestionId::from("deploy"),
+                    prompt: "Which environment ships first, really?".into(),
+                    node_id: Some(NodeId::from("sync-engine")),
+                    rationale: Some("clarifying".into()),
+                    answer: None,
+                    answered_at: None,
+                },
+            }])
+            .expect("re-ask");
+        let q = store
+            .snapshot_doc()
+            .question(&crate::model::QuestionId::from("deploy"))
+            .cloned()
+            .unwrap();
+        assert_eq!(q.prompt, "Which environment ships first, really?");
+        assert_eq!(q.node_id, Some(NodeId::from("sync-engine")));
+        // The user's answer survived the re-ask.
+        assert_eq!(q.answer.as_deref(), Some("staging"));
+    }
+
+    #[test]
+    fn propose_carries_questions_forward() {
+        let store = demo_store();
+        ask(&store, "deploy", None);
+        store
+            .answer_question(&crate::model::QuestionId::from("deploy"), "prod".into())
+            .expect("answer");
+        // A fresh proposal (no questions of its own) must not drop the dialogue.
+        let mut fresh = demo_doc();
+        fresh.questions.clear();
+        store.apply_propose(fresh).expect("propose");
+        let q = store
+            .snapshot_doc()
+            .question(&crate::model::QuestionId::from("deploy"))
+            .cloned()
+            .unwrap();
+        assert_eq!(q.answer.as_deref(), Some("prod"));
+    }
+
+    #[test]
+    fn removing_an_earlier_queued_change_replays_a_later_question_answer() {
+        let store = demo_store();
+        ask(&store, "deploy", Some("sync-engine"));
+        // Two queued user actions: a note, then a question answer.
+        store
+            .add_note(&NodeId::from("sync-engine"), "a note".into())
+            .expect("note");
+        store
+            .answer_question(&crate::model::QuestionId::from("deploy"), "staging".into())
+            .expect("answer");
+        let note_seq = store
+            .peek_undelivered()
+            .iter()
+            .find(|e| matches!(e.kind, DecisionKind::NoteAdded { .. }))
+            .unwrap()
+            .seq;
+        store.remove_queued_change(note_seq).expect("remove note");
+        // The answer replayed onto the rebuilt doc.
+        let q = store
+            .snapshot_doc()
+            .question(&crate::model::QuestionId::from("deploy"))
+            .cloned()
+            .unwrap();
+        assert_eq!(q.answer.as_deref(), Some("staging"));
+        assert!(store.read(|s| s.blocked_changes.is_empty()));
     }
 }

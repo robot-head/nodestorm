@@ -65,6 +65,15 @@ pub struct ClusterRect {
     pub member_count: usize,
 }
 
+/// A horizontal swimlane band spanning the graph width. Present only when some
+/// node carries a `lane`; the layered layout confines each lane's cards to its
+/// band. The unlabeled default lane (nodes without a `lane`) is omitted here.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LaneBand {
+    pub label: String,
+    pub rect: Rect,
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Layout {
     pub rects: HashMap<NodeId, Rect>,
@@ -72,6 +81,8 @@ pub struct Layout {
     /// Collapsed groups, one synthetic card each (`group:<name>` ids inside
     /// `edges`; never leaked into the doc).
     pub clusters: Vec<ClusterRect>,
+    /// Swimlane bands (empty unless the graph uses lanes), in lane order.
+    pub lanes: Vec<LaneBand>,
     /// Union of all card rects, padded — used for zoom-to-fit.
     pub bounds: Rect,
 }
@@ -224,9 +235,12 @@ pub fn compute_collapsed(doc: &SessionDoc, collapsed: &BTreeSet<String>) -> Layo
                         kind: crate::model::NodeKind::Module,
                         description: String::new(),
                         status: ElementStatus::Existing,
+                        build: None,
                         group: None,
+                        lane: None,
                         choices: vec![],
                         notes: vec![],
+                        agent: None,
                         position: None,
                         origin: Origin::Agent,
                     });
@@ -274,6 +288,8 @@ pub fn compute_collapsed(doc: &SessionDoc, collapsed: &BTreeSet<String>) -> Layo
         focus: None,
         nodes,
         edges: syn_edges,
+        questions: vec![],
+        annotations: vec![],
     };
     let mut layout = compute_inner(&syn_doc, &counts);
 
@@ -322,7 +338,13 @@ fn compute_inner(doc: &SessionDoc, counts: &[usize]) -> Layout {
     let dag = break_cycles(&fwd);
     let ranks = longest_path_ranks(&dag);
     let order = barycenter_order(&dag, &ranks);
-    let rects = place(doc, &ranks, &order);
+    // Swimlanes constrain vertical packing into labeled bands; without any
+    // `lane` the layout is unchanged (centered ranks).
+    let (rects, lanes) = if doc.nodes.iter().any(|n| n.lane.is_some()) {
+        place_laned(doc, &ranks, &order)
+    } else {
+        (place(doc, &ranks, &order), Vec::new())
+    };
     let rank_of: HashMap<&NodeId, usize> = doc
         .nodes
         .iter()
@@ -330,12 +352,17 @@ fn compute_inner(doc: &SessionDoc, counts: &[usize]) -> Layout {
         .map(|(i, n)| (&n.id, ranks[i]))
         .collect();
     let edges = route_edges(doc, &rects, counts, &rank_of);
-    let bounds = compute_bounds(&rects);
+    let mut bounds = compute_bounds(&rects);
+    // Lane bands extend past the cards horizontally; include them in the fit.
+    for lane in &lanes {
+        bounds = union_rect(bounds, lane.rect);
+    }
 
     Layout {
         rects,
         edges,
         clusters: Vec::new(),
+        lanes,
         bounds,
     }
 }
@@ -521,6 +548,135 @@ fn place(doc: &SessionDoc, ranks: &[usize], order: &[Vec<usize>]) -> HashMap<Nod
     rects
 }
 
+/// Union of two rects.
+fn union_rect(a: Rect, b: Rect) -> Rect {
+    let x = a.x.min(b.x);
+    let y = a.y.min(b.y);
+    let right = (a.x + a.w).max(b.x + b.w);
+    let bottom = (a.y + a.h).max(b.y + b.h);
+    Rect {
+        x,
+        y,
+        w: right - x,
+        h: bottom - y,
+    }
+}
+
+/// Lane-constrained placement: cards pack into labeled horizontal bands by
+/// their `lane` (the unlabeled default band holds nodes without one). Bands
+/// stack top-to-bottom in first-appearance order; within a (lane, rank) cell
+/// cards keep their barycenter order. Pinned nodes keep their exact position
+/// and sit outside the bands. Returns the rects plus the visible (labeled)
+/// bands.
+fn place_laned(
+    doc: &SessionDoc,
+    _ranks: &[usize],
+    order: &[Vec<usize>],
+) -> (HashMap<NodeId, Rect>, Vec<LaneBand>) {
+    const LANE_VPAD: f64 = 20.0;
+    const LANE_SEP: f64 = 18.0;
+    const LANE_HPAD: f64 = 30.0;
+    let heights: Vec<f64> = doc.nodes.iter().map(estimate_height).collect();
+    let lane_key = |i: usize| doc.nodes[i].lane.clone().unwrap_or_default();
+
+    // Distinct lanes in first-appearance order; "" is the default lane.
+    let mut lane_order: Vec<String> = Vec::new();
+    let mut lane_index: HashMap<String, usize> = HashMap::new();
+    for (i, _) in doc.nodes.iter().enumerate() {
+        let key = lane_key(i);
+        if !lane_index.contains_key(&key) {
+            lane_index.insert(key.clone(), lane_order.len());
+            lane_order.push(key);
+        }
+    }
+    let num_lanes = lane_order.len();
+    let num_ranks = order.len();
+
+    // Band height = tallest (lane, rank) stack over the ranks.
+    let mut lane_stack_h = vec![0.0f64; num_lanes];
+    for rank_nodes in order {
+        let mut per_lane = vec![0.0f64; num_lanes];
+        for &i in rank_nodes {
+            if doc.nodes[i].position.is_some() {
+                continue;
+            }
+            let li = lane_index[&lane_key(i)];
+            if per_lane[li] > 0.0 {
+                per_lane[li] += NODE_GAP;
+            }
+            per_lane[li] += heights[i];
+        }
+        for (li, h) in per_lane.iter().enumerate() {
+            lane_stack_h[li] = lane_stack_h[li].max(*h);
+        }
+    }
+
+    let mut lane_y = vec![0.0f64; num_lanes];
+    let mut band_h = vec![0.0f64; num_lanes];
+    let mut acc = 0.0;
+    for li in 0..num_lanes {
+        lane_y[li] = acc;
+        band_h[li] = lane_stack_h[li] + 2.0 * LANE_VPAD;
+        acc += band_h[li] + LANE_SEP;
+    }
+
+    let graph_w = if num_ranks == 0 {
+        CARD_WIDTH
+    } else {
+        (num_ranks - 1) as f64 * (CARD_WIDTH + RANK_GUTTER) + CARD_WIDTH
+    };
+
+    let mut rects: HashMap<NodeId, Rect> = HashMap::new();
+    for (i, node) in doc.nodes.iter().enumerate() {
+        if let Some(p) = node.position {
+            rects.insert(
+                node.id.clone(),
+                Rect {
+                    x: p.x,
+                    y: p.y,
+                    w: CARD_WIDTH,
+                    h: heights[i],
+                },
+            );
+        }
+    }
+    for (r, rank_nodes) in order.iter().enumerate() {
+        let x = r as f64 * (CARD_WIDTH + RANK_GUTTER);
+        let mut cursor: Vec<f64> = lane_y.iter().map(|y| y + LANE_VPAD).collect();
+        for &i in rank_nodes {
+            if doc.nodes[i].position.is_some() {
+                continue;
+            }
+            let li = lane_index[&lane_key(i)];
+            let rect = Rect {
+                x,
+                y: cursor[li],
+                w: CARD_WIDTH,
+                h: heights[i],
+            };
+            cursor[li] += heights[i] + NODE_GAP;
+            rects.insert(doc.nodes[i].id.clone(), rect);
+        }
+    }
+
+    let mut lanes: Vec<LaneBand> = Vec::new();
+    for (li, label) in lane_order.iter().enumerate() {
+        if label.is_empty() {
+            continue; // the default lane draws no band
+        }
+        lanes.push(LaneBand {
+            label: label.clone(),
+            rect: Rect {
+                x: -LANE_HPAD,
+                y: lane_y[li],
+                w: graph_w + 2.0 * LANE_HPAD,
+                h: band_h[li],
+            },
+        });
+    }
+    (rects, lanes)
+}
+
 /// Vertical spacing between channel lanes for rank-spanning edges.
 const LANE_GAP: f64 = 12.0;
 
@@ -692,9 +848,12 @@ mod tests {
             kind: NodeKind::Component,
             description: String::new(),
             status: ElementStatus::Proposed,
+            build: None,
             group: None,
+            lane: None,
             choices: vec![],
             notes: vec![],
+            agent: None,
             position: None,
             origin: Origin::Agent,
         }
@@ -880,6 +1039,38 @@ mod tests {
                 "edge {i} has no visible endpoint"
             );
         }
+    }
+
+    #[test]
+    fn swimlanes_confine_cards_to_stacked_bands() {
+        let mut d = doc(&["a", "b", "c", "d"], &[("a", "b"), ("c", "d")]);
+        for id in ["a", "b"] {
+            d.node_mut(&NodeId::from(id)).unwrap().lane = Some("frontend".into());
+        }
+        for id in ["c", "d"] {
+            d.node_mut(&NodeId::from(id)).unwrap().lane = Some("backend".into());
+        }
+        let layout = compute(&d);
+        assert_eq!(layout.lanes.len(), 2);
+        assert_eq!(layout.lanes[0].label, "frontend");
+        assert_eq!(layout.lanes[1].label, "backend");
+        // Every card sits inside its lane band.
+        for (label, ids) in [("frontend", ["a", "b"]), ("backend", ["c", "d"])] {
+            let band = layout.lanes.iter().find(|l| l.label == label).unwrap().rect;
+            for id in ids {
+                let r = layout.rects[&NodeId::from(id)];
+                assert!(
+                    r.y >= band.y && r.y + r.h <= band.y + band.h,
+                    "{id} escapes {label}"
+                );
+            }
+        }
+        // Bands stack: frontend sits entirely above backend.
+        assert!(layout.lanes[0].rect.y + layout.lanes[0].rect.h <= layout.lanes[1].rect.y);
+        // Ranking still applies inside a lane (a → b is left → right).
+        assert!(layout.rects[&NodeId::from("a")].x < layout.rects[&NodeId::from("b")].x);
+        // No lanes → no bands (default packing unchanged).
+        assert!(compute(&doc(&["x", "y"], &[("x", "y")])).lanes.is_empty());
     }
 
     #[test]

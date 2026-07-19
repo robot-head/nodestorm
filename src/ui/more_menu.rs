@@ -40,6 +40,8 @@ enum Section {
 pub fn MoreMenu(has_nodes: bool, suggested_name: String) -> Element {
     let store = use_store();
     let cli = use_context::<Cli>();
+    let sessions = use_context::<Arc<crate::sessions::Sessions>>();
+    let mut record_diff = use_context::<super::RecordDiff>().0;
     let mut open = use_signal(|| false);
     let mut section = use_signal(|| Section::None);
 
@@ -194,6 +196,50 @@ pub fn MoreMenu(has_nodes: bool, suggested_name: String) -> Element {
                                     }
                                 },
                                 "Export Mermaid only"
+                            }
+                            button {
+                                title: "Compare this session against a previously exported record file",
+                                disabled: !has_nodes,
+                                onclick: {
+                                    let store = store.clone();
+                                    let sessions = sessions.clone();
+                                    move |_| {
+                                        open.set(false);
+                                        let Some(path) = rfd::FileDialog::new()
+                                            .add_filter("Markdown", &["md"])
+                                            .pick_file()
+                                        else {
+                                            return;
+                                        };
+                                        let text = match std::fs::read_to_string(&path) {
+                                            Ok(t) => t,
+                                            Err(err) => {
+                                                store.record_export_failed(
+                                                    &format!("cannot read record: {err}"),
+                                                );
+                                                return;
+                                            }
+                                        };
+                                        let record_name = path
+                                            .file_name()
+                                            .map_or_else(
+                                                || "record".to_owned(),
+                                                |n| n.to_string_lossy().into_owned(),
+                                            );
+                                        let doc = store.snapshot_doc();
+                                        let result = crate::diff::diff_doc_vs_record(
+                                            &record_name,
+                                            &text,
+                                            &sessions.active_name(),
+                                            &doc,
+                                        );
+                                        record_diff.set(Some(match result {
+                                            Ok(diff) => diff,
+                                            Err(err) => format!("# Compare with record\n\n_{err}_\n"),
+                                        }));
+                                    }
+                                },
+                                "Compare with record file…"
                             }
                         }
                     }

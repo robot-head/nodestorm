@@ -1,6 +1,7 @@
 //! Dioxus desktop UI.
 
 mod activity;
+mod annotation_layer;
 mod app;
 mod canvas;
 mod choice_panel;
@@ -11,6 +12,7 @@ mod edge_layer;
 mod minimap;
 mod more_menu;
 mod node_card;
+mod questions_panel;
 mod queued_changes;
 mod theme_menu;
 mod timeline;
@@ -71,6 +73,11 @@ pub(crate) struct SearchQuery(pub Signal<String>);
 #[derive(Clone, Copy)]
 pub(crate) struct CompareWith(pub Signal<Option<String>>);
 
+/// `Some(markdown)` while the diff panel shows a session-vs-exported-record
+/// comparison (the text is the rendered diff, or an error message).
+#[derive(Clone, Copy)]
+pub(crate) struct RecordDiff(pub Signal<Option<String>>);
+
 /// The top-bar message draft and popover state, shared with queued-change
 /// editing so a removed comment can be revised before sending again.
 #[derive(Clone, Copy)]
@@ -93,6 +100,23 @@ pub(crate) fn tao_theme(mode: crate::theme::Mode) -> Option<dioxus::desktop::tao
         crate::theme::Mode::Dark => Some(Theme::Dark),
         crate::theme::Mode::Light => Some(Theme::Light),
     }
+}
+
+/// Deterministic hue (0–359) for an agent id, so each agent gets a stable
+/// color/badge across the canvas and feed in a multi-agent session.
+pub(crate) fn agent_hue(name: &str) -> u32 {
+    // FNV-1a over the bytes, folded into a hue.
+    let mut h: u32 = 2_166_136_261;
+    for b in name.bytes() {
+        h ^= u32::from(b);
+        h = h.wrapping_mul(16_777_619);
+    }
+    h % 360
+}
+
+/// `hsl(...)` accent color for an agent id.
+pub(crate) fn agent_color(name: &str) -> String {
+    format!("hsl({}, 62%, 55%)", agent_hue(name))
 }
 
 /// Case-insensitive substring match over label, id, and group.

@@ -12,8 +12,8 @@ use std::fmt::Write as _;
 use chrono::{DateTime, Utc};
 
 use crate::model::{
-    Choice, ChoiceId, ChoiceOption, ChoiceStatus, DecisionEvent, DecisionKind, EdgeKind,
-    ElementStatus, Node, NodeId, NodeKind, OptionId, SessionDoc,
+    AnnotationKind, BuildStatus, Choice, ChoiceId, ChoiceOption, ChoiceStatus, DecisionEvent,
+    DecisionKind, EdgeKind, ElementStatus, Node, NodeId, NodeKind, OptionId, Question, SessionDoc,
 };
 
 /// Render the whole session as a Markdown decision record: architecture
@@ -71,6 +71,24 @@ pub fn render_markdown(
     );
     render_components(&mut out, doc);
 
+    if doc.nodes.iter().any(|n| n.build.is_some()) {
+        out.push_str("## Implementation status\n\n");
+        let tracked = doc.nodes.iter().filter(|n| n.build.is_some()).count();
+        let shipped = doc
+            .nodes
+            .iter()
+            .filter(|n| n.build.is_some_and(BuildStatus::is_shipped))
+            .count();
+        let _ = writeln!(out, "**{shipped}/{tracked} shipped**\n");
+        for node in &doc.nodes {
+            if let Some(build) = node.build {
+                let mark = if build.is_shipped() { "x" } else { " " };
+                let _ = writeln!(out, "- [{mark}] **{}** — {}", node.label, build.name());
+            }
+        }
+        out.push('\n');
+    }
+
     if decided > 0 {
         out.push_str("## Decisions\n\n");
         for node in &doc.nodes {
@@ -94,13 +112,41 @@ pub fn render_markdown(
         out.push('\n');
     }
 
-    if open > 0 {
+    // Free-form questions the agent posed: answered ones sit with the
+    // decisions; unanswered ones join the open questions below.
+    let answered_q = doc.questions.iter().filter(|q| q.is_answered()).count();
+    let open_q = doc.questions.len() - answered_q;
+    if answered_q > 0 {
+        out.push_str("## Questions answered\n\n");
+        for question in doc.questions.iter().filter(|q| q.is_answered()) {
+            render_answered_question(&mut out, doc, question);
+        }
+        out.push('\n');
+    }
+
+    if open > 0 || open_q > 0 {
         out.push_str("## Open questions\n\n");
         for node in &doc.nodes {
             for choice in &node.choices {
                 if choice.status == ChoiceStatus::Open {
-                    render_open_question(&mut out, node, choice);
+                    render_open_question(&mut out, doc, node, choice);
                 }
+            }
+        }
+        for question in doc.questions.iter().filter(|q| !q.is_answered()) {
+            render_unanswered_question(&mut out, doc, question);
+        }
+        out.push('\n');
+    }
+
+    if !doc.annotations.is_empty() {
+        out.push_str("## Annotations\n\n");
+        for annotation in &doc.annotations {
+            let _ = write!(out, "- {}", annotation_kind_name(annotation.kind));
+            if annotation.text.trim().is_empty() {
+                let _ = writeln!(out, " at ({:.0}, {:.0})", annotation.x, annotation.y);
+            } else {
+                let _ = writeln!(out, ": {}", annotation.text.trim());
             }
         }
         out.push('\n');
@@ -118,7 +164,53 @@ pub fn render_markdown(
         }
     }
 
+    append_record_snapshot(&mut out, doc);
     out
+}
+
+fn annotation_kind_name(kind: AnnotationKind) -> &'static str {
+    match kind {
+        AnnotationKind::Note => "note",
+        AnnotationKind::Arrow => "arrow",
+        AnnotationKind::Region => "region",
+    }
+}
+
+/// Marker bracketing the embedded machine-readable snapshot (an HTML comment,
+/// so it is invisible in rendered Markdown but lets a later session diff
+/// against this record via [`parse_record`]).
+const RECORD_SNAPSHOT_BEGIN: &str = "<!-- nodestorm-record v1";
+const RECORD_SNAPSHOT_END: &str = "-->";
+
+/// A normalized copy of `doc` for embedding: volatile view state (revision,
+/// card positions) is dropped so re-exports of unchanged content stay
+/// byte-identical (the diff ignores those fields anyway).
+fn snapshot_doc(doc: &SessionDoc) -> SessionDoc {
+    let mut snap = doc.clone();
+    snap.revision = 0;
+    for node in &mut snap.nodes {
+        node.position = None;
+    }
+    snap
+}
+
+/// Append the hidden, diff-able snapshot of the graph to the record.
+fn append_record_snapshot(out: &mut String, doc: &SessionDoc) {
+    if let Ok(json) = serde_json::to_string(&snapshot_doc(doc)) {
+        let _ = write!(
+            out,
+            "\n{RECORD_SNAPSHOT_BEGIN}\n{json}\n{RECORD_SNAPSHOT_END}\n"
+        );
+    }
+}
+
+/// Recover the graph snapshot embedded in an exported record's text, if any.
+/// `None` when the file predates snapshots or was hand-edited past recognition.
+pub fn parse_record(text: &str) -> Option<SessionDoc> {
+    let begin = text.find(RECORD_SNAPSHOT_BEGIN)?;
+    let rest = &text[begin + RECORD_SNAPSHOT_BEGIN.len()..];
+    let end = rest.find(RECORD_SNAPSHOT_END)?;
+    serde_json::from_str(rest[..end].trim()).ok()
 }
 
 /// One human-readable line for a decision event — shared by the exported
@@ -156,6 +248,28 @@ pub(crate) fn describe_event(doc: &SessionDoc, event: &DecisionEvent) -> String 
         DecisionKind::NoteAdded { node_id, note } => {
             format!("note on {}: {}", node_label(doc, node_id), note.text)
         }
+        DecisionKind::QuestionAnswered {
+            question_id,
+            answer,
+        } => {
+            let prompt = doc
+                .question(question_id)
+                .map_or_else(|| question_id.to_string(), |q| q.prompt.clone());
+            format!("answered “{prompt}”: {answer}")
+        }
+        DecisionKind::AnnotationAdded { annotation } => {
+            format!(
+                "added a {} annotation",
+                annotation_kind_name(annotation.kind)
+            )
+        }
+        DecisionKind::AnnotationEdited { annotation } => {
+            format!(
+                "edited a {} annotation",
+                annotation_kind_name(annotation.kind)
+            )
+        }
+        DecisionKind::AnnotationDeleted { .. } => "deleted an annotation".to_owned(),
         DecisionKind::FlushRequested { comment } => match comment {
             Some(c) => format!("comment: “{c}”"),
             None => "sent decisions to the agent".into(),
@@ -228,11 +342,15 @@ fn render_components(out: &mut String, doc: &SessionDoc) {
 fn component_bullet(out: &mut String, node: &Node) {
     let _ = write!(
         out,
-        "- **{}** ({}, {})",
+        "- **{}** ({}, {}",
         node.label,
         kind_name(node.kind),
         status_name(node.status)
     );
+    if let Some(build) = node.build {
+        let _ = write!(out, ", {}", build.name());
+    }
+    out.push(')');
     if node.description.is_empty() {
         out.push('\n');
     } else {
@@ -253,6 +371,11 @@ fn component_bullet(out: &mut String, node: &Node) {
 /// plus the user's pre-decision exploration trail.
 fn render_decision(out: &mut String, node: &Node, choice: &Choice, log: &[DecisionEvent]) {
     let _ = writeln!(out, "### {} — {}\n", choice.prompt, node.label);
+    if choice.needs_review {
+        out.push_str(
+            "> ⚠ Flagged for review: a dependency was reopened after this was decided.\n\n",
+        );
+    }
     if let Some(rationale) = &choice.rationale {
         let _ = writeln!(out, "{rationale}\n");
     }
@@ -332,7 +455,7 @@ fn render_dismissal(out: &mut String, node: &Node, choice: &Choice, log: &[Decis
     out.push('\n');
 }
 
-fn render_open_question(out: &mut String, node: &Node, choice: &Choice) {
+fn render_open_question(out: &mut String, doc: &SessionDoc, node: &Node, choice: &Choice) {
     let options = choice
         .options
         .iter()
@@ -351,6 +474,50 @@ fn render_open_question(out: &mut String, node: &Node, choice: &Choice) {
         choice.prompt, node.label
     );
     if let Some(rationale) = &choice.rationale {
+        let _ = writeln!(out, "  - why: {rationale}");
+    }
+    let blockers: Vec<String> = doc
+        .unmet_dependencies(choice)
+        .iter()
+        .map(|dep| {
+            doc.node(&dep.node)
+                .and_then(|n| n.choice(&dep.choice))
+                .map_or_else(
+                    || format!("{} / {}", dep.node, dep.choice),
+                    |c| c.prompt.clone(),
+                )
+        })
+        .collect();
+    if !blockers.is_empty() {
+        let _ = writeln!(out, "  - locked, waiting on: {}", blockers.join("; "));
+    }
+}
+
+/// An answered free-form question: prompt, the component it hangs off (if
+/// any), and the user's reply.
+fn render_answered_question(out: &mut String, doc: &SessionDoc, question: &Question) {
+    let _ = write!(out, "- **{}**", question.prompt);
+    if let Some(node_id) = &question.node_id {
+        let _ = write!(out, " ({})", node_label(doc, node_id));
+    }
+    let _ = writeln!(
+        out,
+        " — {}",
+        question.answer.as_deref().unwrap_or("").trim()
+    );
+    if let Some(at) = &question.answered_at {
+        let _ = writeln!(out, "  - _answered {}_", at.format("%Y-%m-%d"));
+    }
+}
+
+/// An unanswered free-form question in the Open questions section.
+fn render_unanswered_question(out: &mut String, doc: &SessionDoc, question: &Question) {
+    let _ = write!(out, "- **{}**", question.prompt);
+    if let Some(node_id) = &question.node_id {
+        let _ = write!(out, " ({})", node_label(doc, node_id));
+    }
+    out.push_str(" — awaiting answer\n");
+    if let Some(rationale) = &question.rationale {
         let _ = writeln!(out, "  - why: {rationale}");
     }
 }
@@ -671,7 +838,9 @@ fn escape_edge_label(label: &str) -> String {
 mod tests {
     use super::*;
     use crate::demo::demo_doc;
-    use crate::model::{Edge, EdgeKind, ElementStatus, Node, NodeId, NodeKind, Origin, SessionDoc};
+    use crate::model::{
+        Edge, EdgeKind, ElementStatus, Node, NodeId, NodeKind, Origin, QuestionId, SessionDoc,
+    };
 
     fn tnode(id: &str, label: &str) -> Node {
         Node {
@@ -680,9 +849,12 @@ mod tests {
             kind: NodeKind::Component,
             description: String::new(),
             status: ElementStatus::Existing,
+            build: None,
             group: None,
+            lane: None,
             choices: vec![],
             notes: vec![],
+            agent: None,
             position: None,
             origin: Origin::Agent,
         }
@@ -707,6 +879,8 @@ mod tests {
             focus: None,
             nodes,
             edges,
+            questions: vec![],
+            annotations: vec![],
         }
     }
 
@@ -930,6 +1104,9 @@ mod tests {
         c.status = ChoiceStatus::Decided;
         let c = &mut doc.nodes[5].choices[0];
         c.status = ChoiceStatus::Dismissed;
+        if let Some(q) = doc.questions.first_mut() {
+            q.answer = Some("90 days of full history, then squash to daily snapshots".into());
+        }
         let log = vec![
             selected_event(
                 1,
@@ -1014,7 +1191,155 @@ mod tests {
             md.contains("- **Where should websocket connections terminate?** (WebSocket Gateway) — reason: out of scope for v1, dismissed 2026-07-17"),
             "in: {md}"
         );
+        assert!(md.contains("## Questions answered"), "in: {md}");
+        assert!(
+            md.contains("**How long should full edit history be retained once notes go realtime?** (PostgreSQL) — 90 days of full history, then squash to daily snapshots"),
+            "in: {md}"
+        );
         assert!(!md.contains("## Open questions"), "none open, in: {md}");
+    }
+
+    #[test]
+    fn markdown_open_choice_shows_dependency_lock() {
+        // demo: ws-deployment is locked behind conflict-resolution.
+        let md = render_markdown(&demo_doc(), &[], ts());
+        assert!(
+            md.contains("locked, waiting on: How should concurrent edits be reconciled?"),
+            "{md}"
+        );
+    }
+
+    #[test]
+    fn markdown_flags_reviewed_decision() {
+        let mut node = tnode("api", "API");
+        node.choices = vec![Choice {
+            id: "x".into(),
+            prompt: "Persistence?".into(),
+            rationale: None,
+            options: vec![ChoiceOption {
+                id: "sqlite".into(),
+                label: "SQLite".into(),
+                summary: String::new(),
+                pros: vec![],
+                cons: vec![],
+                recommended: false,
+                affects: vec![],
+            }],
+            selected: Some("sqlite".into()),
+            status: ChoiceStatus::Decided,
+            depends_on: vec![],
+            needs_review: true,
+            reopen: false,
+        }];
+        let md = render_markdown(&tdoc(vec![node], vec![]), &[], ts());
+        assert!(md.contains("Flagged for review"), "{md}");
+    }
+
+    #[test]
+    fn markdown_renders_implementation_status() {
+        let mut api = tnode("api", "API");
+        api.build = Some(BuildStatus::Verified);
+        let mut cache = tnode("cache", "Cache");
+        cache.build = Some(BuildStatus::Building);
+        let doc = tdoc(vec![api, cache, tnode("web", "Web")], vec![]);
+        let md = render_markdown(&doc, &[], ts());
+        assert!(md.contains("## Implementation status"), "{md}");
+        assert!(md.contains("**1/2 shipped**"), "{md}");
+        assert!(md.contains("- [x] **API** — verified"), "{md}");
+        assert!(md.contains("- [ ] **Cache** — building"), "{md}");
+        // The component inventory gains the build column, untracked nodes omit it.
+        assert!(
+            md.contains("- **API** (component, existing, verified)"),
+            "{md}"
+        );
+        assert!(md.contains("- **Web** (component, existing)"), "{md}");
+    }
+
+    #[test]
+    fn markdown_renders_answered_and_open_questions() {
+        let mut doc = tdoc(vec![tnode("api", "API")], vec![]);
+        doc.questions = vec![
+            Question {
+                id: QuestionId::from("deploy"),
+                prompt: "Which environment ships first?".into(),
+                node_id: Some(NodeId::from("api")),
+                rationale: None,
+                answer: Some("staging".into()),
+                answered_at: None,
+            },
+            Question {
+                id: QuestionId::from("budget"),
+                prompt: "What's the latency budget?".into(),
+                node_id: None,
+                rationale: Some("shapes the cache".into()),
+                answer: None,
+                answered_at: None,
+            },
+        ];
+        let md = render_markdown(&doc, &[], ts());
+        assert!(md.contains("## Questions answered"), "{md}");
+        assert!(
+            md.contains("**Which environment ships first?** (API) — staging"),
+            "{md}"
+        );
+        assert!(md.contains("## Open questions"), "{md}");
+        assert!(
+            md.contains("**What's the latency budget?** — awaiting answer"),
+            "{md}"
+        );
+        assert!(md.contains("why: shapes the cache"), "{md}");
+    }
+
+    #[test]
+    fn markdown_renders_annotations_section() {
+        use crate::model::{Annotation, AnnotationId, Origin};
+        let mut doc = tdoc(vec![tnode("api", "API")], vec![]);
+        doc.annotations = vec![
+            Annotation {
+                id: AnnotationId::from("n1"),
+                kind: AnnotationKind::Note,
+                x: 12.0,
+                y: 34.0,
+                w: 0.0,
+                h: 0.0,
+                text: "revisit auth".into(),
+                origin: Origin::User,
+            },
+            Annotation {
+                id: AnnotationId::from("r1"),
+                kind: AnnotationKind::Region,
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 80.0,
+                text: String::new(),
+                origin: Origin::User,
+            },
+        ];
+        let md = render_markdown(&doc, &[], ts());
+        assert!(md.contains("## Annotations"), "{md}");
+        assert!(md.contains("- note: revisit auth"), "{md}");
+        assert!(md.contains("- region at (0, 0)"), "{md}");
+    }
+
+    #[test]
+    fn record_snapshot_round_trips_and_stays_hidden() {
+        let doc = demo_doc();
+        let md = render_markdown(&doc, &[], ts());
+        // Embedded as an HTML comment (invisible when rendered), not a heading.
+        assert!(md.contains("<!-- nodestorm-record v1"), "{md}");
+        let parsed = parse_record(&md).expect("snapshot present");
+        assert_eq!(parsed.nodes.len(), doc.nodes.len());
+        assert_eq!(parsed.title, doc.title);
+        assert_eq!(parsed.revision, 0, "revision normalized");
+        assert!(
+            parsed.nodes.iter().all(|n| n.position.is_none()),
+            "positions stripped"
+        );
+        // Deterministic: re-render is byte-identical.
+        assert_eq!(md, render_markdown(&doc, &[], ts()));
+        // Nothing to parse in unrelated text.
+        assert!(parse_record("just some markdown, no snapshot").is_none());
     }
 
     #[test]
@@ -1137,9 +1462,12 @@ mod tests {
                     kind: NodeKind::Component,
                     description: String::new(),
                     status: ElementStatus::Proposed,
+                    build: None,
                     group: None,
+                    lane: None,
                     choices: vec![],
                     notes: vec![],
+                    agent: None,
                     position: None,
                     origin: Origin::User,
                 },

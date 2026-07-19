@@ -10,15 +10,16 @@
 use dioxus::prelude::*;
 
 use crate::layout::Layout;
-use crate::model::{EdgeKind, NodeId, NodeKind, Point, SessionDoc};
+use crate::model::{AnnotationKind, EdgeKind, NodeId, NodeKind, Point, SessionDoc};
 
 use super::ViewTransform;
+use super::annotation_layer::AnnotationLayer;
 use super::app::use_store;
 use super::cluster_card::ClusterCard;
 use super::context_menu::{ContextMenu, MenuAction, MenuTarget};
 use super::edge_layer::EdgeLayer;
 use super::minimap::Minimap;
-use super::node_card::NodeCard;
+use super::node_card::{NodeCard, ZoomTier};
 
 use super::{TOPBAR_H, ViewportSize};
 
@@ -45,6 +46,55 @@ struct GestureState {
     node: Option<NodeId>,
 }
 
+/// Short toggle label for an edge kind (the edge-kind layer buttons).
+fn edge_kind_label(kind: EdgeKind) -> &'static str {
+    match kind {
+        EdgeKind::DependsOn => "depends",
+        EdgeKind::DataFlow => "data",
+        EdgeKind::Contains => "contains",
+        EdgeKind::Other => "other",
+    }
+}
+
+/// Bounding rects (padded) of each expanded group's member cards, in
+/// first-appearance order. Collapsed groups are drawn as cluster cards
+/// instead, so their members are absent from `layout.rects` and skipped here.
+fn group_outline_rects(doc: &SessionDoc, layout: &Layout) -> Vec<(String, crate::layout::Rect)> {
+    use crate::layout::Rect;
+    const PAD: f64 = 18.0;
+    let mut order: Vec<String> = Vec::new();
+    let mut bounds: std::collections::HashMap<String, Rect> = std::collections::HashMap::new();
+    for node in &doc.nodes {
+        let (Some(group), Some(r)) = (node.group.as_deref(), layout.rects.get(&node.id)) else {
+            continue;
+        };
+        match bounds.get_mut(group) {
+            Some(b) => {
+                let (right, bottom) = (b.x + b.w, b.y + b.h);
+                b.x = b.x.min(r.x);
+                b.y = b.y.min(r.y);
+                b.w = right.max(r.x + r.w) - b.x;
+                b.h = bottom.max(r.y + r.h) - b.y;
+            }
+            None => {
+                order.push(group.to_owned());
+                bounds.insert(group.to_owned(), *r);
+            }
+        }
+    }
+    order
+        .into_iter()
+        .map(|g| {
+            let mut r = bounds[&g];
+            r.x -= PAD;
+            r.y -= PAD;
+            r.w += 2.0 * PAD;
+            r.h += 2.0 * PAD;
+            (g, r)
+        })
+        .collect()
+}
+
 #[component]
 pub fn Canvas(
     doc: Signal<SessionDoc>,
@@ -65,6 +115,13 @@ pub fn Canvas(
     let mut ghost_to: Signal<Option<(f64, f64)>> = use_signal(|| None);
     // Open right-click menu: (client_x, client_y, target).
     let mut menu: Signal<Option<(f64, f64, MenuTarget)>> = use_signal(|| None);
+    // Edge-kind layers the user has toggled off (view state, not persisted).
+    let mut hidden_kinds: Signal<std::collections::HashSet<EdgeKind>> =
+        use_signal(std::collections::HashSet::new);
+    // Freehand-annotation drawing: the active tool and the in-progress stroke
+    // `(x0, y0, x1, y1)` in plane coords.
+    let mut annotate_tool: Signal<Option<AnnotationKind>> = use_signal(|| None);
+    let mut draw: Signal<Option<(f64, f64, f64, f64)>> = use_signal(|| None);
 
     // Client → plane coordinates (the canvas sits below the 48px topbar).
     let to_plane = move |cx: f64, cy: f64| {
@@ -185,12 +242,49 @@ pub fn Canvas(
         viewport_size.width,
         viewport_size.height,
     );
-    let panning = matches!(gesture.read().gesture, Some(Gesture::Pan { .. }));
-    let viewport_class = match (panning, connect_from().is_some()) {
-        (true, _) => "canvas-viewport panning",
-        (false, true) => "canvas-viewport connecting",
-        (false, false) => "canvas-viewport",
+    // Semantic-zoom tier for this frame; also gates the group outlines that
+    // dominate when zoomed out.
+    let tier = ZoomTier::from_scale(t.scale);
+    let group_outlines: Vec<(String, crate::layout::Rect)> = if tier == ZoomTier::Near {
+        Vec::new()
+    } else {
+        group_outline_rects(&d, &l)
     };
+    // Edge-kind layers: drop toggled-off kinds from the visible edge set, and
+    // gather the kinds present so the toggles only offer what exists.
+    let hidden = hidden_kinds.read().clone();
+    let visible_edges: Vec<usize> = vis
+        .edges
+        .iter()
+        .copied()
+        .filter(|&i| !hidden.contains(&l.edges[i].kind))
+        .collect();
+    let kinds_present: Vec<EdgeKind> = {
+        let mut seen: Vec<EdgeKind> = Vec::new();
+        for e in &d.edges {
+            if !seen.contains(&e.kind) {
+                seen.push(e.kind);
+            }
+        }
+        seen
+    };
+    let panning = matches!(gesture.read().gesture, Some(Gesture::Pan { .. }));
+    let viewport_class = match (panning, connect_from().is_some(), annotate_tool().is_some()) {
+        (true, _, _) => "canvas-viewport panning",
+        (false, _, true) => "canvas-viewport annotating",
+        (false, true, false) => "canvas-viewport connecting",
+        (false, false, false) => "canvas-viewport",
+    };
+    // The live annotation preview passed to the layer.
+    let anno_preview = draw().map(|(x0, y0, x1, y1)| {
+        (
+            x0,
+            y0,
+            x1,
+            y1,
+            annotate_tool().unwrap_or(AnnotationKind::Note),
+        )
+    });
 
     rsx! {
         div {
@@ -222,9 +316,12 @@ pub fn Canvas(
                             }
                         }
                         Key::Escape => {
-                            // First non-empty wins: connect → menu → search
-                            // → selection.
-                            if connect_from().is_some() {
+                            // First non-empty wins: annotate tool → connect →
+                            // menu → search → selection.
+                            if annotate_tool().is_some() {
+                                annotate_tool.set(None);
+                                draw.set(None);
+                            } else if connect_from().is_some() {
                                 connect_from.set(None);
                                 ghost_to.set(None);
                             } else if menu().is_some() {
@@ -305,6 +402,12 @@ pub fn Canvas(
             },
             onmousedown: move |ev| {
                 let c = ev.client_coordinates();
+                // An armed annotation tool turns a background press into a draw.
+                if annotate_tool().is_some() {
+                    let (px, py) = to_plane(c.x, c.y);
+                    draw.set(Some((px, py, px, py)));
+                    return;
+                }
                 let t = transform();
                 gesture.set(GestureState {
                     gesture: Some(Gesture::Pan { start: (c.x, c.y), orig: (t.tx, t.ty) }),
@@ -315,6 +418,17 @@ pub fn Canvas(
                 let store = store.clone();
                 move |ev| {
                     let c = ev.client_coordinates();
+                    // While drawing an annotation, track the cursor as the end.
+                    if draw().is_some() {
+                        let (px, py) = to_plane(c.x, c.y);
+                        draw.with_mut(|d| {
+                            if let Some(d) = d {
+                                d.2 = px;
+                                d.3 = py;
+                            }
+                        });
+                        return;
+                    }
                     if connect_from().is_some() {
                         ghost_to.set(Some(to_plane(c.x, c.y)));
                     }
@@ -344,7 +458,32 @@ pub fn Canvas(
                     }
                 }
             },
-            onmouseup: move |_| {
+            onmouseup: {
+                let store = store.clone();
+                move |_| {
+                if let Some((x0, y0, x1, y1)) = draw() {
+                    let kind = annotate_tool().unwrap_or(AnnotationKind::Note);
+                    match kind {
+                        AnnotationKind::Note => {
+                            store.add_annotation(kind, x0, y0, 0.0, 0.0, String::new());
+                        }
+                        AnnotationKind::Arrow => {
+                            if (x1 - x0).hypot(y1 - y0) > 8.0 {
+                                store.add_annotation(kind, x0, y0, x1 - x0, y1 - y0, String::new());
+                            }
+                        }
+                        AnnotationKind::Region => {
+                            let (rw, rh) = ((x1 - x0).abs(), (y1 - y0).abs());
+                            if rw > 8.0 && rh > 8.0 {
+                                store.add_annotation(
+                                    kind, x0.min(x1), y0.min(y1), rw, rh, String::new(),
+                                );
+                            }
+                        }
+                    }
+                    draw.set(None);
+                    return;
+                }
                 let state = gesture();
                 if let Some(Gesture::Pan { start, orig }) = state.gesture {
                     // A motionless background click deselects — or cancels an
@@ -364,6 +503,7 @@ pub fn Canvas(
                 }
                 ghost_to.set(None);
                 gesture.set(GestureState::default());
+                }
             },
             onmouseleave: move |_| {
                 ghost_to.set(None);
@@ -372,6 +512,11 @@ pub fn Canvas(
             ondoubleclick: {
                 let store = store.clone();
                 move |ev: MouseEvent| {
+                    // With an annotation tool armed, double-click is part of
+                    // drawing, not a new component.
+                    if annotate_tool().is_some() {
+                        return;
+                    }
                     let c = ev.client_coordinates();
                     let (px, py) = to_plane(c.x, c.y);
                     match store.add_user_node(
@@ -414,9 +559,25 @@ pub fn Canvas(
             div {
                 class: "canvas-plane",
                 style: "transform: translate({t.tx}px, {t.ty}px) scale({t.scale});",
+                for lane in l.lanes.iter() {
+                    div {
+                        key: "lane-{lane.label}",
+                        class: "swimlane",
+                        style: "left: {lane.rect.x}px; top: {lane.rect.y}px; width: {lane.rect.w}px; height: {lane.rect.h}px;",
+                        span { class: "swimlane-label", "{lane.label}" }
+                    }
+                }
+                for (group, r) in group_outlines.iter() {
+                    div {
+                        key: "outline-{group}",
+                        class: "group-outline",
+                        style: "left: {r.x}px; top: {r.y}px; width: {r.w}px; height: {r.h}px;",
+                        span { class: "group-outline-label", "{group}" }
+                    }
+                }
                 EdgeLayer {
                     layout,
-                    visible: vis.edges.clone(),
+                    visible: visible_edges.clone(),
                     ghost: connect_from().and_then(|from| {
                         let l = layout.read();
                         let r = l.rects.get(&from)?;
@@ -448,6 +609,10 @@ pub fn Canvas(
                             rect: *rect,
                             selected: selected() == Some(node.id.clone()),
                             highlighted: hovered_affects.read().contains(&node.id),
+                            zoom: tier,
+                            open_questions: d.questions.iter().filter(|q| {
+                                q.node_id.as_ref() == Some(&node.id) && !q.is_answered()
+                            }).count(),
                             search_hit: super::node_matches(node, &search.read()),
                             search_dim: !search.read().trim().is_empty()
                                 && !super::node_matches(node, &search.read()),
@@ -546,6 +711,7 @@ pub fn Canvas(
                         }
                     }
                 }
+                AnnotationLayer { annotations: d.annotations.clone(), preview: anno_preview }
             }
             if let Some((mx, my, target)) = menu() {
                 ContextMenu {
@@ -597,6 +763,29 @@ pub fn Canvas(
                 }
             }
             div { class: "canvas-controls",
+                div { class: "annotate-tools", title: "Draw annotations (Esc to cancel)",
+                    for (kind, glyph, label) in [
+                        (AnnotationKind::Note, "🗒", "note"),
+                        (AnnotationKind::Arrow, "↗", "arrow"),
+                        (AnnotationKind::Region, "▢", "region"),
+                    ] {
+                        {
+                            let active = annotate_tool() == Some(kind);
+                            rsx! {
+                                button {
+                                    key: "{label}",
+                                    class: if active { "annotate-btn active" } else { "annotate-btn" },
+                                    title: "Draw a {label} annotation",
+                                    onclick: move |_| {
+                                        annotate_tool.set(if active { None } else { Some(kind) });
+                                        draw.set(None);
+                                    },
+                                    "{glyph}"
+                                }
+                            }
+                        }
+                    }
+                }
                 button {
                     class: "ctl-btn",
                     title: "Zoom to fit",
@@ -610,8 +799,64 @@ pub fn Canvas(
                     },
                     "⤢ fit"
                 }
+                if kinds_present.len() > 1 {
+                    div { class: "layer-toggles", title: "Show/hide edge kinds",
+                        for kind in kinds_present.iter().copied() {
+                            {
+                                let active = !hidden_kinds.read().contains(&kind);
+                                rsx! {
+                                    button {
+                                        key: "{kind:?}",
+                                        class: if active { "layer-btn active" } else { "layer-btn" },
+                                        title: if active { "Hide {edge_kind_label(kind)} edges" } else { "Show {edge_kind_label(kind)} edges" },
+                                        onclick: move |_| {
+                                            hidden_kinds.with_mut(|h| {
+                                                if !h.remove(&kind) {
+                                                    h.insert(kind);
+                                                }
+                                            });
+                                        },
+                                        "{edge_kind_label(kind)}"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
             Minimap { doc, layout, transform, viewport: viewport_size }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::group_outline_rects;
+
+    #[test]
+    fn group_outlines_bound_each_expanded_group() {
+        // big_doc(24) lays out two groups (cluster-0, cluster-1), all expanded.
+        let doc = crate::demo::big_doc(24);
+        let layout = crate::layout::compute(&doc);
+        let outlines = group_outline_rects(&doc, &layout);
+        assert_eq!(outlines.len(), 2, "one outline per expanded group");
+        for (group, rect) in &outlines {
+            // Every member card sits inside its group's outline.
+            for node in doc
+                .nodes
+                .iter()
+                .filter(|n| n.group.as_deref() == Some(group.as_str()))
+            {
+                let m = layout.rects[&node.id];
+                assert!(
+                    rect.x <= m.x
+                        && rect.y <= m.y
+                        && rect.x + rect.w >= m.x + m.w
+                        && rect.y + rect.h >= m.y + m.h,
+                    "member {} escapes outline {group}",
+                    node.id
+                );
+            }
         }
     }
 }
