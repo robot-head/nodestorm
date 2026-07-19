@@ -122,6 +122,8 @@ pub fn Canvas(
     // `(x0, y0, x1, y1)` in plane coords.
     let mut annotate_tool: Signal<Option<AnnotationKind>> = use_signal(|| None);
     let mut draw: Signal<Option<(f64, f64, f64, f64)>> = use_signal(|| None);
+    // The lane the currently dragged card would drop into (drag feedback).
+    let mut drop_lane: Signal<Option<String>> = use_signal(|| None);
 
     // Client → plane coordinates (the canvas sits below the 48px topbar).
     let to_plane = move |cx: f64, cy: f64| {
@@ -446,6 +448,12 @@ pub fn Canvas(
                                 let nx = orig.0 + (c.x - start.0) / t.scale;
                                 let ny = orig.1 + (c.y - start.1) / t.scale;
                                 store.set_position(id, Point { x: nx, y: ny });
+                                let l = layout.read();
+                                let (cx, cy) = (
+                                    nx + crate::layout::CARD_WIDTH / 2.0,
+                                    ny + l.rects.get(id).map_or(40.0, |r| r.h) / 2.0,
+                                );
+                                drop_lane.set(crate::layout::lane_at(&l.lanes, cx, cy));
                                 if !moved {
                                     gesture.set(GestureState {
                                         gesture: Some(Gesture::DragNode { start, orig, moved: true }),
@@ -501,12 +509,27 @@ pub fn Canvas(
                     // A connect drag released over the background: cancel.
                     connect_from.set(None);
                 }
+                // A node drag that actually moved re-parents by geometry:
+                // dropped inside a band → that lane; outside every band → none.
+                if let Some(Gesture::DragNode { moved: true, .. }) = state.gesture
+                    && let Some(id) = &state.node
+                {
+                    let l = layout.read();
+                    let target = l.rects.get(id).map(|r| {
+                        crate::layout::lane_at(&l.lanes, r.x + r.w / 2.0, r.y + r.h / 2.0)
+                    });
+                    if let Some(target) = target {
+                        store.set_lane(id, target);
+                    }
+                }
                 ghost_to.set(None);
+                drop_lane.set(None);
                 gesture.set(GestureState::default());
                 }
             },
             onmouseleave: move |_| {
                 ghost_to.set(None);
+                drop_lane.set(None);
                 gesture.set(GestureState::default());
                 // Abandon an in-progress annotation stroke released off-canvas,
                 // so re-entering doesn't drop a stray note/arrow/region.
@@ -565,7 +588,11 @@ pub fn Canvas(
                 for lane in l.lanes.iter() {
                     div {
                         key: "lane-{lane.label}",
-                        class: "swimlane",
+                        class: if drop_lane().as_deref() == Some(lane.label.as_str()) {
+                            "swimlane drop-target"
+                        } else {
+                            "swimlane"
+                        },
                         style: "left: {lane.rect.x}px; top: {lane.rect.y}px; width: {lane.rect.w}px; height: {lane.rect.h}px;",
                         span { class: "swimlane-label", "{lane.label}" }
                     }

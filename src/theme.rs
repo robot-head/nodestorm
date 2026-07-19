@@ -242,6 +242,12 @@ mod tests {
     }
 
     #[test]
+    fn dragged_card_highlights_its_target_lane() {
+        // The drop-target band is visibly distinct via the accent color.
+        assert_block_contains(".swimlane.drop-target", "var(--accent)");
+    }
+
+    #[test]
     fn dropdowns_fit_the_supported_viewport() {
         assert_block_contains(
             ".export-dropdown",
