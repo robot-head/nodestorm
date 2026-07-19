@@ -342,12 +342,17 @@ impl Store {
     /// Rename a swimlane: rewrite the declared entry and `lane` on every
     /// member node so membership follows. A blank or unchanged name is a
     /// no-op; a name that collides with an existing lane merges into it.
+    /// Checkpoints for undo. Wart: undo only restores `s.doc`, so it puts
+    /// members back under `old`, but `declared_lanes` keeps `new` (now
+    /// empty) — the lane briefly shows up twice until something touches
+    /// `declared_lanes` again.
     pub fn rename_lane(&self, old: &str, new: &str) {
         let new = new.trim().to_owned();
         if new.is_empty() || new == old {
             return;
         }
         self.mutate(|s| {
+            push_undo(s, &format!("renamed lane \u{201c}{old}\u{201d}"));
             for slot in s.declared_lanes.iter_mut() {
                 if slot == old {
                     *slot = new.clone();
@@ -363,10 +368,12 @@ impl Store {
     }
 
     /// Delete a swimlane: remove the declared entry and clear `lane` on its
-    /// members (cards fall back to the default lane). View state + doc, but
-    /// no undo entry — consistent with the view-state model.
+    /// members (cards fall back to the default lane). Checkpoints for undo —
+    /// a misclick on the lane's `×` is recoverable with Ctrl+Z, restoring
+    /// member lane membership (the lane reappears as a band).
     pub fn delete_lane(&self, label: &str) {
         self.mutate(|s| {
+            push_undo(s, &format!("deleted lane \u{201c}{label}\u{201d}"));
             s.declared_lanes.retain(|l| l != label);
             for n in s.doc.nodes.iter_mut() {
                 if n.lane.as_deref() == Some(label) {
@@ -2553,6 +2560,58 @@ mod tests {
                 .unwrap()
                 .lane,
             None
+        );
+    }
+
+    #[test]
+    fn delete_lane_is_undoable() {
+        let store = demo_store();
+        store.set_lane(&NodeId::from("redis"), Some("data".into()));
+        store.delete_lane("data");
+        assert_eq!(
+            store
+                .snapshot_doc()
+                .node(&NodeId::from("redis"))
+                .unwrap()
+                .lane,
+            None
+        );
+        assert!(store.undo(), "delete_lane left an undo entry");
+        assert_eq!(
+            store
+                .snapshot_doc()
+                .node(&NodeId::from("redis"))
+                .unwrap()
+                .lane
+                .as_deref(),
+            Some("data"),
+            "undo restores member lane membership"
+        );
+    }
+
+    #[test]
+    fn rename_lane_is_undoable() {
+        let store = demo_store();
+        store.set_lane(&NodeId::from("redis"), Some("data".into()));
+        store.rename_lane("data", "backend");
+        assert_eq!(
+            store
+                .snapshot_doc()
+                .node(&NodeId::from("redis"))
+                .unwrap()
+                .lane
+                .as_deref(),
+            Some("backend")
+        );
+        assert!(store.undo(), "rename_lane left an undo entry");
+        assert_eq!(
+            store
+                .snapshot_doc()
+                .node(&NodeId::from("redis"))
+                .unwrap()
+                .lane
+                .as_deref(),
+            Some("data")
         );
     }
 
