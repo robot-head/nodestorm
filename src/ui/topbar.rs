@@ -8,6 +8,24 @@ use crate::store::UiMeta;
 
 use super::app::use_store;
 
+fn send_succeeded<E>(result: Result<(), E>) -> bool {
+    result.is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::send_succeeded;
+
+    #[test]
+    fn send_error_preserves_the_draft() {
+        assert!(send_succeeded(Ok::<(), ()>(())), "success clears the draft");
+        assert!(
+            !send_succeeded(Err::<(), ()>(())),
+            "failure preserves the draft"
+        );
+    }
+}
+
 #[component]
 pub fn TopBar(
     doc: Signal<SessionDoc>,
@@ -583,9 +601,10 @@ pub fn TopBar(
                                 let store = store.clone();
                                 move |_| {
                                     let text = comment.read().trim().to_owned();
-                                    store.request_flush(if text.is_empty() { None } else { Some(text) });
-                                    comment.set(String::new());
-                                    compose_open.set(false);
+                                    if send_succeeded(store.request_flush(if text.is_empty() { None } else { Some(text) })) {
+                                        comment.set(String::new());
+                                        compose_open.set(false);
+                                    }
                                 }
                             },
                             "Send with message"
@@ -608,8 +627,9 @@ pub fn TopBar(
                     let store = store.clone();
                     move |_| {
                         let text = comment.read().trim().to_owned();
-                        store.request_flush(if text.is_empty() { None } else { Some(text) });
-                        comment.set(String::new());
+                        if send_succeeded(store.request_flush(if text.is_empty() { None } else { Some(text) })) {
+                            comment.set(String::new());
+                        }
                     }
                 },
                 span { class: "send-bolt", "ϟ" }

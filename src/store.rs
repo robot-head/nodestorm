@@ -1990,6 +1990,12 @@ fn push_activity_as(
 /// explicit "Send to agent" click.
 fn autoflush(s: &mut SessionState) {
     if s.doc.open_choice_count() == 0 && s.delivery_cursor < s.decision_log.len() {
+        if s.send_receipt
+            .as_ref()
+            .is_some_and(|receipt| receipt.targets.iter().any(|target| !target.delivered))
+        {
+            return;
+        }
         match validated_targets(s) {
             Ok(targets) => {
                 s.flush_seq += 1;
@@ -3052,6 +3058,44 @@ mod tests {
         assert!(store.try_deliver(ConnectionId(20)).is_some());
         assert_eq!(store.read(|s| (s.flush_seq, s.delivered_flush_seq)), (1, 1));
         drop(guard);
+    }
+
+    #[test]
+    fn autoflush_preserves_unfinished_explicit_receipt() {
+        let store = demo_store();
+        pick_first_choice(&store);
+        let alpha = WaitGuard::enter(store.clone(), awaiter(21, Some("alpha")));
+        store.request_flush(None).unwrap();
+        let beta = WaitGuard::enter(store.clone(), awaiter(22, Some("beta")));
+
+        store
+            .dismiss_choice(
+                &NodeId::from("ws-gateway"),
+                &ChoiceId::from("ws-deployment"),
+                None,
+            )
+            .unwrap();
+
+        let batch = store
+            .try_deliver(ConnectionId(21))
+            .expect("original target receives the active receipt");
+        assert_eq!(batch.len(), 1, "final choice stays out of active receipt");
+        assert!(matches!(batch[0].kind, DecisionKind::OptionSelected { .. }));
+        assert!(
+            store.try_deliver(ConnectionId(22)).is_none(),
+            "a later waiter is not added to the active receipt"
+        );
+        assert_eq!(store.read(|s| (s.flush_seq, s.delivery_cursor)), (1, 1));
+        assert!(matches!(
+            store.peek_undelivered().as_slice(),
+            [DecisionEvent {
+                kind: DecisionKind::ChoiceDismissed { .. },
+                ..
+            }]
+        ));
+
+        drop(alpha);
+        drop(beta);
     }
 
     #[tokio::test]

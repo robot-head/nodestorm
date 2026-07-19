@@ -122,8 +122,10 @@ mod tests {
     #[test]
     fn save_load_round_trip() {
         let path = tmp_path("roundtrip.json");
-        let store = Store::with_doc(demo_doc());
-        store.request_flush(Some("hello".into()));
+        let mut state = SessionState::default();
+        state.doc = demo_doc();
+        state.flush_seq = 1;
+        let store = Store::new(state);
         let state = store.snapshot_state();
         save(&path, &state).unwrap();
         let loaded = load(&path).expect("loads");
