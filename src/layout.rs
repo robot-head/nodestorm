@@ -707,11 +707,14 @@ fn place_laned(
         if !label.is_empty() {
             for (i, node) in doc.nodes.iter().enumerate() {
                 if node.position.is_some() && lane_key(i) == *label {
-                    let m = rects[&node.id];
+                    // A member stranded above the band (bands shifted down
+                    // under it) is pulled down inside, below the title — the
+                    // band's top edge never moves up into the band above.
+                    let m = rects.get_mut(&node.id).expect("pinned rect placed");
+                    m.y = m.y.max(r.y + top_pad[li]);
+                    let m = *m;
                     let x0 = r.x.min(m.x - LANE_CARD_PAD);
                     let x1 = (r.x + r.w).max(m.x + m.w + LANE_CARD_PAD);
-                    // Down/sideways only: the top edge never moves up into
-                    // the band above.
                     let y1 = (r.y + r.h).max(m.y + m.h + LANE_CARD_PAD);
                     r = Rect {
                         x: x0,
@@ -1446,6 +1449,35 @@ mod tests {
             rn.y >= b.rect.y,
             "b's auto-placed card {rn:?} moved down with its band {:?}",
             b.rect
+        );
+    }
+
+    #[test]
+    fn pinned_member_stranded_above_its_band_is_pulled_into_it() {
+        // "m" belongs to the second lane but is pinned at y = 0, above where
+        // that band stacks (below "a"). Downward-only growth alone would
+        // leave it floating inside band "a"; the layout must pull it down
+        // into its own band instead.
+        let mut d = doc(&["m", "n"], &[]);
+        d.node_mut(&NodeId::from("n")).unwrap().lane = Some("a".into());
+        d.node_mut(&NodeId::from("m")).unwrap().lane = Some("b".into());
+        d.node_mut(&NodeId::from("m")).unwrap().position = Some(Point { x: 0.0, y: 0.0 });
+        let layout = compute_view(
+            &d,
+            &std::collections::BTreeSet::new(),
+            &["a".to_owned(), "b".to_owned()],
+        );
+        let b = layout.lanes.iter().find(|l| l.label == "b").unwrap();
+        let rm = layout.rects[&NodeId::from("m")];
+        assert!(
+            rm.y >= b.rect.y && rm.y + rm.h <= b.rect.y + b.rect.h,
+            "member {rm:?} sits inside its band {:?}",
+            b.rect
+        );
+        assert_eq!(
+            lane_at(&layout.lanes, rm.x + rm.w / 2.0, rm.y + rm.h / 2.0).as_deref(),
+            Some("b"),
+            "the member's center resolves to its own lane"
         );
     }
 

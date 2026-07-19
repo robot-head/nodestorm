@@ -61,6 +61,10 @@ the card's lane at drag start instead.)*
   starts below the grown bottom plus `LANE_SEP`. Bands therefore never overlap
   and always keep a minimum gap; auto-placed cards in later lanes move down with
   their band.
+- A pinned member stranded *above* its band's stacked start (bands shifted down
+  underneath it — e.g. an earlier lane grew, or agent/legacy data) is pulled
+  down inside the band, below the title. Rendered rects only; the doc position
+  is untouched and converges on the next drag.
 
 `LaneBand` has a single `rect`: it is drawn, hit-tested, and highlighted as one
 rectangle, so the visible band is exactly the drop zone. Stability mid-drag comes
@@ -79,7 +83,10 @@ for the whole drag, and dragging out is the default — membership is re-earned
 by where the card lands. If the card was the lane's last member and the lane
 was undeclared (agent-set), `set_lane` rescues it into `declared_lanes` so the
 band survives the drag instead of vanishing; deleting a lane stays an explicit
-`×` click.
+`×` click. Undoing such a drag restores membership but leaves the rescued
+entry in `declared_lanes` — the same accepted wart as rename/delete undo
+(view-state sits outside the undo snapshot); bands dedupe by name, so the only
+visible effect is that the lane is now declared.
 
 In `Canvas.onmouseup`, when the ending gesture is a `DragNode` that actually
 moved:
