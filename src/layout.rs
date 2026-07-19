@@ -1091,7 +1091,7 @@ fn compute_bounds(rects: &HashMap<NodeId, Rect>) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Edge, ElementStatus, Node, NodeKind, Origin};
+    use crate::model::{Edge, ElementStatus, Node, NodeKind, Note, Origin};
 
     fn node(id: &str) -> Node {
         Node {
@@ -1128,6 +1128,47 @@ mod tests {
             edges: edges.iter().map(|(a, b)| edge(a, b)).collect(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn rect_geometry_handles_centers_overlap_and_touching_edges() {
+        let rect = Rect {
+            x: 0.0,
+            y: 10.0,
+            w: 10.0,
+            h: 6.0,
+        };
+        assert_eq!(rect.center_y(), 13.0);
+        assert!(rect.intersects(&Rect {
+            x: 9.0,
+            y: 15.0,
+            w: 2.0,
+            h: 2.0,
+        }));
+        assert!(!rect.intersects(&Rect {
+            x: 10.0,
+            y: 11.0,
+            w: 2.0,
+            h: 2.0,
+        }));
+        assert!(!rect.intersects(&Rect {
+            x: -2.0,
+            y: 11.0,
+            w: 2.0,
+            h: 2.0,
+        }));
+        assert!(!rect.intersects(&Rect {
+            x: 1.0,
+            y: 16.0,
+            w: 2.0,
+            h: 2.0,
+        }));
+        assert!(!rect.intersects(&Rect {
+            x: 1.0,
+            y: 8.0,
+            w: 2.0,
+            h: 2.0,
+        }));
     }
 
     #[test]
@@ -1199,6 +1240,7 @@ mod tests {
             .collect();
         assert_eq!(from_cluster.len(), 1);
         assert_eq!(from_cluster[0].bundle_count, 1);
+        assert_eq!(from_cluster[0].label, None);
         // Determinism.
         let again = compute_collapsed(&d, &collapsed);
         assert_eq!(l, again);
@@ -1210,6 +1252,48 @@ mod tests {
         assert!(l.clusters.is_empty());
         assert!(l.edges.iter().all(|e| e.bundle_count == 1));
         assert_eq!(l, compute(&grouped_doc()), "compute() is the empty set");
+    }
+
+    #[test]
+    fn duplicate_edges_do_not_change_node_placement() {
+        let edges = &[("a", "c"), ("a", "d"), ("b", "c"), ("b", "d")];
+        let base = compute(&doc(&["a", "b", "c", "d"], edges));
+        let mut duplicated = doc(&["a", "b", "c", "d"], edges);
+        duplicated.edges.insert(2, edge("a", "d"));
+        assert_eq!(compute(&duplicated).rects, base.rects);
+    }
+
+    #[test]
+    fn barycenter_sweeps_use_neighbor_averages_in_both_directions() {
+        assert_eq!(
+            barycenter_order(&[vec![3], vec![2], vec![], vec![]], &[0, 0, 1, 1]),
+            vec![vec![0, 1], vec![3, 2]]
+        );
+        assert_eq!(
+            barycenter_order(&[vec![1, 2], vec![], vec![], vec![]], &[0, 1, 1, 0]),
+            vec![vec![0, 3], vec![1, 2]]
+        );
+        assert_eq!(
+            barycenter_order(
+                &[vec![4, 5], vec![2, 3], vec![3], vec![], vec![], vec![]],
+                &[0, 0, 1, 2, 1, 1],
+            ),
+            vec![vec![1, 0], vec![2, 4, 5], vec![3]]
+        );
+    }
+
+    #[test]
+    fn place_centers_rank_with_exact_gaps() {
+        let d = doc(&["a", "b", "c"], &[]);
+        let rects = place(&d, &[0, 0, 0], &[vec![0, 1, 2]]);
+        assert_eq!(rects[&NodeId::from("a")].y, -105.0);
+        assert_eq!(rects[&NodeId::from("b")].y, -27.0);
+        assert_eq!(rects[&NodeId::from("c")].y, 51.0);
+
+        let d = doc(&["left", "right"], &[]);
+        let rects = place(&d, &[0, 1], &[vec![0], vec![1]]);
+        assert_eq!(rects[&NodeId::from("left")].x, 0.0);
+        assert_eq!(rects[&NodeId::from("right")].x, 380.0);
     }
 
     #[test]
@@ -1363,6 +1447,255 @@ mod tests {
     }
 
     #[test]
+    fn edge_ports_spread_symmetrically() {
+        let d = doc(&["a", "b", "c"], &[("a", "b"), ("a", "c")]);
+        let rects = HashMap::from([
+            (
+                "a".into(),
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+            ),
+            (
+                "b".into(),
+                Rect {
+                    x: 300.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+            ),
+            (
+                "c".into(),
+                Rect {
+                    x: 300.0,
+                    y: 100.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+            ),
+        ]);
+        let rank_of: HashMap<&NodeId, usize> = d
+            .nodes
+            .iter()
+            .map(|node| (&node.id, if node.id.as_str() == "a" { 0 } else { 1 }))
+            .collect();
+        let edges = route_edges(&d, &rects, &[], &rank_of);
+        assert_eq!(
+            edges[0].path,
+            "M 100.0 8.0 C 200.0 8.0 200.0 10.0 300.0 10.0"
+        );
+        assert_eq!(edges[0].label_pos, Point { x: 200.0, y: 1.0 });
+        assert_eq!(
+            edges[1].path,
+            "M 100.0 12.0 C 200.0 12.0 200.0 110.0 300.0 110.0"
+        );
+        assert_eq!(edges[1].label_pos, Point { x: 200.0, y: 53.0 });
+    }
+
+    #[test]
+    fn backward_edges_flip_sides_without_changing_centers() {
+        let d = doc(&["a", "b"], &[("a", "b")]);
+        let rects = HashMap::from([
+            (
+                "a".into(),
+                Rect {
+                    x: 300.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 100.0,
+                },
+            ),
+            (
+                "b".into(),
+                Rect {
+                    x: 0.0,
+                    y: 100.0,
+                    w: 100.0,
+                    h: 100.0,
+                },
+            ),
+        ]);
+        let rank_of: HashMap<&NodeId, usize> = d
+            .nodes
+            .iter()
+            .map(|node| (&node.id, usize::from(node.id.as_str() == "b") * 2))
+            .collect();
+        let edge = route_edges(&d, &rects, &[], &rank_of).remove(0);
+        assert_eq!(
+            edge.path,
+            "M 300.0 50.0 C 200.0 50.0 200.0 150.0 100.0 150.0"
+        );
+        assert_eq!(edge.label_pos, Point { x: 200.0, y: 92.0 });
+    }
+
+    #[test]
+    fn incoming_ports_and_forward_direction_use_exact_centers() {
+        let d = doc(&["a", "c", "b"], &[("a", "b"), ("c", "b")]);
+        let rects = HashMap::from([
+            (
+                "a".into(),
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+            ),
+            (
+                "c".into(),
+                Rect {
+                    x: 0.0,
+                    y: 100.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+            ),
+            (
+                "b".into(),
+                Rect {
+                    x: 20.0,
+                    y: 50.0,
+                    w: 200.0,
+                    h: 20.0,
+                },
+            ),
+        ]);
+        let rank_of: HashMap<&NodeId, usize> = d
+            .nodes
+            .iter()
+            .map(|node| (&node.id, usize::from(node.id.as_str() == "b")))
+            .collect();
+        let edges = route_edges(&d, &rects, &[], &rank_of);
+        assert_eq!(
+            edges[0].path,
+            "M 100.0 10.0 C 160.0 10.0 -40.0 58.0 20.0 58.0"
+        );
+        assert_eq!(
+            edges[1].path,
+            "M 100.0 110.0 C 160.0 110.0 -40.0 62.0 20.0 62.0"
+        );
+
+        let equal_centers = HashMap::from([
+            (
+                "a".into(),
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+            ),
+            (
+                "b".into(),
+                Rect {
+                    x: 0.0,
+                    y: 50.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+            ),
+        ]);
+        let one = doc(&["a", "b"], &[("a", "b")]);
+        let ranks: HashMap<&NodeId, usize> = one.nodes.iter().map(|node| (&node.id, 0)).collect();
+        assert!(
+            route_edges(&one, &equal_centers, &[], &ranks)[0]
+                .path
+                .starts_with("M 100.0")
+        );
+        let mut left_center = equal_centers;
+        left_center.get_mut(&NodeId::from("b")).unwrap().x = -25.0;
+        assert!(
+            route_edges(&one, &left_center, &[], &ranks)[0]
+                .path
+                .starts_with("M 0.0")
+        );
+        let mut wide_left = left_center;
+        *wide_left.get_mut(&NodeId::from("b")).unwrap() = Rect {
+            x: -80.0,
+            y: 50.0,
+            w: 200.0,
+            h: 20.0,
+        };
+        assert!(
+            route_edges(&one, &wide_left, &[], &ranks)[0]
+                .path
+                .starts_with("M 0.0")
+        );
+    }
+
+    #[test]
+    fn long_edge_channels_center_on_the_group_mean() {
+        let d = doc(&["a", "b", "c", "d"], &[("a", "b"), ("c", "d")]);
+        let rects = HashMap::from([
+            (
+                "a".into(),
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 100.0,
+                },
+            ),
+            (
+                "b".into(),
+                Rect {
+                    x: 600.0,
+                    y: 100.0,
+                    w: 100.0,
+                    h: 100.0,
+                },
+            ),
+            (
+                "c".into(),
+                Rect {
+                    x: 0.0,
+                    y: 200.0,
+                    w: 100.0,
+                    h: 100.0,
+                },
+            ),
+            (
+                "d".into(),
+                Rect {
+                    x: 600.0,
+                    y: 300.0,
+                    w: 100.0,
+                    h: 100.0,
+                },
+            ),
+        ]);
+        let rank_of: HashMap<&NodeId, usize> = d
+            .nodes
+            .iter()
+            .map(|node| {
+                (
+                    &node.id,
+                    if matches!(node.id.as_str(), "a" | "c") {
+                        0
+                    } else {
+                        2
+                    },
+                )
+            })
+            .collect();
+        let edges = route_edges(&d, &rects, &[], &rank_of);
+        assert_eq!(
+            edges[0].path,
+            "M 100.0 50.0 C 130.0 50.0 130.0 194.0 160.0 194.0 L 540.0 194.0 C 570.0 194.0 570.0 150.0 600.0 150.0"
+        );
+        assert_eq!(edges[0].label_pos, Point { x: 350.0, y: 186.0 });
+        assert_eq!(
+            edges[1].path,
+            "M 100.0 250.0 C 130.0 250.0 130.0 206.0 160.0 206.0 L 540.0 206.0 C 570.0 206.0 570.0 350.0 600.0 350.0"
+        );
+        assert_eq!(edges[1].label_pos, Point { x: 350.0, y: 198.0 });
+    }
+
+    #[test]
     fn bundled_routing_is_deterministic() {
         let d = doc(
             &["s1", "s2", "m1", "m2", "t"],
@@ -1404,6 +1737,70 @@ mod tests {
                 "edge {i} has no visible endpoint"
             );
         }
+    }
+
+    #[test]
+    fn visible_set_applies_pan_zoom_and_one_viewport_margin() {
+        let mut layout = Layout::default();
+        for (id, x, y) in [
+            ("center", 0.0, 0.0),
+            ("left-inner", -59.0, 0.0),
+            ("right-inner", 89.0, 0.0),
+            ("top-inner", 0.0, -4.0),
+            ("bottom-inner", 0.0, 69.0),
+            ("left-outer", -61.0, 0.0),
+            ("right-outer", 90.0, 0.0),
+            ("top-outer", 0.0, -6.0),
+            ("bottom-outer", 0.0, 70.0),
+        ] {
+            layout.rects.insert(
+                NodeId::from(id),
+                Rect {
+                    x,
+                    y,
+                    w: 1.0,
+                    h: 1.0,
+                },
+            );
+        }
+        layout.edges = vec![
+            EdgePath {
+                from: "center".into(),
+                to: "right-outer".into(),
+                kind: EdgeKind::DependsOn,
+                status: ElementStatus::Proposed,
+                label: None,
+                path: String::new(),
+                label_pos: Point { x: 0.0, y: 0.0 },
+                bundle_count: 1,
+            },
+            EdgePath {
+                from: "right-outer".into(),
+                to: "center".into(),
+                kind: EdgeKind::DependsOn,
+                status: ElementStatus::Proposed,
+                label: None,
+                path: String::new(),
+                label_pos: Point { x: 0.0, y: 0.0 },
+                bundle_count: 1,
+            },
+        ];
+
+        let visible = visible_set(&layout, 20.0, -40.0, 2.0, 100.0, 50.0);
+        assert_eq!(
+            visible.nodes,
+            [
+                "bottom-inner",
+                "center",
+                "left-inner",
+                "right-inner",
+                "top-inner",
+            ]
+            .into_iter()
+            .map(NodeId::from)
+            .collect()
+        );
+        assert_eq!(visible.edges, vec![0, 1]);
     }
 
     #[test]
@@ -1530,7 +1927,7 @@ mod tests {
 
     #[test]
     fn auto_nodes_are_nudged_off_pinned_cards() {
-        let mut d = doc(&["a", "b"], &[]);
+        let mut d = doc(&["a", "b", "c"], &[]);
         // Pin `a` exactly where rank-0 packing would put `b`'s column start.
         let h_b = estimate_height(&d.nodes[1], 0);
         d.nodes[0].position = Some(Point {
@@ -1541,6 +1938,141 @@ mod tests {
         let ra = &l.rects[&NodeId::from("a")];
         let rb = &l.rects[&NodeId::from("b")];
         assert!(!ra.intersects(rb), "pinned {ra:?} vs auto {rb:?}");
+        assert_eq!(rb.y, 51.0);
+        assert_eq!(l.rects[&NodeId::from("c")].y, 129.0);
+    }
+
+    #[test]
+    fn union_rect_spans_both_inputs() {
+        assert_eq!(
+            union_rect(
+                Rect {
+                    x: 2.0,
+                    y: 3.0,
+                    w: 5.0,
+                    h: 7.0,
+                },
+                Rect {
+                    x: -4.0,
+                    y: 8.0,
+                    w: 3.0,
+                    h: 6.0,
+                },
+            ),
+            Rect {
+                x: -4.0,
+                y: 3.0,
+                w: 11.0,
+                h: 11.0,
+            }
+        );
+        assert_eq!(
+            union_rect(
+                Rect {
+                    x: 2.0,
+                    y: 3.0,
+                    w: 5.0,
+                    h: 20.0,
+                },
+                Rect {
+                    x: 10.0,
+                    y: 8.0,
+                    w: 3.0,
+                    h: 6.0,
+                },
+            ),
+            Rect {
+                x: 2.0,
+                y: 3.0,
+                w: 11.0,
+                h: 20.0,
+            }
+        );
+    }
+
+    #[test]
+    fn bounds_span_all_rects_with_exact_padding() {
+        let rects = HashMap::from([
+            (
+                "a".into(),
+                Rect {
+                    x: 2.0,
+                    y: 3.0,
+                    w: 5.0,
+                    h: 7.0,
+                },
+            ),
+            (
+                "b".into(),
+                Rect {
+                    x: -4.0,
+                    y: 8.0,
+                    w: 3.0,
+                    h: 6.0,
+                },
+            ),
+        ]);
+        assert_eq!(
+            compute_bounds(&rects),
+            Rect {
+                x: -52.0,
+                y: -45.0,
+                w: 107.0,
+                h: 107.0
+            }
+        );
+    }
+
+    #[test]
+    fn laned_place_uses_one_gap_between_cards() {
+        let mut d = doc(&["a", "b"], &[]);
+        for node in &mut d.nodes {
+            node.lane = Some("lane".into());
+        }
+        let (rects, lanes) = place_laned(&d, &[0, 0], &[vec![0, 1]], &[]);
+        assert_eq!(rects[&NodeId::from("a")].y, 36.0);
+        assert_eq!(rects[&NodeId::from("b")].y, 114.0);
+        assert_eq!(lanes[0].rect.h, 188.0);
+    }
+
+    #[test]
+    fn laned_place_stacks_bands_and_spaces_ranks_exactly() {
+        let mut d = doc(&["a", "b", "c"], &[]);
+        d.nodes[0].lane = Some("one".into());
+        d.nodes[1].lane = Some("one".into());
+        d.nodes[2].lane = Some("two".into());
+
+        let (rects, lanes) = place_laned(&d, &[0, 1, 0], &[vec![0, 2], vec![1]], &[]);
+        assert_eq!(
+            (rects[&NodeId::from("a")].x, rects[&NodeId::from("a")].y),
+            (0.0, 36.0)
+        );
+        assert_eq!(
+            (rects[&NodeId::from("b")].x, rects[&NodeId::from("b")].y),
+            (380.0, 36.0)
+        );
+        assert_eq!(
+            (rects[&NodeId::from("c")].x, rects[&NodeId::from("c")].y),
+            (0.0, 164.0)
+        );
+        assert_eq!(
+            lanes[0].rect,
+            Rect {
+                x: -30.0,
+                y: 0.0,
+                w: 700.0,
+                h: 110.0
+            }
+        );
+        assert_eq!(
+            lanes[1].rect,
+            Rect {
+                x: -30.0,
+                y: 128.0,
+                w: 700.0,
+                h: 110.0
+            }
+        );
     }
 
     #[test]
@@ -1560,6 +2092,36 @@ mod tests {
             28.0,
             "unanswered question badge row"
         );
+    }
+
+    #[test]
+    fn height_accounts_for_wrapping_and_each_badge_source() {
+        let plain = node("plain");
+        assert_eq!(estimate_height(&plain), 54.0);
+
+        let mut wrapped_label = plain.clone();
+        wrapped_label.label = "x".repeat(23);
+        assert_eq!(estimate_height(&wrapped_label), 72.0);
+
+        let mut wrapped_description = plain.clone();
+        wrapped_description.description = "x".repeat(37);
+        assert_eq!(estimate_height(&wrapped_description), 90.0);
+
+        let mut open_choice = plain.clone();
+        open_choice.choices = crate::demo::demo_doc().nodes[4].choices.clone();
+        assert_eq!(estimate_height(&open_choice), 82.0);
+
+        let mut closed_choice = open_choice.clone();
+        closed_choice.choices[0].status = crate::model::ChoiceStatus::Dismissed;
+        assert_eq!(estimate_height(&closed_choice), 82.0);
+
+        let mut noted = plain;
+        noted.notes.push(Note {
+            id: "note".into(),
+            text: "note".into(),
+            created_at: chrono::Utc::now(),
+        });
+        assert_eq!(estimate_height(&noted), 82.0);
     }
 
     #[test]
@@ -1663,6 +2225,29 @@ mod tests {
     }
 
     #[test]
+    fn pinned_card_only_grows_its_own_lane() {
+        let mut d = doc(&["a", "b"], &[]);
+        d.node_mut(&NodeId::from("a")).unwrap().lane = Some("build".into());
+        d.node_mut(&NodeId::from("b")).unwrap().lane = Some("review".into());
+        d.node_mut(&NodeId::from("b")).unwrap().position = Some(Point {
+            x: 4_000.0,
+            y: 4_000.0,
+        });
+        let layout = compute_view(
+            &d,
+            &std::collections::BTreeSet::new(),
+            &["build".to_owned(), "review".to_owned()],
+        );
+        let build = layout
+            .lanes
+            .iter()
+            .find(|lane| lane.label == "build")
+            .unwrap();
+        assert!(build.rect.x + build.rect.w < 1_000.0);
+        assert!(build.rect.y + build.rect.h < 1_000.0);
+    }
+
+    #[test]
     fn lane_at_hits_bands_and_misses_the_gap() {
         let mut d = doc(&["a", "b"], &[("a", "b")]);
         d.node_mut(&NodeId::from("a")).unwrap().lane = Some("build".into());
@@ -1677,6 +2262,12 @@ mod tests {
         let cx = build.rect.x + build.rect.w / 2.0;
         let cy = build.rect.y + build.rect.h / 2.0;
         assert_eq!(lane_at(&layout.lanes, cx, cy).as_deref(), Some("build"));
+        assert_eq!(
+            lane_at(&layout.lanes, build.rect.x, build.rect.y).as_deref(),
+            Some("build")
+        );
+        assert_eq!(lane_at(&layout.lanes, build.rect.x + build.rect.w, cy), None);
+        assert_eq!(lane_at(&layout.lanes, cx, build.rect.y + build.rect.h), None);
         // The separation gap between two bands belongs to no lane.
         let gap_y = (build.rect.y + build.rect.h + review.rect.y) / 2.0;
         assert_eq!(lane_at(&layout.lanes, cx, gap_y), None, "gap = no lane");

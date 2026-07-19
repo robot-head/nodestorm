@@ -144,10 +144,7 @@ fn perform_launch(
                 Ok(inspection) => inspection,
                 Err(err) => return failed(err, None),
             };
-            if matches!(request.git_mode, GitMode::ExistingCheckout)
-                && inspection.dirty
-                && !allow_dirty
-            {
+            if needs_dirty_confirmation(&request.git_mode, inspection.dirty, allow_dirty) {
                 return LaunchOutcome::NeedsDirtyConfirmation;
             }
             match prepare_local(&request, allow_dirty) {
@@ -197,6 +194,10 @@ fn perform_launch(
             command,
         },
     }
+}
+
+fn needs_dirty_confirmation(mode: &GitMode, dirty: bool, allow_dirty: bool) -> bool {
+    matches!(mode, GitMode::ExistingCheckout) && dirty && !allow_dirty
 }
 
 fn agent_from_value(value: &str) -> AgentKind {
@@ -579,6 +580,52 @@ mod tests {
         draft.set_session_name("Other Session".into());
         assert_eq!(draft.branch, "feature/custom");
         assert_eq!(draft.worktree_path, "/custom/tree");
+    }
+
+    #[test]
+    fn worktree_derivation_requires_both_repository_and_branch() {
+        let mut draft = LaunchDraft {
+            branch: "feature/test".into(),
+            ..LaunchDraft::default()
+        };
+        draft.refresh_worktree();
+        assert!(draft.worktree_path.is_empty());
+
+        draft.repository = "/work/api".into();
+        draft.branch.clear();
+        draft.refresh_worktree();
+        assert!(draft.worktree_path.is_empty());
+    }
+
+    #[test]
+    fn dirty_confirmation_and_agent_values_cover_every_branch() {
+        assert!(needs_dirty_confirmation(
+            &GitMode::ExistingCheckout,
+            true,
+            false
+        ));
+        assert!(!needs_dirty_confirmation(
+            &GitMode::ExistingCheckout,
+            false,
+            false
+        ));
+        assert!(!needs_dirty_confirmation(
+            &GitMode::ExistingCheckout,
+            true,
+            true
+        ));
+        assert!(!needs_dirty_confirmation(
+            &GitMode::NewWorktree {
+                path: "/tmp/tree".into()
+            },
+            true,
+            false
+        ));
+
+        assert_eq!(agent_from_value("codex"), AgentKind::Codex);
+        assert_eq!(agent_from_value("opencode"), AgentKind::OpenCode);
+        assert_eq!(agent_from_value("pi"), AgentKind::Pi);
+        assert_eq!(agent_from_value("unknown"), AgentKind::Claude);
     }
 
     #[test]

@@ -1017,6 +1017,16 @@ pub enum ActivityOrigin {
 mod tests {
     use super::*;
 
+    #[test]
+    fn document_lookups_and_open_question_count_are_exact() {
+        let mut doc = crate::demo::demo_doc();
+        assert_eq!(doc.node(&NodeId::from("web-ui")).unwrap().label, "Web UI");
+        assert!(doc.node(&NodeId::from("missing")).is_none());
+        assert_eq!(doc.open_question_count(), 1);
+        doc.questions[0].answer = Some("answer".into());
+        assert_eq!(doc.open_question_count(), 0);
+    }
+
     fn option(id: &str) -> ChoiceOption {
         ChoiceOption {
             id: OptionId::from(id),
@@ -1527,6 +1537,40 @@ mod tests {
         assert!(v.errors.iter().any(|e| e.contains("duplicate node id")));
         assert!(v.errors.iter().any(|e| e.contains("unknown node `ghost`")));
         assert!(v.errors.iter().any(|e| e.contains("has no options")));
+    }
+
+    #[test]
+    fn validate_rejects_unknown_selection_and_duplicate_annotations() {
+        let mut doc = SessionDoc {
+            nodes: vec![node("a")],
+            ..Default::default()
+        };
+        let mut c = choice("c", &["known"]);
+        c.selected = Some("missing".into());
+        doc.nodes[0].choices.push(c);
+        let annotation = Annotation {
+            id: "duplicate".into(),
+            kind: AnnotationKind::Note,
+            x: 0.0,
+            y: 0.0,
+            w: 0.0,
+            h: 0.0,
+            text: String::new(),
+            origin: Origin::User,
+        };
+        doc.annotations = vec![annotation.clone(), annotation];
+
+        let v = doc.validate();
+        assert!(
+            v.errors
+                .iter()
+                .any(|e| e.contains("selects unknown option `missing`"))
+        );
+        assert!(
+            v.errors
+                .iter()
+                .any(|e| e.contains("duplicate annotation id `duplicate`"))
+        );
     }
 
     #[test]

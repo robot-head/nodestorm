@@ -112,6 +112,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn mcp_url_uses_configured_port() {
+        let cli = Cli::parse_from(["nodestorm", "--port", "1234"]);
+        assert_eq!(cli.mcp_url(), "http://127.0.0.1:1234/mcp");
+    }
+
+    #[test]
     fn session_path_prefers_override() {
         let cli = Cli::parse_from(["nodestorm", "--session", "some/dir/mine.json"]);
         assert_eq!(
@@ -136,6 +142,19 @@ mod tests {
         assert_eq!(
             cli.prefs_path().unwrap(),
             crate::prefs::default_prefs_path().unwrap()
+        );
+    }
+
+    #[test]
+    fn sessions_dir_prefers_override() {
+        let cli = Cli::parse_from(["nodestorm", "--sessions-dir", "some/sessions"]);
+        assert_eq!(cli.sessions_dir().unwrap(), PathBuf::from("some/sessions"));
+
+        let cli = Cli::parse_from(["nodestorm"]);
+        let legacy = crate::persist::default_session_path().unwrap();
+        assert_eq!(
+            cli.sessions_dir().unwrap(),
+            legacy.parent().unwrap().join("sessions")
         );
     }
 

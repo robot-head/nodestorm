@@ -731,6 +731,8 @@ mod tests {
         let root = tmp_root("migrate");
         let store = crate::store::Store::with_doc(demo_doc());
         crate::persist::save(&root.join("session.json"), &store.snapshot_state()).unwrap();
+        std::fs::create_dir(root.join("sessions")).unwrap();
+        std::fs::write(root.join("sessions").join("README.txt"), "not a session").unwrap();
 
         let sessions = Sessions::open(root.join("sessions"), None).unwrap();
         assert_eq!(sessions.active_name(), "default");
@@ -753,6 +755,7 @@ mod tests {
         let pinned = root.join("nodestorm-verify-session-4799.json");
         let sessions = Sessions::open(root.join("sessions"), Some(pinned.clone())).unwrap();
         assert_eq!(sessions.active_name(), "nodestorm-verify-session-4799");
+        assert_eq!(sessions.active_path(), pinned);
         // Saving lands in the pinned file, not the sessions dir.
         sessions.save_all();
         assert!(pinned.exists());
@@ -765,8 +768,9 @@ mod tests {
         let sessions = Sessions::open(root.join("sessions"), None).unwrap();
         assert_eq!(sessions.create("My Thing").unwrap(), "my-thing");
         assert_eq!(sessions.create("My Thing").unwrap(), "my-thing-2");
+        assert_eq!(sessions.create("My Thing").unwrap(), "my-thing-3");
         assert!(root.join("sessions").join("my-thing.json").exists());
-        assert_eq!(sessions.list().len(), 3);
+        assert_eq!(sessions.list().len(), 4);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -857,9 +861,10 @@ mod tests {
         let root = tmp_root("rename-dedup");
         let sessions = Sessions::open(root.join("sessions"), None).unwrap();
         sessions.create("alpha").unwrap();
+        sessions.create("alpha").unwrap();
         sessions.create("beta").unwrap();
         let slug = sessions.rename("beta", "alpha").unwrap();
-        assert_eq!(slug, "alpha-2", "collides with live alpha");
+        assert_eq!(slug, "alpha-3", "collides with both live alpha names");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -965,8 +970,9 @@ mod tests {
         // Unarchiving over a live name collision dedups.
         sessions.archive("alpha").unwrap();
         sessions.create("alpha").unwrap();
+        sessions.create("alpha").unwrap();
         let slug = sessions.unarchive("alpha").unwrap();
-        assert_eq!(slug, "alpha-2");
+        assert_eq!(slug, "alpha-3");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1015,6 +1021,12 @@ mod tests {
                     agent: Some("alpha".into()),
                 },
             }]
+        );
+
+        sessions.set_connection_connected(id);
+        assert_eq!(
+            sessions.connection(id).unwrap().state,
+            ConnectionState::Connected
         );
     }
 
@@ -1106,6 +1118,7 @@ mod tests {
         sessions.disconnect_client(first_id);
         changes.borrow_and_update();
         assert!(sessions.connections().is_empty());
+        let before_orphan = *changes.borrow_and_update();
 
         first.abort();
         let _ = first.await;
@@ -1113,6 +1126,7 @@ mod tests {
             .await
             .expect("orphan creation publishes a connection change")
             .unwrap();
+        assert_eq!(*changes.borrow_and_update(), before_orphan + 1);
         assert!(matches!(
             sessions.connections().as_slice(),
             [ConnectionInfo {
@@ -1321,5 +1335,70 @@ mod tests {
         let store = Store::new(SessionState::default());
         let _first = Sessions::single(store.clone(), tmp_root("store-owner-1"));
         let _second = Sessions::single(store, tmp_root("store-owner-2"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn list_reports_waiting_and_only_undelivered_events() {
+        let root = tmp_root("list-live");
+        let sessions = Sessions::open(root.join("sessions"), None).unwrap();
+        let store = sessions.active_store();
+        store
+            .add_user_node("first".into(), crate::model::NodeKind::Component, None)
+            .unwrap();
+        let first_store = store.clone();
+        let first_waiter = tokio::spawn(async move {
+            first_store
+                .await_flush(
+                    std::time::Duration::from_secs(60),
+                    Awaiter {
+                        connection_id: crate::store::ConnectionId(901),
+                        client_label: "first test client".into(),
+                        agent: None,
+                    },
+                )
+                .await
+        });
+        while store.snapshot_meta().waiting_agents != 1 {
+            tokio::task::yield_now().await;
+        }
+        store.request_flush(None).unwrap();
+        assert!(matches!(
+            first_waiter.await.unwrap().unwrap(),
+            crate::store::FlushOutcome::Delivered(_),
+        ));
+        store
+            .add_user_node("second".into(), crate::model::NodeKind::Component, None)
+            .unwrap();
+        let wait_store = store.clone();
+        let waiter = tokio::spawn(async move {
+            wait_store
+                .await_flush(
+                    std::time::Duration::from_secs(60),
+                    Awaiter {
+                        connection_id: crate::store::ConnectionId(902),
+                        client_label: "second test client".into(),
+                        agent: None,
+                    },
+                )
+                .await
+        });
+        while store.snapshot_meta().waiting_agents != 1 {
+            tokio::task::yield_now().await;
+        }
+
+        let info = sessions.list().remove(0);
+        assert!(info.agent_waiting);
+        assert_eq!(info.undelivered, 1);
+        waiter.abort();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn spawn_autosaves_remembers_the_runtime() {
+        let root = tmp_root("autosave-runtime");
+        let sessions = Sessions::open(root.join("sessions"), None).unwrap();
+        sessions.spawn_autosaves(&tokio::runtime::Handle::current());
+        assert!(sessions.runtime.lock().unwrap().is_some());
+        let _ = std::fs::remove_dir_all(root);
     }
 }

@@ -2563,6 +2563,10 @@ mod tests {
             .add_user_node("My Cache".into(), NodeKind::DataStore, None)
             .unwrap();
         assert_eq!(id2.as_str(), "my-cache-2", "id collision suffixed");
+        let id3 = store
+            .add_user_node("My Cache".into(), NodeKind::DataStore, None)
+            .unwrap();
+        assert_eq!(id3.as_str(), "my-cache-3", "suffix increments again");
 
         let doc = store.snapshot_doc();
         let n = doc.node(&id).unwrap();
@@ -2577,7 +2581,7 @@ mod tests {
             matches!(
                 &log.last().unwrap().kind,
                 DecisionKind::NodeAdded { node }
-                    if node.id == id2 && node.label == "My Cache" && node.kind == NodeKind::DataStore
+                    if node.id == id3 && node.label == "My Cache" && node.kind == NodeKind::DataStore
             ),
             "last event: {:?}",
             log.last()
@@ -2642,6 +2646,7 @@ mod tests {
         let mut doc = demo_doc();
         doc.nodes.push(user_node("mine"));
         doc.edges.push(user_edge("mine", "postgres"));
+        doc.edges.push(user_edge("postgres", "mine"));
         let store = Store::with_doc(doc);
 
         // User-origin: hard delete, incident edges included.
@@ -3031,6 +3036,19 @@ mod tests {
     }
 
     #[test]
+    fn dedupe_keeps_only_each_lanes_first_appearance() {
+        let mut lanes = vec![
+            "build".to_owned(),
+            "review".to_owned(),
+            "build".to_owned(),
+            "ship".to_owned(),
+            "review".to_owned(),
+        ];
+        dedupe_in_place(&mut lanes);
+        assert_eq!(lanes, vec!["build", "review", "ship"]);
+    }
+
+    #[test]
     fn rename_lane_rewrites_registry_and_members() {
         let store = demo_store();
         store.set_lane(&NodeId::from("redis"), Some("data".into()));
@@ -3229,6 +3247,32 @@ mod tests {
         assert!(entry.text.contains("clipboard"), "text: {}", entry.text);
     }
 
+    #[tokio::test]
+    async fn snapshot_meta_counts_only_undelivered_events() {
+        let store = Store::with_doc(SessionDoc::default());
+        store
+            .add_user_node("first".into(), NodeKind::Component, None)
+            .unwrap();
+        let waiting = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .await_flush(Duration::from_secs(30), awaiter(901, None))
+                    .await
+            }
+        });
+        wait_until(&store, 1).await;
+        store.request_flush(None).unwrap();
+        assert!(matches!(
+            waiting.await.unwrap().unwrap(),
+            FlushOutcome::Delivered(_)
+        ));
+        store
+            .add_user_node("second".into(), NodeKind::Component, None)
+            .unwrap();
+        assert_eq!(store.snapshot_meta().undelivered, 1);
+    }
+
     fn pick_first_choice(store: &Arc<Store>) {
         store
             .select_option(
@@ -3348,6 +3392,311 @@ mod tests {
             FlushOutcome::Delivered(batch) if batch.len() == 1
         ));
         assert_eq!(store.read(|state| state.delivery_cursor), 1);
+    }
+
+    #[test]
+    fn wait_guard_increments_the_document_revision_on_entry() {
+        let store = Store::new(SessionState::default());
+        let before = store.snapshot_doc().revision;
+        let guard = WaitGuard::enter(store.clone(), awaiter(300, None)).unwrap();
+        assert_eq!(store.snapshot_doc().revision, before + 1);
+        drop(guard);
+    }
+
+    #[test]
+    fn waiter_rebind_requires_one_matching_disconnected_target() {
+        let target = |key, delivered, connection_id| ReceiptTarget {
+            key,
+            connection_id,
+            last_connection_id: ConnectionId(1),
+            client_label: "old".into(),
+            delivered,
+        };
+        let receipt = |targets| SendReceipt {
+            flush_seq: 1,
+            end_cursor: 0,
+            doc_at_send: SessionDoc::default(),
+            targets,
+            claimable: false,
+        };
+        let state_with = |targets| SessionState {
+            send_receipt: Some(receipt(targets)),
+            ..SessionState::default()
+        };
+
+        let mut state = state_with(vec![
+            target(RecipientKey::Agent("alpha".into()), false, None),
+            target(RecipientKey::Agent("alpha".into()), true, None),
+            target(
+                RecipientKey::Agent("alpha".into()),
+                false,
+                Some(ConnectionId(2)),
+            ),
+            target(RecipientKey::Agent("beta".into()), false, None),
+        ]);
+        assert!(register_waiter(&mut state, awaiter(3, Some("alpha"))).unwrap());
+        let targets = &state.send_receipt.as_ref().unwrap().targets;
+        assert_eq!(targets[0].connection_id, Some(ConnectionId(3)));
+        assert_eq!(targets[1].connection_id, None);
+        assert_eq!(targets[2].connection_id, Some(ConnectionId(2)));
+        assert_eq!(targets[3].connection_id, None);
+
+        for invalid in [
+            target(RecipientKey::Agent("alpha".into()), true, None),
+            target(
+                RecipientKey::Agent("alpha".into()),
+                false,
+                Some(ConnectionId(2)),
+            ),
+            target(RecipientKey::Agent("beta".into()), false, None),
+        ] {
+            let mut state = state_with(vec![invalid]);
+            assert!(!register_waiter(&mut state, awaiter(30, Some("alpha"))).unwrap());
+        }
+
+        let anonymous = || target(RecipientKey::Anonymous(ConnectionId(10)), false, None);
+        let mut state = state_with(vec![anonymous()]);
+        assert!(register_waiter(&mut state, awaiter(11, None)).unwrap());
+
+        let mut state = state_with(vec![anonymous(), anonymous()]);
+        assert!(!register_waiter(&mut state, awaiter(11, None)).unwrap());
+
+        let mut state = state_with(vec![anonymous()]);
+        state.waiters.insert(
+            ConnectionId(12),
+            Waiter {
+                awaiter: awaiter(12, None),
+                recipient: RecipientKey::Anonymous(ConnectionId(12)),
+            },
+        );
+        assert!(!register_waiter(&mut state, awaiter(13, None)).unwrap());
+
+        for invalid in [
+            target(RecipientKey::Anonymous(ConnectionId(10)), true, None),
+            target(
+                RecipientKey::Anonymous(ConnectionId(10)),
+                false,
+                Some(ConnectionId(2)),
+            ),
+            target(RecipientKey::Agent("alpha".into()), false, None),
+        ] {
+            let mut state = state_with(vec![invalid]);
+            assert!(!register_waiter(&mut state, awaiter(31, None)).unwrap());
+        }
+
+        let valid = || target(RecipientKey::Anonymous(ConnectionId(10)), false, None);
+        for extra in [
+            target(RecipientKey::Anonymous(ConnectionId(20)), true, None),
+            target(RecipientKey::Agent("alpha".into()), false, None),
+        ] {
+            let mut state = state_with(vec![valid(), extra]);
+            assert!(register_waiter(&mut state, awaiter(32, None)).unwrap());
+        }
+
+        for (invalid, expected_connection) in [
+            (
+                target(RecipientKey::Anonymous(ConnectionId(20)), true, None),
+                None,
+            ),
+            (
+                target(
+                    RecipientKey::Anonymous(ConnectionId(20)),
+                    true,
+                    Some(ConnectionId(20)),
+                ),
+                Some(ConnectionId(20)),
+            ),
+        ] {
+            let mut state = state_with(vec![invalid, valid()]);
+            assert!(register_waiter(&mut state, awaiter(33, None)).unwrap());
+            let targets = &state.send_receipt.as_ref().unwrap().targets;
+            assert_eq!(targets[0].connection_id, expected_connection);
+            assert_eq!(targets[1].connection_id, Some(ConnectionId(33)));
+        }
+    }
+
+    #[test]
+    fn claimable_receipt_targets_only_recipients_behind_its_flush() {
+        let target = |key, delivered, connection_id| ReceiptTarget {
+            key,
+            connection_id,
+            last_connection_id: ConnectionId(1),
+            client_label: "old".into(),
+            delivered,
+        };
+        let state_with_receipt = || SessionState {
+            send_receipt: Some(SendReceipt {
+                flush_seq: 5,
+                end_cursor: 0,
+                doc_at_send: SessionDoc::default(),
+                targets: Vec::new(),
+                claimable: true,
+            }),
+            flush_seq: 5,
+            ..SessionState::default()
+        };
+
+        let mut state = state_with_receipt();
+        state.agent_flush.insert("alpha".into(), 4);
+        register_waiter(&mut state, awaiter(20, Some("alpha"))).unwrap();
+        assert_eq!(state.send_receipt.as_ref().unwrap().targets.len(), 1);
+
+        let mut state = state_with_receipt();
+        state.agent_flush.insert("alpha".into(), 5);
+        register_waiter(&mut state, awaiter(20, Some("alpha"))).unwrap();
+        assert!(state.send_receipt.as_ref().unwrap().targets.is_empty());
+
+        let mut state = state_with_receipt();
+        state.agent_flush.insert("alpha".into(), 6);
+        register_waiter(&mut state, awaiter(20, Some("alpha"))).unwrap();
+        assert!(state.send_receipt.as_ref().unwrap().targets.is_empty());
+
+        let mut state = state_with_receipt();
+        state.delivered_flush_seq = 5;
+        register_waiter(&mut state, awaiter(21, None)).unwrap();
+        assert!(state.send_receipt.as_ref().unwrap().targets.is_empty());
+
+        let mut state = state_with_receipt();
+        state.delivered_flush_seq = 6;
+        register_waiter(&mut state, awaiter(21, None)).unwrap();
+        assert!(state.send_receipt.as_ref().unwrap().targets.is_empty());
+
+        let mut state = state_with_receipt();
+        state.send_receipt.as_mut().unwrap().targets.push(target(
+            RecipientKey::Agent("alpha".into()),
+            false,
+            None,
+        ));
+        register_waiter(&mut state, awaiter(20, Some("alpha"))).unwrap();
+        assert_eq!(state.send_receipt.as_ref().unwrap().targets.len(), 1);
+    }
+
+    #[test]
+    fn waiter_creates_a_receipt_only_when_its_cursor_is_behind() {
+        let state_at = |delivered| SessionState {
+            flush_seq: 5,
+            delivered_flush_seq: delivered,
+            ..SessionState::default()
+        };
+
+        let mut state = state_at(0);
+        state.agent_flush.insert("alpha".into(), 4);
+        register_waiter(&mut state, awaiter(40, Some("alpha"))).unwrap();
+        assert!(state.send_receipt.is_some());
+
+        for cursor in [5, 6] {
+            let mut state = state_at(0);
+            state.agent_flush.insert("alpha".into(), cursor);
+            register_waiter(&mut state, awaiter(40, Some("alpha"))).unwrap();
+            assert!(state.send_receipt.is_none());
+
+            let mut state = state_at(cursor);
+            register_waiter(&mut state, awaiter(41, None)).unwrap();
+            assert!(state.send_receipt.is_none());
+        }
+    }
+
+    #[test]
+    fn delivery_keeps_a_replay_baseline_only_for_post_receipt_events() {
+        let event = |seq| DecisionEvent {
+            seq,
+            at: Utc::now(),
+            target_agent: None,
+            kind: DecisionKind::FlushRequested { comment: None },
+        };
+        let state_with_events = |count| {
+            let mut state = SessionState {
+                decision_log: (1..=count).map(event).collect(),
+                ..SessionState::default()
+            };
+            state.send_receipt = Some(SendReceipt {
+                flush_seq: 1,
+                end_cursor: 1,
+                doc_at_send: SessionDoc {
+                    title: "at send".into(),
+                    ..SessionDoc::default()
+                },
+                targets: vec![ReceiptTarget {
+                    key: RecipientKey::Anonymous(ConnectionId(50)),
+                    connection_id: Some(ConnectionId(50)),
+                    last_connection_id: ConnectionId(50),
+                    client_label: "client".into(),
+                    delivered: false,
+                }],
+                claimable: false,
+            });
+            state
+        };
+
+        let mut state = state_with_events(2);
+        assert!(try_deliver_locked(&mut state, ConnectionId(50)).is_some());
+        assert_eq!(state.pending_base.as_ref().unwrap().title, "at send");
+
+        let mut state = state_with_events(1);
+        assert!(try_deliver_locked(&mut state, ConnectionId(50)).is_some());
+        assert!(state.pending_base.is_none());
+    }
+
+    #[test]
+    fn pushing_an_event_clears_only_a_completed_nonclaimable_receipt() {
+        let target = |delivered| ReceiptTarget {
+            key: RecipientKey::Anonymous(ConnectionId(60)),
+            connection_id: Some(ConnectionId(60)),
+            last_connection_id: ConnectionId(60),
+            client_label: "client".into(),
+            delivered,
+        };
+        let receipt = |claimable, targets| SendReceipt {
+            flush_seq: 1,
+            end_cursor: 0,
+            doc_at_send: SessionDoc::default(),
+            targets,
+            claimable,
+        };
+        let push = |state: &mut SessionState| {
+            push_event(
+                state,
+                DecisionKind::FlushRequested {
+                    comment: Some("next".into()),
+                },
+            );
+        };
+
+        let mut state = SessionState {
+            send_status: SendStatus::Sent,
+            send_receipt: Some(receipt(false, vec![target(true)])),
+            ..SessionState::default()
+        };
+        push(&mut state);
+        assert!(state.send_receipt.is_none());
+        assert!(state.pending_base.is_some());
+
+        for retained in [
+            receipt(true, vec![target(true)]),
+            receipt(false, Vec::new()),
+            receipt(false, vec![target(false)]),
+        ] {
+            let mut state = SessionState {
+                send_status: SendStatus::Sent,
+                send_receipt: Some(retained),
+                ..SessionState::default()
+            };
+            push(&mut state);
+            assert!(state.send_receipt.is_some());
+        }
+
+        let mut state = SessionState {
+            decision_log: vec![DecisionEvent {
+                seq: 1,
+                at: Utc::now(),
+                target_agent: None,
+                kind: DecisionKind::FlushRequested { comment: None },
+            }],
+            delivery_cursor: 0,
+            ..SessionState::default()
+        };
+        push(&mut state);
+        assert!(state.pending_base.is_none());
     }
 
     #[tokio::test]
@@ -3574,6 +3923,81 @@ mod tests {
     }
 
     #[test]
+    fn queued_delivery_error_covers_only_the_active_receipt_prefix() {
+        let store = Store::with_doc(SessionDoc::default());
+        store
+            .add_user_node("first".into(), NodeKind::Component, None)
+            .unwrap();
+        store
+            .add_user_node("second".into(), NodeKind::Component, None)
+            .unwrap();
+        store.mutate(|state| {
+            state.send_receipt = Some(SendReceipt {
+                flush_seq: 1,
+                end_cursor: 1,
+                doc_at_send: state.doc.clone(),
+                targets: vec![ReceiptTarget {
+                    key: RecipientKey::Anonymous(ConnectionId(7)),
+                    connection_id: Some(ConnectionId(7)),
+                    last_connection_id: ConnectionId(7),
+                    client_label: "test client".into(),
+                    delivered: false,
+                }],
+                claimable: false,
+            });
+        });
+
+        let queued = store.queued_changes();
+        assert_eq!(queued.len(), 2);
+        assert!(queued[0].interaction_error.is_some());
+        assert!(queued[1].interaction_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn queued_removal_indexes_and_renumbers_after_a_delivered_prefix() {
+        let store = Store::with_doc(SessionDoc::default());
+        store
+            .add_user_node("first".into(), NodeKind::Component, None)
+            .unwrap();
+        let waiting = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .await_flush(Duration::from_secs(30), awaiter(902, None))
+                    .await
+            }
+        });
+        wait_until(&store, 1).await;
+        store.request_flush(None).unwrap();
+        assert!(matches!(
+            waiting.await.unwrap().unwrap(),
+            FlushOutcome::Delivered(_)
+        ));
+        store
+            .add_user_node("second".into(), NodeKind::Component, None)
+            .unwrap();
+        store
+            .add_user_node("third".into(), NodeKind::Component, None)
+            .unwrap();
+        store
+            .add_user_node("fourth".into(), NodeKind::Component, None)
+            .unwrap();
+
+        let target = store.remove_queued_change(3).unwrap();
+        assert_eq!(target.node_id, Some(NodeId::from("third")));
+        let tail = store.peek_undelivered();
+        assert_eq!(
+            tail.iter().map(|event| event.seq).collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        assert!(matches!(
+            &tail[1].kind,
+            DecisionKind::NodeAdded { node } if node.id == NodeId::from("fourth")
+        ));
+        assert!(store.read(|state| state.pending_base.is_some()));
+    }
+
+    #[test]
     fn removing_a_choice_pick_reopens_that_choice_and_keeps_a_note() {
         let store = demo_store();
         pick_first_choice(&store);
@@ -3697,6 +4121,403 @@ mod tests {
         assert_eq!(remaining[0].id, blocked[0].id);
     }
 
+    #[test]
+    fn legacy_blocked_changes_receive_ids_on_load() {
+        let store = Store::new(SessionState {
+            blocked_changes: vec![QueuedChange {
+                id: String::new(),
+                event: DecisionEvent {
+                    seq: 1,
+                    at: Utc::now(),
+                    target_agent: None,
+                    kind: DecisionKind::FlushRequested { comment: None },
+                },
+                blocked_reason: Some("legacy".into()),
+                interaction_error: Some("stale".into()),
+            }],
+            ..SessionState::default()
+        });
+        let change = store.queued_changes().remove(0);
+        assert!(change.id.starts_with("blocked:"));
+        assert_eq!(change.interaction_error, None);
+    }
+
+    #[test]
+    fn agent_update_without_pending_events_keeps_queue_editing_available() {
+        let store = demo_store();
+        store.apply_propose(demo_doc()).unwrap();
+        assert_eq!(store.read(|state| state.queue_edit_error.clone()), None);
+    }
+
+    #[test]
+    fn replay_event_targets_exact_choice_option_and_annotation() {
+        let at = Utc::now();
+        let mut doc = demo_doc();
+        let selected = DecisionEvent {
+            seq: 1,
+            at,
+            target_agent: None,
+            kind: DecisionKind::OptionSelected {
+                node_id: "sync-engine".into(),
+                choice_id: "conflict-resolution".into(),
+                option_id: "ot".into(),
+                considered: vec![],
+            },
+        };
+        replay_event(&mut doc, &selected).unwrap();
+        assert_eq!(
+            doc.node(&NodeId::from("sync-engine")).unwrap().choices[0].selected,
+            Some("ot".into())
+        );
+        let mut invalid = selected.clone();
+        if let DecisionKind::OptionSelected { option_id, .. } = &mut invalid.kind {
+            *option_id = "missing".into();
+        }
+        assert!(replay_event(&mut doc, &invalid).is_err());
+
+        let annotation = |id: &str, text: &str| Annotation {
+            id: id.into(),
+            kind: AnnotationKind::Note,
+            x: 0.0,
+            y: 0.0,
+            w: 0.0,
+            h: 0.0,
+            text: text.into(),
+            origin: Origin::User,
+        };
+        doc.annotations = vec![annotation("a", "a"), annotation("b", "b")];
+        replay_event(
+            &mut doc,
+            &DecisionEvent {
+                seq: 2,
+                at,
+                target_agent: None,
+                kind: DecisionKind::AnnotationAdded {
+                    annotation: annotation("c", "c"),
+                },
+            },
+        )
+        .unwrap();
+        replay_event(
+            &mut doc,
+            &DecisionEvent {
+                seq: 3,
+                at,
+                target_agent: None,
+                kind: DecisionKind::AnnotationEdited {
+                    annotation: annotation("b", "updated"),
+                },
+            },
+        )
+        .unwrap();
+        assert_eq!(doc.annotations[0].text, "a");
+        assert_eq!(doc.annotations[1].text, "updated");
+        replay_event(
+            &mut doc,
+            &DecisionEvent {
+                seq: 4,
+                at,
+                target_agent: None,
+                kind: DecisionKind::AnnotationDeleted {
+                    annotation_id: "b".into(),
+                },
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            doc.annotations
+                .iter()
+                .map(|a| a.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "c"]
+        );
+        assert!(
+            replay_event(
+                &mut doc,
+                &DecisionEvent {
+                    seq: 5,
+                    at,
+                    target_agent: None,
+                    kind: DecisionKind::AnnotationDeleted {
+                        annotation_id: "missing".into(),
+                    },
+                },
+            )
+            .is_err()
+        );
+
+        let mut graph = SessionDoc {
+            nodes: vec![user_node("a"), user_node("b"), user_node("c")],
+            edges: vec![
+                user_edge("a", "b"),
+                user_edge("b", "c"),
+                user_edge("a", "c"),
+            ],
+            ..Default::default()
+        };
+        replay_event(
+            &mut graph,
+            &DecisionEvent {
+                seq: 5,
+                at,
+                target_agent: None,
+                kind: DecisionKind::NodeDeleted {
+                    node_id: "b".into(),
+                },
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            graph
+                .nodes
+                .iter()
+                .map(|n| n.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "c"]
+        );
+        assert_eq!(graph.edges.len(), 1);
+        assert_eq!(graph.edges[0].from, NodeId::from("a"));
+        assert_eq!(graph.edges[0].to, NodeId::from("c"));
+        assert_eq!(graph.edges[0].kind, EdgeKind::DependsOn);
+
+        let edge_event = |kind| DecisionEvent {
+            seq: 6,
+            at,
+            target_agent: None,
+            kind,
+        };
+        assert!(
+            replay_event(
+                &mut graph,
+                &edge_event(DecisionKind::EdgeAdded {
+                    from: "missing".into(),
+                    to: "a".into(),
+                    edge_kind: EdgeKind::DependsOn,
+                }),
+            )
+            .is_err()
+        );
+        replay_event(
+            &mut graph,
+            &edge_event(DecisionKind::EdgeAdded {
+                from: "c".into(),
+                to: "a".into(),
+                edge_kind: EdgeKind::DependsOn,
+            }),
+        )
+        .unwrap();
+        assert!(
+            replay_event(
+                &mut graph,
+                &edge_event(DecisionKind::EdgeAdded {
+                    from: "c".into(),
+                    to: "a".into(),
+                    edge_kind: EdgeKind::DependsOn,
+                }),
+            )
+            .is_err()
+        );
+        replay_event(
+            &mut graph,
+            &edge_event(DecisionKind::EdgeDeleted {
+                from: "c".into(),
+                to: "a".into(),
+                edge_kind: EdgeKind::DependsOn,
+            }),
+        )
+        .unwrap();
+        assert_eq!(graph.edges.len(), 1);
+        assert!(
+            replay_event(
+                &mut graph,
+                &edge_event(DecisionKind::EdgeDeleted {
+                    from: "c".into(),
+                    to: "a".into(),
+                    edge_kind: EdgeKind::DependsOn,
+                }),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn activity_retains_the_newest_entries_at_the_exact_cap() {
+        let mut state = SessionState::default();
+        for i in 0..205 {
+            push_activity_as(
+                &mut state,
+                ActivityOrigin::Agent,
+                Some("agent".into()),
+                i.to_string(),
+            );
+        }
+        assert_eq!(state.activity.len(), ACTIVITY_CAP);
+        assert_eq!(state.activity.first().unwrap().text, "5");
+        assert_eq!(state.activity.last().unwrap().text, "204");
+    }
+
+    #[test]
+    fn autoflush_requires_an_undelivered_event() {
+        let mut state = SessionState::default();
+        autoflush(&mut state);
+        assert_eq!(state.flush_seq, 0);
+        assert!(state.activity.is_empty());
+    }
+
+    #[test]
+    fn autoflush_increments_sequence_exactly_with_and_without_a_waiter() {
+        let event = DecisionEvent {
+            seq: 1,
+            at: Utc::now(),
+            target_agent: None,
+            kind: DecisionKind::FlushRequested { comment: None },
+        };
+        let state = || SessionState {
+            flush_seq: 7,
+            decision_log: vec![event.clone()],
+            ..SessionState::default()
+        };
+
+        let mut waiting = state();
+        waiting.waiters.insert(
+            ConnectionId(70),
+            Waiter {
+                awaiter: awaiter(70, None),
+                recipient: RecipientKey::Anonymous(ConnectionId(70)),
+            },
+        );
+        autoflush(&mut waiting);
+        assert_eq!(waiting.flush_seq, 8);
+        assert_eq!(waiting.send_receipt.as_ref().unwrap().flush_seq, 8);
+        assert!(!waiting.send_receipt.as_ref().unwrap().claimable);
+
+        let mut unattended = state();
+        autoflush(&mut unattended);
+        assert_eq!(unattended.flush_seq, 8);
+        assert_eq!(unattended.send_receipt.as_ref().unwrap().flush_seq, 8);
+        assert!(unattended.send_receipt.as_ref().unwrap().claimable);
+    }
+
+    #[test]
+    fn remove_node_op_removes_only_the_target_and_incident_edges() {
+        let store = Store::with_doc(SessionDoc {
+            nodes: vec![user_node("a"), user_node("b"), user_node("c")],
+            edges: vec![
+                user_edge("a", "b"),
+                user_edge("b", "c"),
+                user_edge("a", "c"),
+            ],
+            focus: Some("b".into()),
+            ..Default::default()
+        });
+        store
+            .apply_update(vec![GraphOp::RemoveNode { id: "b".into() }])
+            .unwrap();
+        let doc = store.snapshot_doc();
+        assert_eq!(
+            doc.nodes.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(),
+            vec!["a", "c"]
+        );
+        assert_eq!(doc.edges.len(), 1);
+        assert_eq!(doc.edges[0].from, NodeId::from("a"));
+        assert_eq!(doc.edges[0].to, NodeId::from("c"));
+        assert_eq!(doc.focus, None);
+    }
+
+    #[test]
+    fn edge_choice_and_question_ops_match_exact_ids() {
+        let mut doc = demo_doc();
+        doc.edges.push(user_edge("redis", "postgres"));
+        doc.edges.push(user_edge("redis", "web-ui"));
+        doc.edges.push(user_edge("web-ui", "postgres"));
+        doc.questions.push(crate::model::Question {
+            id: "second-question".into(),
+            prompt: "second?".into(),
+            node_id: None,
+            rationale: None,
+            answer: None,
+            answered_at: None,
+        });
+        let store = Store::with_doc(doc);
+
+        let mut replacement = store.snapshot_doc().edges[0].clone();
+        replacement.label = Some("updated".into());
+        store
+            .apply_update(vec![GraphOp::UpsertEdge { edge: replacement }])
+            .unwrap();
+        let doc = store.snapshot_doc();
+        assert_eq!(
+            doc.edges
+                .iter()
+                .filter(|edge| edge.from == NodeId::from("web-ui")
+                    && edge.to == NodeId::from("api-gateway"))
+                .count(),
+            1
+        );
+        assert_eq!(doc.edges[0].label.as_deref(), Some("updated"));
+
+        store
+            .apply_update(vec![GraphOp::RemoveEdge {
+                from: "redis".into(),
+                to: "postgres".into(),
+                kind: Some(EdgeKind::DependsOn),
+            }])
+            .unwrap();
+        let doc = store.snapshot_doc();
+        assert!(!doc.edges.iter().any(|edge| {
+            edge.from == NodeId::from("redis")
+                && edge.to == NodeId::from("postgres")
+                && edge.kind == EdgeKind::DependsOn
+        }));
+        assert!(doc.edges.iter().any(|edge| {
+            edge.from == NodeId::from("redis") && edge.to == NodeId::from("web-ui")
+        }));
+        assert!(doc.edges.iter().any(|edge| {
+            edge.from == NodeId::from("web-ui") && edge.to == NodeId::from("postgres")
+        }));
+        assert!(
+            doc.edges
+                .iter()
+                .any(|edge| edge.from == NodeId::from("web-ui"))
+        );
+
+        let mut second_choice = demo_doc().nodes[4].choices[0].clone();
+        second_choice.id = "second-choice".into();
+        store
+            .apply_update(vec![GraphOp::AddChoice {
+                node_id: "sync-engine".into(),
+                choice: second_choice,
+            }])
+            .unwrap();
+        store
+            .apply_update(vec![GraphOp::ResolveChoice {
+                node_id: "sync-engine".into(),
+                choice_id: "conflict-resolution".into(),
+                selected: Some("crdt".into()),
+                dismiss: false,
+            }])
+            .unwrap();
+        let doc = store.snapshot_doc();
+        let node = doc.node(&NodeId::from("sync-engine")).unwrap();
+        assert_eq!(
+            node.choice(&"conflict-resolution".into()).unwrap().status,
+            ChoiceStatus::Decided
+        );
+        assert_eq!(
+            node.choice(&"second-choice".into()).unwrap().status,
+            ChoiceStatus::Open
+        );
+
+        store
+            .apply_update(vec![GraphOp::RemoveQuestion {
+                id: "history-retention".into(),
+            }])
+            .unwrap();
+        let doc = store.snapshot_doc();
+        assert!(doc.question(&"history-retention".into()).is_none());
+        assert!(doc.question(&"second-question".into()).is_some());
+    }
+
     #[tokio::test]
     async fn removed_queue_items_are_never_delivered() {
         let store = demo_store();
@@ -3804,6 +4625,24 @@ mod tests {
         assert_eq!(c.selected, Some(OptionId::from("crdt")));
         assert_eq!(store.peek_undelivered().len(), 1);
         assert_eq!(store.snapshot_meta().open_choices, 1);
+        assert!(
+            store
+                .snapshot_meta()
+                .activity
+                .last()
+                .unwrap()
+                .text
+                .contains("CRDTs")
+        );
+    }
+
+    #[test]
+    fn announce_adds_an_agent_activity_entry() {
+        let store = demo_store();
+        store.announce("hello from agent".into());
+        let entry = store.snapshot_meta().activity.last().unwrap().clone();
+        assert_eq!(entry.origin, ActivityOrigin::Agent);
+        assert_eq!(entry.text, "hello from agent");
     }
 
     #[tokio::test]
@@ -3985,7 +4824,9 @@ mod tests {
         pick_first_choice(&store);
 
         // Agent re-proposes the same doc (fresh choices, no positions).
-        store.apply_propose(demo_doc()).unwrap();
+        let mut fresh = demo_doc();
+        let removed_agent_edge = fresh.edges.remove(0);
+        store.apply_propose(fresh).unwrap();
         let doc = store.snapshot_doc();
         let redis = doc.node(&NodeId::from("redis")).unwrap();
         assert_eq!(redis.position, Some(Point { x: 9.0, y: 9.0 }));
@@ -3994,6 +4835,12 @@ mod tests {
         let c = sync.choice(&ChoiceId::from("conflict-resolution")).unwrap();
         assert_eq!(c.status, ChoiceStatus::Decided, "decision survives propose");
         assert_eq!(c.selected, Some(OptionId::from("crdt")));
+        assert!(
+            !doc.edges
+                .iter()
+                .any(|edge| edge.key() == removed_agent_edge.key()),
+            "agent-owned edge omitted by the proposal stays removed"
+        );
     }
 
     #[test]
@@ -4202,6 +5049,16 @@ mod tests {
                 }],
             ),
         ];
+        let mut open_dependent = mk(
+            "c",
+            vec![ChoiceRef {
+                node: NodeId::from("n"),
+                choice: ChoiceId::from("a"),
+            }],
+        );
+        open_dependent.status = ChoiceStatus::Open;
+        open_dependent.selected = None;
+        n.choices.push(open_dependent);
         let store = Store::with_doc(SessionDoc {
             nodes: vec![n],
             ..Default::default()
@@ -4228,6 +5085,10 @@ mod tests {
         assert!(
             n.choice(&ChoiceId::from("b")).unwrap().needs_review,
             "decided dependent flagged for review"
+        );
+        assert!(
+            !n.choice(&ChoiceId::from("c")).unwrap().needs_review,
+            "open dependent stays unflagged"
         );
     }
 
@@ -4266,25 +5127,31 @@ mod tests {
                 }],
             ),
         ];
+        let original = n.clone();
         let store = Store::with_doc(SessionDoc {
             nodes: vec![n],
             ..Default::default()
         });
-        // In ONE update the agent reopens parent `a` AND re-decides dependent
+        // In ONE update the agent reopens parent `a` AND restates dependent
         // `b` — so `b` must not be re-flagged: it was addressed this turn.
         let mut reopened = mk("a", vec![]);
         reopened.reopen = true;
+        let restated = mk(
+            "b",
+            vec![ChoiceRef {
+                node: NodeId::from("n"),
+                choice: ChoiceId::from("a"),
+            }],
+        );
         store
             .apply_update(vec![
                 GraphOp::AddChoice {
                     node_id: NodeId::from("n"),
                     choice: reopened,
                 },
-                GraphOp::ResolveChoice {
+                GraphOp::AddChoice {
                     node_id: NodeId::from("n"),
-                    choice_id: ChoiceId::from("b"),
-                    selected: Some(OptionId::from("y")),
-                    dismiss: false,
+                    choice: restated,
                 },
             ])
             .expect("reopen + rescope");
@@ -4301,6 +5168,21 @@ mod tests {
             !n.choice(&ChoiceId::from("b")).unwrap().needs_review,
             "a same-turn re-scope keeps the cleared flag"
         );
+
+        let store = Store::with_doc(SessionDoc {
+            nodes: vec![original],
+            ..Default::default()
+        });
+        let mut incoming = store.snapshot_doc().nodes[0].clone();
+        incoming.choices[0].reopen = true;
+        incoming.choices[0].status = ChoiceStatus::Open;
+        incoming.choices[0].selected = None;
+        store
+            .apply_update(vec![GraphOp::UpsertNode { node: incoming }])
+            .expect("upsert reopens and restates choices");
+        let n = store.snapshot_doc().nodes[0].clone();
+        assert_eq!(n.choices[0].status, ChoiceStatus::Open);
+        assert!(!n.choices[1].needs_review, "upsert re-scopes its choices");
     }
 
     #[test]
@@ -4394,16 +5276,27 @@ mod tests {
         assert_eq!(a.text, "updated");
         // A propose (which carries no annotations) keeps the user's margin layer.
         let mut fresh = demo_doc();
-        fresh.annotations.clear();
+        fresh.annotations.push(Annotation {
+            id: "incoming".into(),
+            kind: AnnotationKind::Note,
+            x: 0.0,
+            y: 0.0,
+            w: 0.0,
+            h: 0.0,
+            text: "incoming".into(),
+            origin: Origin::User,
+        });
         store.apply_propose(fresh).expect("propose");
         assert_eq!(
             store.snapshot_doc().annotations.len(),
-            1,
-            "annotation survived propose"
+            2,
+            "existing annotation survived beside the incoming one"
         );
         // Delete removes it.
         store.delete_annotation(&id).expect("delete");
-        assert!(store.snapshot_doc().annotations.is_empty());
+        let annotations = store.snapshot_doc().annotations;
+        assert_eq!(annotations.len(), 1);
+        assert_eq!(annotations[0].id, AnnotationId::from("incoming"));
         assert!(matches!(
             store.delete_annotation(&id).unwrap_err(),
             StoreError::UnknownAnnotation(_)

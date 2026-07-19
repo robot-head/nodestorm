@@ -954,6 +954,7 @@ mod tests {
                 tnode("näme", "C"),
                 tnode("has?space", "D"), // collides with "has space" after sanitizing
                 tnode("2fa", "E"),
+                tnode("has!space", "F"), // third collision exercises suffix increments
             ],
             vec![tedge(
                 "has space",
@@ -969,6 +970,10 @@ mod tests {
         assert!(
             m.contains(r#"has_space_2["D"]"#),
             "collision suffixed, in: {m}"
+        );
+        assert!(
+            m.contains(r#"has_space_3["F"]"#),
+            "third collision, in: {m}"
         );
         assert!(m.contains(r#"n_2fa["E"]"#), "digit start prefixed, in: {m}");
         assert!(
@@ -1138,6 +1143,42 @@ mod tests {
             ),
         ];
         (doc, log)
+    }
+
+    #[test]
+    fn decision_log_lookup_matches_both_node_and_choice() {
+        let selections = vec![
+            selected_event(1, "target-node", "target-choice", "target", &[]),
+            selected_event(2, "target-node", "other-choice", "wrong-choice", &[]),
+            selected_event(3, "other-node", "target-choice", "wrong-node", &[]),
+        ];
+        let (event, option, _) = last_selection(
+            &selections,
+            &NodeId::from("target-node"),
+            &"target-choice".into(),
+        )
+        .unwrap();
+        assert_eq!(event.seq, 1);
+        assert_eq!(option.as_str(), "target");
+
+        let dismissals = vec![
+            dismissed_event(1, "target-node", "target-choice", Some("target")),
+            dismissed_event(2, "target-node", "other-choice", Some("wrong choice")),
+            dismissed_event(3, "other-node", "target-choice", Some("wrong node")),
+        ];
+        let (event, reason) = last_dismissal(
+            &dismissals,
+            &NodeId::from("target-node"),
+            &"target-choice".into(),
+        )
+        .unwrap();
+        assert_eq!(event.seq, 1);
+        assert_eq!(reason, Some("target"));
+    }
+
+    #[test]
+    fn public_kind_name_matches_markdown_name() {
+        assert_eq!(kind_name_pub(NodeKind::Service), "service");
     }
 
     #[test]
@@ -1411,12 +1452,15 @@ mod tests {
         assert!(!md.contains("## Architecture"), "in: {md}");
         assert!(!md.contains("components ·"), "no counts line, in: {md}");
         assert!(!md.contains("## Decisions"), "in: {md}");
+        assert!(!md.contains("## Questions answered"), "in: {md}");
         assert!(!md.contains("## Open questions"), "in: {md}");
     }
 
     #[test]
     fn markdown_open_only() {
-        let md = render_markdown(&demo_doc(), &[], ts());
+        let mut doc = demo_doc();
+        doc.questions.clear();
+        let md = render_markdown(&doc, &[], ts());
         assert!(md.contains("## Open questions"), "in: {md}");
         assert!(
             md.contains("- **How should concurrent edits be reconciled?** (Sync Engine) — options: CRDTs ★ / Operational Transform / Last-write-wins"),
@@ -1428,6 +1472,7 @@ mod tests {
         );
         assert!(!md.contains("## Decisions"), "in: {md}");
         assert!(!md.contains("## Dismissed decisions"), "in: {md}");
+        assert!(!md.contains("## Questions answered"), "in: {md}");
         assert!(
             md.contains("**11 components · 0 decided · 0 dismissed · 2 open**"),
             "in: {md}"
@@ -1474,6 +1519,35 @@ mod tests {
             md.contains("**Decision: closed without a recorded option**"),
             "in: {md}"
         );
+    }
+
+    #[test]
+    fn markdown_decision_formats_one_sided_pros_and_cons() {
+        for (pros, cons) in [(true, false), (false, true)] {
+            let mut doc = demo_doc();
+            let choice = &mut doc.nodes[4].choices[0];
+            choice.selected = Some("crdt".into());
+            choice.status = ChoiceStatus::Decided;
+            choice.options.truncate(2);
+            choice.options[0].pros = if pros { vec!["pro".into()] } else { vec![] };
+            choice.options[0].cons = if cons { vec!["con".into()] } else { vec![] };
+            choice.options[1].pros = choice.options[0].pros.clone();
+            choice.options[1].cons = choice.options[0].cons.clone();
+
+            let md = render_markdown(&doc, &[], ts());
+            let selected = if pros {
+                "- Pros: pro\n\nAlso considered:"
+            } else {
+                "- Cons (accepted): con\n\nAlso considered:"
+            };
+            let alternative = if pros {
+                "(pros: pro; cons: )"
+            } else {
+                "(pros: ; cons: con)"
+            };
+            assert!(md.contains(selected), "in: {md}");
+            assert!(md.contains(alternative), "in: {md}");
+        }
     }
 
     #[test]

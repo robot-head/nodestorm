@@ -94,12 +94,36 @@ mod tests {
 
     #[test]
     fn bolt_is_open_and_nodes_are_on_the_path() {
+        assert_eq!(svg_points(), "171,49 102,115 154,115 87,207");
         assert_eq!(BOLT_POINTS.len(), 4);
         assert_ne!(BOLT_POINTS.first(), BOLT_POINTS.last());
         assert_eq!(NODE_INDICES, [0, 2, 3]);
         for index in NODE_INDICES {
             assert!(index < BOLT_POINTS.len());
         }
+    }
+
+    #[test]
+    fn segment_distance_clamps_to_each_endpoint() {
+        let segment = ((0.0, 0.0), (10.0, 0.0));
+        assert_eq!(distance_sq_to_segment(5.0, 3.0, segment.0, segment.1), 9.0);
+        assert_eq!(distance_sq_to_segment(-2.0, 0.0, segment.0, segment.1), 4.0);
+        assert_eq!(distance_sq_to_segment(12.0, 0.0, segment.0, segment.1), 4.0);
+    }
+
+    #[test]
+    fn mark_and_rounded_tile_have_inside_boundary_and_outside_points() {
+        assert!(mark_contains(171.0, 49.0));
+        assert!(mark_contains(136.5, 82.0));
+        assert!(mark_contains(171.0 + NODE_RADIUS, 49.0));
+        assert!(!mark_contains(8.0, 8.0));
+
+        assert!(rounded_tile_contains(50.0, 50.0));
+        assert!(rounded_tile_contains(8.0, 50.0));
+        assert!(rounded_tile_contains(248.0, 206.0));
+        assert!(!rounded_tile_contains(7.9, 50.0));
+        assert!(!rounded_tile_contains(8.0, 8.0));
+        assert!(!rounded_tile_contains(248.1, 206.0));
     }
 
     #[test]
@@ -123,5 +147,12 @@ mod tests {
         assert_eq!(tile.dimensions(), (64, 64));
         assert_eq!(tile.get_pixel(0, 0).0[3], 0);
         assert_eq!(tile.get_pixel(32, 32).0[3], 255);
+        let checksum = tile
+            .as_raw()
+            .iter()
+            .fold(0xcbf29ce484222325_u64, |hash, byte| {
+                (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+            });
+        assert_eq!(checksum, 2_698_554_169_112_260_433);
     }
 }

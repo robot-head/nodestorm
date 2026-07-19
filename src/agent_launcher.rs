@@ -500,6 +500,26 @@ fn spawn_command(spec: &CommandSpec) -> std::io::Result<()> {
     command.spawn().map(|_| ())
 }
 
+fn open_linux_terminal_with(
+    child: &CommandSpec,
+    mut spawn: impl FnMut(&CommandSpec) -> std::io::Result<()>,
+) -> anyhow::Result<()> {
+    for flavor in [
+        TerminalFlavor::LinuxXTerminal,
+        TerminalFlavor::LinuxGnome,
+        TerminalFlavor::LinuxKonsole,
+    ] {
+        match spawn(&terminal_command(flavor, child)) {
+            Ok(()) => return Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err.into()),
+        }
+    }
+    anyhow::bail!(
+        "no supported terminal found; install x-terminal-emulator, gnome-terminal, or konsole"
+    )
+}
+
 // Each `#[cfg]` arm needs its own `return` because sibling arms follow it in
 // source; only one compiles per target, so clippy sees the last as redundant.
 #[allow(clippy::needless_return)]
@@ -516,20 +536,7 @@ pub fn open_terminal(child: &CommandSpec) -> anyhow::Result<()> {
     }
     #[cfg(target_os = "linux")]
     {
-        for flavor in [
-            TerminalFlavor::LinuxXTerminal,
-            TerminalFlavor::LinuxGnome,
-            TerminalFlavor::LinuxKonsole,
-        ] {
-            match spawn_command(&terminal_command(flavor, child)) {
-                Ok(()) => return Ok(()),
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(err) => return Err(err.into()),
-            }
-        }
-        anyhow::bail!(
-            "no supported terminal found; install x-terminal-emulator, gnome-terminal, or konsole"
-        );
+        return open_linux_terminal_with(child, spawn_command);
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
@@ -541,7 +548,11 @@ pub fn read_ssh_aliases() -> Vec<String> {
     let Some(base) = directories::BaseDirs::new() else {
         return Vec::new();
     };
-    std::fs::read_to_string(base.home_dir().join(".ssh/config"))
+    read_ssh_aliases_from(&base.home_dir().join(".ssh/config"))
+}
+
+fn read_ssh_aliases_from(path: &Path) -> Vec<String> {
+    std::fs::read_to_string(path)
         .map(|text| parse_ssh_aliases(&text))
         .unwrap_or_default()
 }
@@ -694,6 +705,83 @@ mod tests {
             posix_quote("$(touch /tmp/nope)\nnext"),
             "'$(touch /tmp/nope)\nnext'"
         );
+    }
+
+    #[test]
+    fn diagnostic_shell_prints_the_quoted_error_then_opens_a_login_shell() {
+        assert_eq!(
+            diagnostic_shell("can't launch"),
+            "{ printf '%s\\n' 'can'\\''t launch'; exec \"${SHELL:-/bin/sh}\" -l; }"
+        );
+    }
+
+    #[test]
+    fn remote_parent_handles_root_and_nested_paths() {
+        assert_eq!(remote_parent("/repo").unwrap(), "/");
+        assert_eq!(remote_parent("/srv/repos/api").unwrap(), "/srv/repos");
+        assert!(remote_parent("relative").is_err());
+        assert!(remote_parent("/srv/repos/").is_err());
+    }
+
+    #[test]
+    fn spawning_a_missing_program_reports_not_found() {
+        let spec = CommandSpec {
+            program: format!("nodestorm-missing-{}", uuid::Uuid::new_v4()),
+            args: Vec::new(),
+            current_dir: None,
+        };
+        assert_eq!(
+            spawn_command(&spec).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+    }
+
+    #[test]
+    fn linux_terminal_fallback_skips_only_missing_programs() {
+        let child = CommandSpec {
+            program: "agent".into(),
+            args: Vec::new(),
+            current_dir: None,
+        };
+        let mut attempts = 0;
+        open_linux_terminal_with(&child, |_| {
+            attempts += 1;
+            if attempts < 3 {
+                Err(std::io::ErrorKind::NotFound.into())
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
+        assert_eq!(attempts, 3);
+
+        let mut attempts = 0;
+        let error = open_linux_terminal_with(&child, |_| {
+            attempts += 1;
+            Err(std::io::ErrorKind::PermissionDenied.into())
+        })
+        .unwrap_err();
+        assert_eq!(attempts, 1);
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+
+        let error = open_linux_terminal_with(&child, |_| Err(std::io::ErrorKind::NotFound.into()))
+            .unwrap_err();
+        assert!(error.to_string().contains("no supported terminal found"));
+    }
+
+    #[test]
+    fn ssh_alias_file_is_parsed_and_missing_files_are_empty() {
+        let root =
+            std::env::temp_dir().join(format!("nodestorm-ssh-config-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let config = root.join("config");
+        std::fs::write(&config, "Host prod *.internal dev\n").unwrap();
+        assert_eq!(read_ssh_aliases_from(&config), vec!["dev", "prod"]);
+        assert!(read_ssh_aliases_from(&root.join("missing")).is_empty());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

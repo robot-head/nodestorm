@@ -630,4 +630,17 @@ mod tests {
         assert_eq!(visible_group(Some("   ")), None);
         assert_eq!(visible_group(Some(" Platform ")), Some(" Platform "));
     }
+
+    #[test]
+    fn node_and_edge_kind_labels_round_trip_exactly() {
+        for (value, kind) in KIND_VALUES {
+            assert_eq!(kind_value(kind), value);
+            assert_eq!(kind_from_value(value), kind);
+        }
+        assert_eq!(kind_from_value("unknown"), NodeKind::Component);
+        assert_eq!(edge_kind_phrase(EdgeKind::DependsOn), "depends on");
+        assert_eq!(edge_kind_phrase(EdgeKind::DataFlow), "data flow");
+        assert_eq!(edge_kind_phrase(EdgeKind::Contains), "contains");
+        assert_eq!(edge_kind_phrase(EdgeKind::Other), "relates to");
+    }
 }

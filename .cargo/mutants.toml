@@ -1,0 +1,34 @@
+# Mutation testing targets the unit-testable library surface. Dioxus component
+# bodies and desktop/WebView entry points require a live renderer and are
+# covered by UI/integration tests instead of `cargo test --lib`.
+exclude_globs = ["src/main.rs"]
+exclude_re = [
+  " in (App|Canvas|ActivityFeed|AnnotationLayer|ChoiceBlock|ChoicePanel|ClusterCard|ContextMenu|DiffPanel|EdgeLayer|Minimap|MoreMenu|NodeCard|QuestionBlock|QuestionsPanel|QueuedChangesPanel|ThemeRows|Timeline|TopBar)$",
+  "replace (launch|copy_to_clipboard|start_attempt|submit_send) with \\(\\)$",
+  " in (start_attempt|submit_send)$",
+  # These thin OS/environment boundaries delegate to unit-tested helpers.
+  "replace (open_terminal -> anyhow::Result<\\(\\)>|read_ssh_aliases -> Vec<String>)",
+  "replace track_transport_disconnect -> Response with Default::default\\(\\)",
+  # VERSION is currently 1, so these generated replacements are identical.
+  "replace (SessionDoc|Preferences)::current_version -> u32 with 1",
+  # Both read-error arms return the same value; only their tracing differs.
+  "src/(persist|prefs)\\.rs:.*err\\.kind\\(\\)",
+  "src/(persist|prefs)\\.rs:.*replace == with != in (load|load_or_default)$",
+  # These caps are checked immediately after one push, so len is at most
+  # CAP + 1. The listed operators therefore drain the same zero or one item.
+  "replace > with >= in push_undo$",
+  "replace - with / in push_undo$",
+  "replace > with (>=|==) in push_activity_as$",
+  "replace - with / in push_activity_as$",
+  # Equal priorities necessarily mean the same ElementStatus value.
+  "replace > with >= in mini_rects$",
+  # These mutations make an already-tested loop stop making progress. They
+  # are excluded instead of spending the test timeout on known hangs.
+  "src/export\\.rs:(793|806):15:",
+  "src/layout\\.rs:(37:9|38:13|39:13|39:23|40:13|183:21|190:21|391:23|406:23|538:38|538:44|553:38|553:44):",
+  "src/model\\.rs:(391:9|479:42|487:9|675:29):",
+  "src/sessions\\.rs:(180:19|217:55|235:9|301:36|303:19|304:9|356:19|388:19|478:36|480:19|599:19):",
+  "src/server/tools\\.rs:(404:9|608:9|611:12):",
+  "src/store\\.rs:(370:9|612:19|621:9|839:19|1069:9|1441:9|1527:63|1556:5|1645:86|1646:61|1648:28|1668:5|1683:8|1683:26|1688:24|1719:5|1723:28|1723:70|1807:5|1861:19|1861:46|2140:5|2140:60):",
+]
+additional_cargo_test_args = ["--lib"]

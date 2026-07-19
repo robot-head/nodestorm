@@ -200,4 +200,106 @@ mod tests {
         let again = mini_rects(&doc, &layout, layout.bounds);
         assert_eq!(rects.len(), again.len());
     }
+
+    #[test]
+    fn virtualized_cells_use_exact_geometry_and_highest_status_priority() {
+        assert_eq!(status_priority(ElementStatus::Existing), 0);
+        assert_eq!(status_priority(ElementStatus::Proposed), 1);
+        assert_eq!(status_priority(ElementStatus::Modified), 2);
+        assert_eq!(status_priority(ElementStatus::Affected), 3);
+        assert_eq!(status_priority(ElementStatus::Removed), 4);
+
+        let mut doc = crate::demo::big_doc(VIRTUALIZE_ABOVE + 1);
+        for node in &mut doc.nodes {
+            node.status = ElementStatus::Existing;
+        }
+        doc.nodes.last_mut().unwrap().status = ElementStatus::Removed;
+        let mut layout = Layout::default();
+        for node in &doc.nodes {
+            layout.rects.insert(
+                node.id.clone(),
+                Rect {
+                    x: 20.0,
+                    y: 40.0,
+                    w: 10.0,
+                    h: 10.0,
+                },
+            );
+        }
+        let rects = mini_rects(
+            &doc,
+            &layout,
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                w: 640.0,
+                h: 420.0,
+            },
+        );
+        assert_eq!(rects.len(), 1);
+        assert_eq!(rects[0].status, "removed");
+        assert_eq!(
+            rects[0].rect,
+            Rect {
+                x: 20.0,
+                y: 40.0,
+                w: 10.0,
+                h: 10.0,
+            }
+        );
+
+        for rect in layout.rects.values_mut() {
+            *rect = Rect {
+                x: 19.0,
+                y: 39.0,
+                w: 4.0,
+                h: 4.0,
+            };
+        }
+        let boundary = mini_rects(
+            &doc,
+            &layout,
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                w: 640.0,
+                h: 420.0,
+            },
+        );
+        assert_eq!(boundary.len(), 1);
+        assert_eq!(boundary[0].rect.x, 20.0);
+        assert_eq!(boundary[0].rect.y, 40.0);
+
+        for rect in layout.rects.values_mut() {
+            rect.x = 1_000.0;
+        }
+        let clamped = mini_rects(
+            &doc,
+            &layout,
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                w: 640.0,
+                h: 420.0,
+            },
+        );
+        assert_eq!(clamped.len(), 1);
+        assert_eq!(clamped[0].rect.x, 640.0);
+
+        for rect in layout.rects.values_mut() {
+            rect.y = 1_000.0;
+        }
+        let clamped = mini_rects(
+            &doc,
+            &layout,
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                w: 640.0,
+                h: 420.0,
+            },
+        );
+        assert_eq!(clamped.len(), 1);
+        assert_eq!(clamped[0].rect.y, 430.0);
+    }
 }

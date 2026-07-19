@@ -292,6 +292,81 @@ mod tests {
     }
 
     #[test]
+    fn fit_uses_the_limiting_axis_and_centers_exactly() {
+        let bounds = crate::layout::Rect {
+            x: 10.0,
+            y: 20.0,
+            w: 400.0,
+            h: 200.0,
+        };
+        assert_eq!(
+            ViewTransform::fit(&bounds, 200.0, 300.0),
+            ViewTransform {
+                tx: -5.0,
+                ty: 90.0,
+                scale: 0.5,
+            }
+        );
+        assert_eq!(
+            ViewTransform::fit(
+                &crate::layout::Rect {
+                    w: 100.0,
+                    h: 400.0,
+                    ..bounds
+                },
+                300.0,
+                200.0,
+            ),
+            ViewTransform {
+                tx: 120.0,
+                ty: -10.0,
+                scale: 0.5,
+            }
+        );
+        assert_eq!(
+            ViewTransform::fit(
+                &crate::layout::Rect {
+                    w: 0.0,
+                    h: 10.0,
+                    ..bounds
+                },
+                200.0,
+                300.0,
+            ),
+            ViewTransform::default()
+        );
+        assert_eq!(
+            ViewTransform::fit(
+                &crate::layout::Rect {
+                    w: 10.0,
+                    h: 0.0,
+                    ..bounds
+                },
+                200.0,
+                300.0,
+            ),
+            ViewTransform::default()
+        );
+    }
+
+    #[test]
+    fn agent_colors_and_node_search_are_deterministic() {
+        assert_eq!(agent_hue("alice"), 239);
+        assert_eq!(agent_hue("bob"), 284);
+        assert_eq!(agent_hue(""), 61);
+        assert_eq!(agent_color("alice"), "hsl(239, 62%, 55%)");
+
+        let mut node = crate::demo::demo_doc().nodes.remove(0);
+        node.label = "Alpha Service".into();
+        node.group = Some("Platform".into());
+        assert!(node_matches(&node, "ALPHA"));
+        assert!(node_matches(&node, "web-ui"));
+        assert!(node_matches(&node, "platform"));
+        assert!(!node_matches(&node, "missing"));
+        assert!(!node_matches(&node, "   "));
+    }
+
+    #[test]
     fn viewport_reframe_preserves_plane_center() {
         let old = ViewportSize::FALLBACK;
         let new = ViewportSize::observed(520.0, 792.0).expect("positive viewport");
@@ -301,6 +376,7 @@ mod tests {
             scale: 0.8,
         };
         let plane_center = transform.plane_center(old);
+        assert_eq!(plane_center, (625.0, 562.5));
 
         transform.reframe(old, new);
 
@@ -310,6 +386,7 @@ mod tests {
     #[test]
     fn viewport_size_rejects_invalid_observations() {
         assert!(ViewportSize::observed(0.0, 780.0).is_none());
+        assert!(ViewportSize::observed(520.0, 0.0).is_none());
         assert!(ViewportSize::observed(520.0, -1.0).is_none());
         assert!(ViewportSize::observed(f64::NAN, 780.0).is_none());
     }

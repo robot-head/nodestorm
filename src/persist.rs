@@ -120,6 +120,31 @@ mod tests {
     }
 
     #[test]
+    fn default_path_ends_in_session_json() {
+        assert_eq!(
+            default_session_path().unwrap().file_name().unwrap(),
+            "session.json"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn autosave_task_writes_after_the_debounce() {
+        let path = tmp_path("autosave.json");
+        let store = Store::with_doc(demo_doc());
+        let task = tokio::spawn(autosave_task(store.clone(), path.clone()));
+        tokio::task::yield_now().await;
+
+        store.announce("save me".into());
+        tokio::task::yield_now().await;
+        tokio::time::advance(AUTOSAVE_DEBOUNCE + Duration::from_millis(1)).await;
+        tokio::task::yield_now().await;
+
+        assert!(path.exists());
+        task.abort();
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
     fn save_load_round_trip() {
         let path = tmp_path("roundtrip.json");
         let mut state = SessionState::default();

@@ -144,4 +144,17 @@ mod tests {
         assert_eq!(preview.chars().count(), 32);
         assert_eq!(preview, format!("{}…", "a".repeat(31)));
     }
+
+    #[test]
+    fn edge_status_and_kind_classes_are_exact() {
+        assert_eq!(status_class(ElementStatus::Existing), "existing");
+        assert_eq!(status_class(ElementStatus::Proposed), "proposed");
+        assert_eq!(status_class(ElementStatus::Modified), "modified");
+        assert_eq!(status_class(ElementStatus::Affected), "affected");
+        assert_eq!(status_class(ElementStatus::Removed), "removed");
+        assert_eq!(kind_class(EdgeKind::DependsOn), "depends-on");
+        assert_eq!(kind_class(EdgeKind::DataFlow), "data-flow");
+        assert_eq!(kind_class(EdgeKind::Contains), "contains");
+        assert_eq!(kind_class(EdgeKind::Other), "other");
+    }
 }

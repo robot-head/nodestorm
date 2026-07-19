@@ -941,7 +941,106 @@ pub fn Canvas(
 
 #[cfg(test)]
 mod tests {
-    use super::group_outline_rects;
+    use super::{edge_kind_label, group_outline_rects};
+
+    #[test]
+    fn edge_kind_labels_are_exact() {
+        use crate::model::EdgeKind;
+
+        assert_eq!(edge_kind_label(EdgeKind::DependsOn), "depends");
+        assert_eq!(edge_kind_label(EdgeKind::DataFlow), "data");
+        assert_eq!(edge_kind_label(EdgeKind::Contains), "contains");
+        assert_eq!(edge_kind_label(EdgeKind::Other), "other");
+    }
+
+    #[test]
+    fn group_outline_uses_exact_union_and_padding() {
+        use crate::layout::{Layout, Rect};
+        use crate::model::{Node, NodeId, SessionDoc};
+
+        let mut first: Node = serde_json::from_value(serde_json::json!({
+            "id": "first", "label": "First", "group": "g"
+        }))
+        .unwrap();
+        let second: Node = serde_json::from_value(serde_json::json!({
+            "id": "second", "label": "Second", "group": "g"
+        }))
+        .unwrap();
+        let wide: Node = serde_json::from_value(serde_json::json!({
+            "id": "wide", "label": "Wide", "group": "h"
+        }))
+        .unwrap();
+        let inset: Node = serde_json::from_value(serde_json::json!({
+            "id": "inset", "label": "Inset", "group": "h"
+        }))
+        .unwrap();
+        first.position = None;
+        let doc = SessionDoc {
+            nodes: vec![first, second, wide, inset],
+            ..SessionDoc::default()
+        };
+        let mut layout = Layout::default();
+        layout.rects.insert(
+            NodeId::from("first"),
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                w: 100.0,
+                h: 50.0,
+            },
+        );
+        layout.rects.insert(
+            NodeId::from("second"),
+            Rect {
+                x: 200.0,
+                y: 40.0,
+                w: 40.0,
+                h: 100.0,
+            },
+        );
+        layout.rects.insert(
+            NodeId::from("wide"),
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                w: 300.0,
+                h: 200.0,
+            },
+        );
+        layout.rects.insert(
+            NodeId::from("inset"),
+            Rect {
+                x: 0.0,
+                y: 30.0,
+                w: 10.0,
+                h: 10.0,
+            },
+        );
+
+        assert_eq!(
+            group_outline_rects(&doc, &layout),
+            vec![
+                (
+                    "g".to_owned(),
+                    Rect {
+                        x: -8.0,
+                        y: 2.0,
+                        w: 266.0,
+                        h: 156.0,
+                    }
+                ),
+                (
+                    "h".to_owned(),
+                    Rect {
+                        x: -18.0,
+                        y: 2.0,
+                        w: 346.0,
+                        h: 236.0,
+                    }
+                )
+            ]
+        );
+    }
 
     #[test]
     fn group_outlines_bound_each_expanded_group() {

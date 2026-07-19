@@ -38,9 +38,13 @@ fn connection_state_label(state: &ConnectionState) -> String {
     }
 }
 
+fn flush_comment(text: &str) -> Option<String> {
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_owned())
+}
+
 fn submit_send(store: &Arc<Store>, mut comment: Signal<String>, mut compose_open: Signal<bool>) {
-    let text = comment.read().trim().to_owned();
-    if send_succeeded(store.request_flush((!text.is_empty()).then_some(text))) {
+    if send_succeeded(store.request_flush(flush_comment(&comment.read()))) {
         comment.set(String::new());
         compose_open.set(false);
     }
@@ -48,7 +52,7 @@ fn submit_send(store: &Arc<Store>, mut comment: Signal<String>, mut compose_open
 
 #[cfg(test)]
 mod tests {
-    use super::{connection_state_label, send_label, send_succeeded};
+    use super::{connection_state_label, flush_comment, send_label, send_succeeded};
     use crate::sessions::ConnectionState;
     use crate::store::SendStatus;
 
@@ -59,6 +63,8 @@ mod tests {
             !send_succeeded(Err::<(), ()>(())),
             "failure preserves the draft"
         );
+        assert_eq!(flush_comment("  ready  ").as_deref(), Some("ready"));
+        assert_eq!(flush_comment("   "), None);
     }
 
     #[test]

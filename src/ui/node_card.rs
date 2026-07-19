@@ -232,7 +232,7 @@ pub fn NodeCard(
 
 #[cfg(test)]
 mod tests {
-    use super::ZoomTier;
+    use super::*;
 
     #[test]
     fn zoom_tier_thresholds() {
@@ -242,5 +242,37 @@ mod tests {
         assert_eq!(ZoomTier::from_scale(0.77), ZoomTier::Mid);
         assert_eq!(ZoomTier::from_scale(0.78), ZoomTier::Near);
         assert_eq!(ZoomTier::from_scale(2.5), ZoomTier::Near);
+        assert_eq!(ZoomTier::Far.class(), "zoom-far");
+        assert_eq!(ZoomTier::Mid.class(), "zoom-mid");
+        assert_eq!(ZoomTier::Near.class(), "zoom-near");
+    }
+
+    #[test]
+    fn node_glyphs_labels_and_statuses_are_exact() {
+        assert_eq!(build_glyph(BuildStatus::Planned), "○");
+        assert_eq!(build_glyph(BuildStatus::Building), "◐");
+        assert_eq!(build_glyph(BuildStatus::Built), "●");
+        assert_eq!(build_glyph(BuildStatus::Verified), "✓");
+
+        let kinds = [
+            (NodeKind::Service, "⬢", "service"),
+            (NodeKind::Module, "▣", "module"),
+            (NodeKind::Component, "◆", "component"),
+            (NodeKind::DataStore, "🗃", "data store"),
+            (NodeKind::Queue, "☰", "queue"),
+            (NodeKind::Ui, "▢", "ui"),
+            (NodeKind::External, "↗", "external"),
+            (NodeKind::Other, "●", "other"),
+        ];
+        for (kind, glyph, label) in kinds {
+            assert_eq!(kind_glyph(kind), glyph);
+            assert_eq!(kind_label(kind), label);
+        }
+
+        assert_eq!(status_class(ElementStatus::Existing), "existing");
+        assert_eq!(status_class(ElementStatus::Proposed), "proposed");
+        assert_eq!(status_class(ElementStatus::Modified), "modified");
+        assert_eq!(status_class(ElementStatus::Affected), "affected");
+        assert_eq!(status_class(ElementStatus::Removed), "removed");
     }
 }

@@ -368,6 +368,22 @@ mod tests {
     }
 
     #[test]
+    fn big_doc_connects_adjacent_nodes_and_groups_at_the_boundary() {
+        let d = big_doc(13);
+        assert_eq!(d.edges.len(), 13);
+        assert!(d.edges.iter().any(|edge| {
+            edge.from == NodeId::from("node-0")
+                && edge.to == NodeId::from("node-1")
+                && edge.kind == EdgeKind::DependsOn
+        }));
+        assert!(d.edges.iter().any(|edge| {
+            edge.from == NodeId::from("node-0")
+                && edge.to == NodeId::from("node-12")
+                && edge.kind == EdgeKind::DataFlow
+        }));
+    }
+
+    #[test]
     fn demo_doc_is_valid() {
         let v = demo_doc().validate();
         assert!(v.is_ok(), "errors: {:?}", v.errors);
