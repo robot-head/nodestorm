@@ -72,13 +72,11 @@ pub struct ClusterRect {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LaneBand {
     pub label: String,
-    /// The drawn band: the base strip grown to enclose the lane's pinned
-    /// members, so a dropped card is visibly contained.
+    /// The band: the base strip grown down/sideways to enclose the lane's
+    /// pinned members. Drawn, hit-tested, and highlighted as one rect, so
+    /// what the user sees is exactly the drop zone. Bands never overlap —
+    /// each starts at least `LANE_SEP` below the grown band above it.
     pub rect: Rect,
-    /// The stable base strip (independent of pinned cards). Drop hit-testing
-    /// and the drag-target highlight use this so the target does not chase a
-    /// card being dragged.
-    pub hit: Rect,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -579,6 +577,12 @@ fn union_rect(a: Rect, b: Rect) -> Rect {
 
 const LANE_CARD_PAD: f64 = 20.0;
 const LANE_TITLE_H: f64 = 36.0;
+/// Minimum vertical gap between adjacent bands; bands never overlap.
+const LANE_SEP: f64 = 18.0;
+const LANE_HPAD: f64 = 30.0;
+/// Minimum labeled-band height: title + one minimal card + padding, so an
+/// empty lane is a comfortable drop target.
+const LANE_MIN_H: f64 = 110.0;
 
 /// Lane-constrained placement: cards pack into labeled horizontal bands by
 /// their `lane` (the unlabeled default band holds nodes without one). Bands
@@ -593,8 +597,6 @@ fn place_laned(
     order: &[Vec<usize>],
     declared: &[String],
 ) -> (HashMap<NodeId, Rect>, Vec<LaneBand>) {
-    const LANE_SEP: f64 = 18.0;
-    const LANE_HPAD: f64 = 30.0;
     let heights: Vec<f64> = doc.nodes.iter().map(estimate_height).collect();
     let lane_key = |i: usize| doc.nodes[i].lane.clone().unwrap_or_default();
 
@@ -653,21 +655,13 @@ fn place_laned(
         }
     }
 
-    let mut lane_y = vec![0.0f64; num_lanes];
-    let mut band_h = vec![0.0f64; num_lanes];
-    let mut acc = 0.0;
-    for li in 0..num_lanes {
-        lane_y[li] = acc;
-        band_h[li] = lane_stack_h[li] + top_pad[li] + LANE_CARD_PAD;
-        acc += band_h[li] + LANE_SEP;
-    }
-
     let graph_w = if num_ranks == 0 {
         CARD_WIDTH
     } else {
         (num_ranks - 1) as f64 * (CARD_WIDTH + RANK_GUTTER) + CARD_WIDTH
     };
 
+    // Pinned cards first: the bands below must grow to enclose them.
     let mut rects: HashMap<NodeId, Rect> = HashMap::new();
     for (i, node) in doc.nodes.iter().enumerate() {
         if let Some(p) = node.position {
@@ -682,6 +676,59 @@ fn place_laned(
             );
         }
     }
+
+    // Stack bands top-to-bottom. Each labeled band grows downward and
+    // sideways to enclose its pinned members, and the next band starts below
+    // the grown bottom — bands never overlap and stay LANE_SEP apart.
+    let mut lane_y = vec![0.0f64; num_lanes];
+    let mut band = vec![
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 0.0,
+            h: 0.0
+        };
+        num_lanes
+    ];
+    let mut acc = 0.0;
+    for li in 0..num_lanes {
+        lane_y[li] = acc;
+        let label = &lane_order[li];
+        let mut h = lane_stack_h[li] + top_pad[li] + LANE_CARD_PAD;
+        if !label.is_empty() {
+            h = h.max(LANE_MIN_H);
+        }
+        let mut r = Rect {
+            x: -LANE_HPAD,
+            y: acc,
+            w: graph_w + 2.0 * LANE_HPAD,
+            h,
+        };
+        if !label.is_empty() {
+            for (i, node) in doc.nodes.iter().enumerate() {
+                if node.position.is_some() && lane_key(i) == *label {
+                    // A member stranded above the band (bands shifted down
+                    // under it) is pulled down inside, below the title — the
+                    // band's top edge never moves up into the band above.
+                    let m = rects.get_mut(&node.id).expect("pinned rect placed");
+                    m.y = m.y.max(r.y + top_pad[li]);
+                    let m = *m;
+                    let x0 = r.x.min(m.x - LANE_CARD_PAD);
+                    let x1 = (r.x + r.w).max(m.x + m.w + LANE_CARD_PAD);
+                    let y1 = (r.y + r.h).max(m.y + m.h + LANE_CARD_PAD);
+                    r = Rect {
+                        x: x0,
+                        y: r.y,
+                        w: x1 - x0,
+                        h: y1 - r.y,
+                    };
+                }
+            }
+        }
+        band[li] = r;
+        acc = r.y + r.h + LANE_SEP;
+    }
+
     for (r, rank_nodes) in order.iter().enumerate() {
         let x = r as f64 * (CARD_WIDTH + RANK_GUTTER);
         let mut cursor: Vec<f64> = lane_y
@@ -710,34 +757,22 @@ fn place_laned(
         if label.is_empty() {
             continue; // the default lane draws no band
         }
-        let base = Rect {
-            x: -LANE_HPAD,
-            y: lane_y[li],
-            w: graph_w + 2.0 * LANE_HPAD,
-            h: band_h[li],
-        };
-        // Grow the drawn band to enclose this lane's pinned members.
-        let mut grown = base;
-        for (i, node) in doc.nodes.iter().enumerate() {
-            if node.position.is_some() && lane_key(i) == *label {
-                grown = union_rect(grown, rects[&node.id]);
-            }
-        }
         lanes.push(LaneBand {
             label: label.clone(),
-            rect: grown,
-            hit: base,
+            rect: band[li],
         });
     }
     (rects, lanes)
 }
 
-/// The lane whose stable hit-strip contains `(x, y)` in plane coords, or
-/// `None` if the point is outside every band (the drop-outside case).
+/// The lane whose band contains `(x, y)` in plane coords, or `None` if the
+/// point is outside every band (the drop-outside case).
 pub fn lane_at(lanes: &[LaneBand], x: f64, y: f64) -> Option<String> {
     lanes
         .iter()
-        .find(|l| x >= l.hit.x && x < l.hit.x + l.hit.w && y >= l.hit.y && y < l.hit.y + l.hit.h)
+        .find(|l| {
+            x >= l.rect.x && x < l.rect.x + l.rect.w && y >= l.rect.y && y < l.rect.y + l.rect.h
+        })
         .map(|l| l.label.clone())
 }
 
@@ -1325,10 +1360,10 @@ mod tests {
             band.rect,
             rb
         );
-        // The hit strip stays put (does not chase the pinned card down to y=400).
+        // Growth is downward only: the band's top edge stays put.
         assert!(
-            band.hit.y + band.hit.h < 300.0,
-            "hit strip is the stable base band"
+            band.rect.y.abs() < 1e-6,
+            "band top does not chase pinned cards"
         );
     }
 
@@ -1336,19 +1371,129 @@ mod tests {
     fn lane_at_hits_bands_and_misses_the_gap() {
         let mut d = doc(&["a", "b"], &[("a", "b")]);
         d.node_mut(&NodeId::from("a")).unwrap().lane = Some("build".into());
+        d.node_mut(&NodeId::from("b")).unwrap().lane = Some("review".into());
+        let layout = compute_view(
+            &d,
+            &std::collections::BTreeSet::new(),
+            &["build".to_owned(), "review".to_owned()],
+        );
+        let build = layout.lanes.iter().find(|l| l.label == "build").unwrap();
+        let review = layout.lanes.iter().find(|l| l.label == "review").unwrap();
+        let cx = build.rect.x + build.rect.w / 2.0;
+        let cy = build.rect.y + build.rect.h / 2.0;
+        assert_eq!(lane_at(&layout.lanes, cx, cy).as_deref(), Some("build"));
+        // The separation gap between two bands belongs to no lane.
+        let gap_y = (build.rect.y + build.rect.h + review.rect.y) / 2.0;
+        assert_eq!(lane_at(&layout.lanes, cx, gap_y), None, "gap = no lane");
+        assert_eq!(
+            lane_at(&layout.lanes, cx, build.rect.y - 5000.0),
+            None,
+            "far away = no lane"
+        );
+    }
+
+    #[test]
+    fn whole_grown_band_is_a_drop_target() {
+        // All members pinned: the auto-packed strip is empty, but the drawn
+        // band still encloses the cards — dropping anywhere inside it must
+        // keep membership (regression: only the thin title strip counted).
+        let mut d = doc(&["a", "b"], &[("a", "b")]);
+        for id in ["a", "b"] {
+            let n = d.node_mut(&NodeId::from(id)).unwrap();
+            n.lane = Some("build".into());
+        }
+        d.node_mut(&NodeId::from("a")).unwrap().position = Some(Point { x: 0.0, y: 250.0 });
+        d.node_mut(&NodeId::from("b")).unwrap().position = Some(Point { x: 40.0, y: 400.0 });
         let layout = compute_view(
             &d,
             &std::collections::BTreeSet::new(),
             &["build".to_owned()],
         );
         let band = layout.lanes.iter().find(|l| l.label == "build").unwrap();
-        let cx = band.hit.x + band.hit.w / 2.0;
-        let cy = band.hit.y + band.hit.h / 2.0;
-        assert_eq!(lane_at(&layout.lanes, cx, cy).as_deref(), Some("build"));
+        let rb = layout.rects[&NodeId::from("b")];
+        assert!(
+            band.rect.y + band.rect.h >= rb.y + rb.h,
+            "band {:?} encloses pinned card {rb:?}",
+            band.rect
+        );
         assert_eq!(
-            lane_at(&layout.lanes, cx, band.hit.y - 5000.0),
-            None,
-            "far away = no lane"
+            lane_at(&layout.lanes, rb.x + rb.w / 2.0, rb.y + rb.h / 2.0).as_deref(),
+            Some("build"),
+            "a drop deep inside the grown band stays in the lane"
+        );
+    }
+
+    #[test]
+    fn bands_never_overlap_and_keep_min_gap() {
+        // Lane "a" grows far down to enclose a pinned member; lane "b" (and
+        // its auto-placed card) must be pushed below it, never overlapped.
+        let mut d = doc(&["m", "n"], &[]);
+        d.node_mut(&NodeId::from("m")).unwrap().lane = Some("a".into());
+        d.node_mut(&NodeId::from("m")).unwrap().position = Some(Point { x: 0.0, y: 400.0 });
+        d.node_mut(&NodeId::from("n")).unwrap().lane = Some("b".into());
+        let layout = compute_view(
+            &d,
+            &std::collections::BTreeSet::new(),
+            &["a".to_owned(), "b".to_owned()],
+        );
+        let a = layout.lanes.iter().find(|l| l.label == "a").unwrap();
+        let b = layout.lanes.iter().find(|l| l.label == "b").unwrap();
+        assert!(
+            b.rect.y >= a.rect.y + a.rect.h + LANE_SEP - 1e-6,
+            "band b {:?} sits at least LANE_SEP below grown band a {:?}",
+            b.rect,
+            a.rect
+        );
+        let rn = layout.rects[&NodeId::from("n")];
+        assert!(
+            rn.y >= b.rect.y,
+            "b's auto-placed card {rn:?} moved down with its band {:?}",
+            b.rect
+        );
+    }
+
+    #[test]
+    fn pinned_member_stranded_above_its_band_is_pulled_into_it() {
+        // "m" belongs to the second lane but is pinned at y = 0, above where
+        // that band stacks (below "a"). Downward-only growth alone would
+        // leave it floating inside band "a"; the layout must pull it down
+        // into its own band instead.
+        let mut d = doc(&["m", "n"], &[]);
+        d.node_mut(&NodeId::from("n")).unwrap().lane = Some("a".into());
+        d.node_mut(&NodeId::from("m")).unwrap().lane = Some("b".into());
+        d.node_mut(&NodeId::from("m")).unwrap().position = Some(Point { x: 0.0, y: 0.0 });
+        let layout = compute_view(
+            &d,
+            &std::collections::BTreeSet::new(),
+            &["a".to_owned(), "b".to_owned()],
+        );
+        let b = layout.lanes.iter().find(|l| l.label == "b").unwrap();
+        let rm = layout.rects[&NodeId::from("m")];
+        assert!(
+            rm.y >= b.rect.y && rm.y + rm.h <= b.rect.y + b.rect.h,
+            "member {rm:?} sits inside its band {:?}",
+            b.rect
+        );
+        assert_eq!(
+            lane_at(&layout.lanes, rm.x + rm.w / 2.0, rm.y + rm.h / 2.0).as_deref(),
+            Some("b"),
+            "the member's center resolves to its own lane"
+        );
+    }
+
+    #[test]
+    fn empty_declared_lane_has_a_comfortable_drop_zone() {
+        let d = doc(&["a"], &[]);
+        let layout = compute_view(
+            &d,
+            &std::collections::BTreeSet::new(),
+            &["review".to_owned()],
+        );
+        let review = layout.lanes.iter().find(|l| l.label == "review").unwrap();
+        assert!(
+            review.rect.h >= LANE_MIN_H,
+            "empty band {:?} is at least LANE_MIN_H tall",
+            review.rect
         );
     }
 }

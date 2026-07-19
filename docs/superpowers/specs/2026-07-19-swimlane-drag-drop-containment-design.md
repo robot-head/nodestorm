@@ -44,32 +44,52 @@ for no user benefit. The `collapsed_groups` precedent settles the choice.
 
 ## Layout: bands emit for every declared lane and grow to contain pins
 
+*(Revised 2026-07-19 after live use: the original two-rect band — a grown drawn
+rect over a stable base hit-strip — made the drawn band chase the dragged card,
+let grown bands overlap their neighbors, and left the drop zone a thin strip at
+the top of what the user saw. Single rect now; stability comes from releasing
+the card's lane at drag start instead.)*
+
 `place_laned` in `src/layout.rs`:
 
 - Accepts the explicit ordered lane list above instead of deriving lane order from
   node first-appearance.
 - Emits a `LaneBand` for every declared lane, including empty ones, with a minimum
-  band height so an empty band is a visible drop zone.
-- After pinned cards are placed, unions each pinned card's rect into its lane's
-  band rect (the same bounding math `group_outline_rects` uses in
-  `src/ui/canvas.rs`), so a dropped card is visibly enclosed by its band.
+  band height (`LANE_MIN_H`) so an empty band is a comfortable drop zone.
+- Stacks bands top-to-bottom in one pass: each labeled band grows **downward and
+  sideways** (never upward) to enclose its pinned members, and the next band
+  starts below the grown bottom plus `LANE_SEP`. Bands therefore never overlap
+  and always keep a minimum gap; auto-placed cards in later lanes move down with
+  their band.
+- A pinned member stranded *above* its band's stacked start (bands shifted down
+  underneath it — e.g. an earlier lane grew, or agent/legacy data) is pulled
+  down inside the band, below the title. Rendered rects only; the doc position
+  is untouched and converges on the next drag.
 
-`LaneBand` gains a second rect so growth does not corrupt hit-testing:
+`LaneBand` has a single `rect`: it is drawn, hit-tested, and highlighted as one
+rectangle, so the visible band is exactly the drop zone. Stability mid-drag comes
+from the drag interaction (below), not from a second rect.
 
-- `rect` — the **grown** rect (base strip unioned with the lane's pinned members).
-  This is what is drawn, so a dropped card is visibly wrapped.
-- `hit` — the **base strip** (fixed horizontal band, independent of pinned cards).
-  Drop hit-testing and the drag-target highlight use `hit` so the target stays
-  stable even while a card being dragged stretches its old lane's drawn `rect`.
-
-Mid-drag, the dragged card still belongs to its old lane, so that lane's drawn
-`rect` stretches toward the cursor — acceptable live feedback. On drop the lane
-changes and the next layout snaps the old band back and grows the new one.
+Mid-drag the dragged card belongs to no lane (released at drag start), so no
+band's geometry depends on the cursor: every band holds still while the card is
+in flight. On drop the next layout grows the receiving band to enclose the card,
+pushing lower bands down as needed.
 
 ## Drop = re-parent by geometry
 
-In `Canvas.onmouseup` (`src/ui/canvas.rs`), when the ending gesture is a
-`DragNode` that actually moved:
+On the first actual movement of a `DragNode` gesture (`src/ui/canvas.rs`), the
+card is released from its lane (`store.set_lane(id, None)`): bands hold still
+for the whole drag, and dragging out is the default — membership is re-earned
+by where the card lands. If the card was the lane's last member and the lane
+was undeclared (agent-set), `set_lane` rescues it into `declared_lanes` so the
+band survives the drag instead of vanishing; deleting a lane stays an explicit
+`×` click. Undoing such a drag restores membership but leaves the rescued
+entry in `declared_lanes` — the same accepted wart as rename/delete undo
+(view-state sits outside the undo snapshot); bands dedupe by name, so the only
+visible effect is that the lane is now declared.
+
+In `Canvas.onmouseup`, when the ending gesture is a `DragNode` that actually
+moved:
 
 - Test the dropped card's center point (plane coords) against each band rect in
   `layout.lanes`.
@@ -131,7 +151,7 @@ Write and confirm-failing before implementing:
   `node.lane` and removes the declared entry; `rename_lane` rewrites member
   `node.lane` and the declared entry. `delete_lane`/`rename_lane` checkpoint, so
   one undo restores member membership.
-- Layout: `lane_at` returns the lane whose stable hit-strip contains a point, and
+- Layout: `lane_at` returns the lane whose band rect contains a point, and
   `None` for a point outside every band (the drop-outside case).
 - CSS contract assertion for `.swimlane.drop-target`.
 
