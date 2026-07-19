@@ -16,6 +16,7 @@ use crate::model::NodeId;
 use crate::sessions::Sessions;
 
 use super::activity::ActivityFeed;
+use super::agent_launcher::AgentLauncher;
 use super::canvas::Canvas;
 use super::choice_panel::ChoicePanel;
 use super::diff_panel::DiffPanel;
@@ -43,6 +44,7 @@ pub fn App() -> Element {
         comment: Signal::new(String::new()),
         open: Signal::new(false),
     });
+    let mut launcher_open = use_context_provider(|| super::AgentLauncherOpen(Signal::new(false))).0;
 
     // Theme preference: seeded from the file loaded in launch(); the CSS
     // reacts through data-theme/data-mode below, the native title bar
@@ -144,24 +146,31 @@ pub fn App() -> Element {
                         span { class: "empty-bolt", "ϟ" }
                         h1 { "nodestorm" }
                         p { "Waiting for an agent to connect." }
-                        button {
-                            class: "empty-cmd",
-                            title: "Copy the connect command",
-                            onclick: {
-                                let sessions = sessions.clone();
-                                let cmd = format!(
-                                    "claude mcp add --transport http nodestorm {mcp_url}"
-                                );
-                                move |_| {
-                                    super::copy_to_clipboard(
-                                        &sessions.active_store(),
-                                        cmd.clone(),
-                                        "copied the connect command",
+                        div { class: "empty-actions",
+                            button {
+                                class: "btn btn-primary",
+                                onclick: move |_| launcher_open.set(true),
+                                "Start an agentic session"
+                            }
+                            button {
+                                class: "empty-cmd",
+                                title: "Copy the connect command",
+                                onclick: {
+                                    let sessions = sessions.clone();
+                                    let cmd = format!(
+                                        "claude mcp add --transport http nodestorm {mcp_url}"
                                     );
-                                }
-                            },
-                            code { "claude mcp add --transport http nodestorm {mcp_url}" }
-                            span { class: "empty-copy", "⧉" }
+                                    move |_| {
+                                        super::copy_to_clipboard(
+                                            &sessions.active_store(),
+                                            cmd.clone(),
+                                            "copied the connect command",
+                                        );
+                                    }
+                                },
+                                code { "claude mcp add --transport http nodestorm {mcp_url}" }
+                                span { class: "empty-copy", "⧉" }
+                            }
                         }
                     }
                 }
@@ -186,6 +195,9 @@ pub fn App() -> Element {
                 } else if questions_open() {
                     QuestionsPanel { doc, on_close: move |()| questions_open.set(false) }
                 }
+            }
+            if launcher_open() {
+                AgentLauncher {}
             }
         }
     }

@@ -6,6 +6,7 @@
 //! human picks options in the UI; the agent blocks on `await_decisions` until
 //! the decisions are sent back.
 
+pub mod agent_launcher;
 pub mod cli;
 pub mod demo;
 pub mod diff;

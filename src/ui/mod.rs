@@ -1,6 +1,7 @@
 //! Dioxus desktop UI.
 
 mod activity;
+mod agent_launcher;
 mod annotation_layer;
 mod app;
 mod canvas;
@@ -87,6 +88,10 @@ pub(crate) struct MessageComposer {
     pub comment: Signal<String>,
     pub open: Signal<bool>,
 }
+
+/// Whether the start-agent modal is open.
+#[derive(Clone, Copy)]
+pub(crate) struct AgentLauncherOpen(pub Signal<bool>);
 
 /// The live theme/mode preference (loaded in [`launch`], edited by the
 /// topbar's theme menu, persisted to the global preferences file).
