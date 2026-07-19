@@ -4222,16 +4222,18 @@ mod tests {
         );
         // alpha still receives the decision it originally owned…
         let FlushOutcome::Delivered(a_batch) = store
-            .await_flush(Duration::from_secs(1), Some("alpha".into()))
+            .await_flush(Duration::from_secs(1), awaiter(1, Some("alpha")))
             .await
+            .expect("alpha await")
         else {
             panic!("alpha not delivered");
         };
         assert_eq!(a_batch.len(), 1, "original author still gets the decision");
         // …and beta does not.
         let FlushOutcome::Delivered(b_batch) = store
-            .await_flush(Duration::from_secs(1), Some("beta".into()))
+            .await_flush(Duration::from_secs(1), awaiter(2, Some("beta")))
             .await
+            .expect("beta await")
         else {
             panic!("beta not delivered");
         };

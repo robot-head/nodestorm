@@ -35,6 +35,7 @@ struct ConnectionLease {
     sessions: Arc<crate::sessions::Sessions>,
     initialized: AtomicBool,
     awaiting: AtomicBool,
+    transport_cancel: CancellationToken,
 }
 
 impl Drop for ConnectionLease {
@@ -79,19 +80,25 @@ impl Drop for ConnectionStateGuard {
 #[derive(Clone)]
 pub struct NodestormServer {
     sessions: Arc<crate::sessions::Sessions>,
+    transport_connections: Arc<super::TransportConnections>,
     connection: Arc<ConnectionLease>,
 }
 
 impl NodestormServer {
-    pub(super) fn new(sessions: Arc<crate::sessions::Sessions>) -> Self {
+    pub(super) fn new(
+        sessions: Arc<crate::sessions::Sessions>,
+        transport_connections: Arc<super::TransportConnections>,
+    ) -> Self {
         let id = sessions.next_connection_id();
         Self {
             sessions: sessions.clone(),
+            transport_connections,
             connection: Arc::new(ConnectionLease {
                 id,
                 sessions,
                 initialized: AtomicBool::new(false),
                 awaiting: AtomicBool::new(false),
+                transport_cancel: CancellationToken::new(),
             }),
         }
     }
@@ -295,6 +302,7 @@ fn json_result<S: Serialize>(value: S) -> Result<CallToolResult, ErrorData> {
 async fn await_with_cancellation<F>(
     await_flush: F,
     request_cancel: &CancellationToken,
+    transport_cancel: &CancellationToken,
 ) -> Result<FlushOutcome, ErrorData>
 where
     F: Future<Output = Result<FlushOutcome, StoreError>>,
@@ -303,6 +311,9 @@ where
         biased;
         () = request_cancel.cancelled() => {
             Err(ErrorData::internal_error("request cancelled", None))
+        }
+        () = transport_cancel.cancelled() => {
+            Err(ErrorData::internal_error("transport disconnected", None))
         }
         outcome = await_flush => outcome.map_err(store_err),
     }
@@ -437,7 +448,12 @@ impl NodestormServer {
                 agent: p.agent.clone(),
             },
         );
-        let outcome = await_with_cancellation(await_flush, &request_cancel).await;
+        let outcome = await_with_cancellation(
+            await_flush,
+            &request_cancel,
+            &self.connection.transport_cancel,
+        )
+        .await;
         heartbeat_cancel.cancel();
         let outcome = outcome?;
 
@@ -597,6 +613,18 @@ impl ServerHandler for NodestormServer {
                 info.client_info.name.clone(),
                 info.client_info.version.clone(),
             );
+            if let Some(session_id) = context
+                .extensions
+                .get::<axum::http::request::Parts>()
+                .and_then(|parts| parts.headers.get(super::HEADER_SESSION_ID))
+                .and_then(|value| value.to_str().ok())
+            {
+                self.transport_connections.connect(
+                    session_id.to_owned(),
+                    self.connection.id,
+                    self.connection.transport_cancel.clone(),
+                );
+            }
         }
     }
 
@@ -658,6 +686,7 @@ mod tests {
 
         let request_cancel = CancellationToken::new();
         request_cancel.cancel();
+        let transport_cancel = CancellationToken::new();
         let result = await_with_cancellation(
             store.await_flush(
                 Duration::from_secs(30),
@@ -668,6 +697,7 @@ mod tests {
                 },
             ),
             &request_cancel,
+            &transport_cancel,
         )
         .await;
 

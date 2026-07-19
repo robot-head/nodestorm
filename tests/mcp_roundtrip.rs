@@ -14,6 +14,9 @@ use rmcp::model::{
 use rmcp::service::PeerRequestOptions;
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
+use rmcp::transport::streamable_http_server::session::{
+    SessionId, SessionManager, local::LocalSessionManager,
+};
 use serde_json::{Value, json};
 
 use nodestorm::model::{ChoiceId, NodeId, NodeKind, OptionId, QuestionId};
@@ -21,6 +24,18 @@ use nodestorm::sessions::{ConnectionState, Sessions};
 use nodestorm::store::{Awaiter, ConnectionId, SendStatus, SessionState, Store};
 
 async fn start_server(store: Arc<Store>) -> (u16, tokio::sync::watch::Sender<bool>, Arc<Sessions>) {
+    let (port, shutdown, sessions, _manager) = start_server_with_manager(store).await;
+    (port, shutdown, sessions)
+}
+
+async fn start_server_with_manager(
+    store: Arc<Store>,
+) -> (
+    u16,
+    tokio::sync::watch::Sender<bool>,
+    Arc<Sessions>,
+    Arc<LocalSessionManager>,
+) {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
@@ -30,13 +45,16 @@ async fn start_server(store: Arc<Store>) -> (u16, tokio::sync::watch::Sender<boo
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("session dir");
     let sessions = Sessions::single(store, dir);
+    let manager = Arc::new(LocalSessionManager::default());
     tokio::spawn({
         let sessions = sessions.clone();
+        let manager = manager.clone();
         async move {
-            let _ = nodestorm::server::serve(listener, sessions, shutdown_rx).await;
+            let _ = nodestorm::server::serve_with_manager(listener, sessions, shutdown_rx, manager)
+                .await;
         }
     });
-    (port, shutdown_tx, sessions)
+    (port, shutdown_tx, sessions, manager)
 }
 
 async fn connect_client(
@@ -128,7 +146,6 @@ async fn connection_lifecycle_is_visible() {
         Some(ConnectionState::Waiting { session, agent })
             if session == "default" && agent.as_deref() == Some("alpha")
     ));
-
     awaiting
         .cancel(Some("test disconnect".into()))
         .await
@@ -185,7 +202,6 @@ async fn transport_shutdown_releases_waiter_for_reconnect() {
     })
     .await
     .expect("first client becomes waiting");
-
     client.cancel().await.expect("transport shutdown");
     drop(awaiting);
     tokio::time::timeout(Duration::from_secs(1), async {
@@ -1094,27 +1110,22 @@ async fn await_decisions_times_out_without_losing_anything() {
     client.cancel().await.expect("client shutdown");
 }
 
-/// Regression guard for the stateless-transport fix (`stateful_mode: false`).
-/// The server must neither mint nor require an `Mcp-Session-Id`, so a client
-/// that never tracks a session — or lost the one it had — can still call tools
-/// instead of getting a `404 Session not found`. That 404 is the failure mode
-/// that made Claude Code's HTTP MCP connection unrecoverable and forced the
-/// manual curl bypass.
+/// An rmcp session evicted from the in-memory manager is restored from the
+/// external session store instead of returning an unrecoverable 404.
 #[tokio::test]
-async fn stateless_tools_call_without_session_id() {
+async fn expired_stateful_session_restores_instead_of_404() {
     let store = Store::new(SessionState::default());
-    let (port, _shutdown, _sessions) = start_server(store).await;
+    let (port, _shutdown, _sessions, manager) = start_server_with_manager(store).await;
     let url = format!("http://127.0.0.1:{port}/mcp");
     let http = reqwest::Client::new();
     let accept = "application/json, text/event-stream";
 
-    // Handshake — a stateless server should not demand a prior session.
     let init = http
         .post(&url)
         .header("content-type", "application/json")
         .header("accept", accept)
         .body(
-            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"stateless-probe","version":"1"}}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"restore-probe","version":"1"}}}"#,
         )
         .send()
         .await
@@ -1124,21 +1135,37 @@ async fn stateless_tools_call_without_session_id() {
         "initialize status {}",
         init.status()
     );
-    // Proper client courtesy; a notification needs no session id either.
-    let _ = http
+    let session_id = init
+        .headers()
+        .get("mcp-session-id")
+        .expect("stateful response has session id")
+        .to_str()
+        .expect("session id is text")
+        .to_owned();
+    let _ = init.text().await.expect("initialize body");
+
+    let initialized = http
         .post(&url)
         .header("content-type", "application/json")
         .header("accept", accept)
+        .header("mcp-session-id", &session_id)
         .body(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
         .send()
-        .await;
+        .await
+        .expect("initialized notification");
+    assert!(initialized.status().is_success());
 
-    // The crux: a tools/call carrying NO `Mcp-Session-Id` must return 200, not
-    // 404. Under the old stateful default this 404'd.
+    let session_id: SessionId = session_id.into();
+    manager
+        .close_session(&session_id)
+        .await
+        .expect("evict live session only");
+
     let resp = http
         .post(&url)
         .header("content-type", "application/json")
         .header("accept", accept)
+        .header("mcp-session-id", session_id.as_ref())
         .body(
             r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_sessions","arguments":{}}}"#,
         )
@@ -1148,11 +1175,9 @@ async fn stateless_tools_call_without_session_id() {
     assert_eq!(
         resp.status().as_u16(),
         200,
-        "tools/call without a session id must not 404 in stateless mode"
+        "stored session should restore instead of returning 404"
     );
     let body = resp.text().await.expect("body");
-    // The tool ran and returned a non-error result (envelope is unescaped;
-    // the inner payload is a JSON-stringified `sessions` listing).
     assert!(
         body.contains(r#""isError":false"#) && body.contains("sessions"),
         "tool actually ran, got: {body}"
