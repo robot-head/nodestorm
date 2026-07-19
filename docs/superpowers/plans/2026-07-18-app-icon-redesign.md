@@ -457,28 +457,43 @@
 
   In the Linux workflow, create `dist/icons/{48x48,128x128,256x256,512x512}` and copy the generated PNGs as `nodestorm.png`; include `icons` in the tar command.
 
-  In `setup.sh`, after installing the binary:
+  In `setup.sh`, resolve the candidate data home, validate all staged icons, and validate the final absolute `Exec` path before any destination write. Only then install the binary and icons and create the desktop entry:
 
   ```bash
+  if [[ "${XDG_DATA_HOME:-}" == /* && "$XDG_DATA_HOME" != *"="* ]]; then
+    DATA_HOME=$XDG_DATA_HOME
+  else
+    DATA_HOME="$HOME/.local/share"
+  fi
   for size in 48 128 256 512; do
     staged_icon="$TEMP_DIR/icons/${size}x${size}/nodestorm.png"
     [[ -f "$staged_icon" ]] || { echo "Release archive has no ${size}px launcher icon." >&2; exit 1; }
+  done
+
+  INSTALL_DIR="$DATA_HOME/nodestorm/${VERSION}"
+  desktop_exec="$INSTALL_DIR/nodestorm"
+  if [[ "$desktop_exec" != /* || "$desktop_exec" == *"="* ]]; then
+    echo "Desktop executable path cannot be represented in a desktop entry." >&2
+    exit 1
+  fi
+
+  mkdir -p "$INSTALL_DIR"
+  install -m 0755 "$STAGED_BINARY" "$INSTALL_DIR/nodestorm"
+  for size in 48 128 256 512; do
+    staged_icon="$TEMP_DIR/icons/${size}x${size}/nodestorm.png"
     icon_dir="$DATA_HOME/icons/hicolor/${size}x${size}/apps"
     mkdir -p "$icon_dir"
     install -m 0644 "$staged_icon" "$icon_dir/nodestorm.png"
   done
-  ```
 
-  Resolve `XDG_DATA_HOME` only when it is absolute and does not contain `=`; otherwise fall back to `${HOME}/.local/share`. Before creating any destination, fail if `$INSTALL_DIR/nodestorm` is not absolute or still contains `=`, because freedesktop `Exec` executable paths cannot represent that character.
-
-  ```bash
   desktop_dir="$DATA_HOME/applications"
   mkdir -p "$desktop_dir"
-  desktop_exec="$INSTALL_DIR/nodestorm"
   desktop_exec=${desktop_exec//\\/\\\\}
   desktop_exec=${desktop_exec//\"/\\\"}
   desktop_exec=${desktop_exec//\$/\\$}
   desktop_exec=${desktop_exec//\`/\\\`}
+  desktop_exec=${desktop_exec//%/%%}
+  desktop_exec=${desktop_exec//\\/\\\\}
   {
     printf '[Desktop Entry]\nType=Application\nVersion=1.0\n'
     printf 'Name=Nodestorm\nComment=Visual architecture brainstorming\n'
