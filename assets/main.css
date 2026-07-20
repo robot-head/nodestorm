@@ -1750,8 +1750,9 @@ fieldset.agent-launch-options {
 
 .minimap {
   position: absolute;
-  right: 12px;
-  bottom: 12px;
+  right: 14px;
+  /* Sits above the canvas-controls row, which owns the bottom-right corner. */
+  bottom: 56px;
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -1856,7 +1857,9 @@ fieldset.agent-launch-options {
   position: absolute;
   left: 14px;
   bottom: 14px;
-  max-width: min(420px, calc(100vw - 28px));
+  /* Collapsed: stay clear of the minimap column (168px + margins) so its
+     drag surface never swallows clicks meant for the feed. */
+  max-width: clamp(200px, calc(100vw - 210px), 420px);
   background: color-mix(in srgb, var(--bg-panel) 88%, transparent);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -1868,10 +1871,16 @@ fieldset.agent-launch-options {
 }
 
 .activity.expanded {
+  /* Expanded floats above the minimap (z 16 > 15), so it may use full width. */
+  max-width: min(420px, calc(100vw - 28px));
   max-height: min(60vh, 520px);
   overflow-x: hidden;
   overflow-y: auto;
   z-index: 16;
+}
+
+.activity:not(.expanded) {
+  cursor: pointer;
 }
 
 .activity-head {
