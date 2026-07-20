@@ -66,6 +66,48 @@ pub fn App() -> Element {
         quit_confirm: Signal::new(false),
     });
 
+    let desktop = dioxus::desktop::use_window();
+    let panel = use_context::<super::TerminalPanel>();
+    let mut quit_confirm = panel.quit_confirm;
+
+    // While agents run, a close request hides the window (tao cannot veto a
+    // close); the handler below flips it back visible with the confirm open.
+    use_effect({
+        let desktop = desktop.clone();
+        let manager = terminal_manager.clone();
+        move || {
+            let _ = terminals.read(); // re-run on terminal changes
+            let behaviour = if manager.running_count() > 0 {
+                dioxus::desktop::WindowCloseBehaviour::WindowHides
+            } else {
+                dioxus::desktop::WindowCloseBehaviour::WindowCloses
+            };
+            desktop.set_close_behavior(behaviour);
+        }
+    });
+    dioxus::desktop::use_wry_event_handler({
+        let manager = terminal_manager.clone();
+        move |event, _| {
+            use dioxus::desktop::tao::event::{Event, WindowEvent};
+            if let Event::WindowEvent {
+                event: WindowEvent::CloseRequested,
+                ..
+            } = event
+                && manager.running_count() > 0
+            {
+                quit_confirm.set(true);
+            }
+        }
+    });
+    use_effect({
+        let desktop = desktop.clone();
+        move || {
+            if quit_confirm() {
+                desktop.window.set_visible(true);
+            }
+        }
+    });
+
     // Theme preference: seeded from the file loaded in launch(); the CSS
     // reacts through data-theme/data-mode below, the native title bar
     // through set_theme (Auto = follow the OS).
@@ -256,6 +298,42 @@ pub fn App() -> Element {
             TerminalDock {}
             if launcher_open() {
                 AgentLauncher {}
+            }
+            if quit_confirm() {
+                div { class: "term-confirm-overlay",
+                    div { class: "term-confirm", role: "alertdialog",
+                        p {
+                            {
+                                let n = terminal_manager.running_count();
+                                format!("{n} agent{} still running. Quit and stop {}?",
+                                    if n == 1 { " is" } else { "s are" },
+                                    if n == 1 { "it" } else { "them" })
+                            }
+                        }
+                        div { class: "term-confirm-actions",
+                            button {
+                                class: "btn",
+                                onclick: move |_| quit_confirm.set(false),
+                                "Keep running"
+                            }
+                            button {
+                                class: "btn btn-primary",
+                                onclick: {
+                                    let desktop = desktop.clone();
+                                    let manager = terminal_manager.clone();
+                                    move |_| {
+                                        manager.kill_all();
+                                        desktop.set_close_behavior(
+                                            dioxus::desktop::WindowCloseBehaviour::WindowCloses,
+                                        );
+                                        desktop.close();
+                                    }
+                                },
+                                "Quit and stop agents"
+                            }
+                        }
+                    }
+                }
             }
             if let Some(toast) = meta.read().toast.clone() {
                 div {

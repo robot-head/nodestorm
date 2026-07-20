@@ -110,8 +110,6 @@ pub(crate) struct TerminalPanel {
     pub open: Signal<bool>,
     pub focused: Signal<Option<String>>,
     pub confirm_close: Signal<Option<String>>,
-    // ponytail: read by the quit-confirmation flow (Task 6), not yet wired up.
-    #[allow(dead_code)]
     pub quit_confirm: Signal<bool>,
 }
 
