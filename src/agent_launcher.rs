@@ -432,23 +432,85 @@ pub fn parse_remote_probe(output: &str, wants_worktree: bool) -> anyhow::Result<
 
 pub fn password_only_rejection(stderr: &str) -> bool {
     let stderr = stderr.to_ascii_lowercase();
-    stderr.contains("permission denied")
-        && (stderr.contains("password") || stderr.contains("keyboard-interactive"))
+    stderr.lines().any(|line| {
+        let Some((_, methods)) = line.split_once("permission denied (") else {
+            return false;
+        };
+        let Some((methods, _)) = methods.split_once(')') else {
+            return false;
+        };
+        methods
+            .split(',')
+            .any(|method| matches!(method.trim(), "password" | "keyboard-interactive"))
+    })
 }
 
-pub fn probe_workspace(req: &LaunchRequest) -> WorkspaceProbe {
-    if matches!(req.target, LaunchTarget::Local) {
-        return WorkspaceProbe::Checked(check_local_workspace(req));
+fn parsed_remote_probe(output: &str, wants_worktree: bool) -> WorkspaceProbe {
+    match parse_remote_probe(output, wants_worktree) {
+        Ok(checked) => WorkspaceProbe::Checked(checked),
+        Err(error) => WorkspaceProbe::TransportError(error.to_string()),
     }
-    let command = match remote_probe_command(req) {
-        Ok(command) => command,
+}
+
+const REMOTE_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+fn terminate_and_reap(child: &mut std::process::Child) -> std::io::Result<()> {
+    if let Err(error) = child.kill() {
+        if child.try_wait()?.is_none() {
+            return Err(error);
+        }
+    }
+    child.wait().map(|_| ())
+}
+
+fn output_with_timeout(
+    mut child: std::process::Child,
+    timeout: std::time::Duration,
+) -> std::io::Result<Option<std::process::Output>> {
+    let started = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().map(Some),
+            Ok(None) if started.elapsed() < timeout => {
+                std::thread::sleep(
+                    std::time::Duration::from_millis(10)
+                        .min(timeout.saturating_sub(started.elapsed())),
+                );
+            }
+            Ok(None) => {
+                terminate_and_reap(&mut child)?;
+                return Ok(None);
+            }
+            Err(error) => {
+                let _ = terminate_and_reap(&mut child);
+                return Err(error);
+            }
+        }
+    }
+}
+
+fn run_remote_probe(
+    command: &CommandSpec,
+    wants_worktree: bool,
+    timeout: std::time::Duration,
+) -> WorkspaceProbe {
+    let mut process = std::process::Command::new(&command.program);
+    process
+        .args(&command.args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    if let Some(dir) = &command.current_dir {
+        process.current_dir(dir);
+    }
+    let child = match process.spawn() {
+        Ok(child) => child,
         Err(error) => return WorkspaceProbe::TransportError(error.to_string()),
     };
-    let output = match std::process::Command::new(&command.program)
-        .args(&command.args)
-        .output()
-    {
-        Ok(output) => output,
+    let output = match output_with_timeout(child, timeout) {
+        Ok(Some(output)) => output,
+        Ok(None) => {
+            return WorkspaceProbe::TransportError("remote workspace probe timed out".into());
+        }
         Err(error) => return WorkspaceProbe::TransportError(error.to_string()),
     };
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -459,13 +521,22 @@ pub fn probe_workspace(req: &LaunchRequest) -> WorkspaceProbe {
             WorkspaceProbe::TransportError(stderr.trim().to_owned())
         };
     }
-    match parse_remote_probe(
-        &String::from_utf8_lossy(&output.stdout),
-        matches!(req.git_mode, GitMode::NewWorktree { .. }),
-    ) {
-        Ok(checked) => WorkspaceProbe::Checked(checked),
-        Err(error) => WorkspaceProbe::TransportError(error.to_string()),
+    parsed_remote_probe(&String::from_utf8_lossy(&output.stdout), wants_worktree)
+}
+
+pub fn probe_workspace(req: &LaunchRequest) -> WorkspaceProbe {
+    if matches!(req.target, LaunchTarget::Local) {
+        return WorkspaceProbe::Checked(check_local_workspace(req));
     }
+    let command = match remote_probe_command(req) {
+        Ok(command) => command,
+        Err(error) => return WorkspaceProbe::TransportError(error.to_string()),
+    };
+    run_remote_probe(
+        &command,
+        matches!(req.git_mode, GitMode::NewWorktree { .. }),
+        REMOTE_PROBE_TIMEOUT,
+    )
 }
 
 pub fn inspect_local(req: &LaunchRequest) -> anyhow::Result<LocalInspection> {
@@ -992,9 +1063,72 @@ mod tests {
     }
 
     #[parameterized(
+        missing = {
+            "NODESTORM_REPOSITORY\tvalid\t\nNODESTORM_WORKTREE\tvalid\t\n",
+            "omitted branch status"
+        },
+        duplicate = {
+            "NODESTORM_REPOSITORY\tvalid\t\nNODESTORM_REPOSITORY\tvalid\t\nNODESTORM_BRANCH\tvalid\t\nNODESTORM_WORKTREE\tvalid\t\n",
+            "duplicate remote repository status"
+        },
+        malformed = {
+            "NODESTORM_REPOSITORY\tunknown\t\nNODESTORM_BRANCH\tvalid\t\nNODESTORM_WORKTREE\tvalid\t\n",
+            "invalid field result"
+        },
+    )]
+    fn remote_probe_parser_rejects_invalid_statuses(output: &str, expected: &str) {
+        assert2::assert!(
+            parse_remote_probe(output, true)
+                .unwrap_err()
+                .to_string()
+                .contains(expected)
+        );
+        assert2::assert!(
+            matches!(parsed_remote_probe(output, true), WorkspaceProbe::TransportError(message) if message.contains(expected))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remote_probe_timeout_terminates_and_reaps_child() {
+        let root =
+            std::env::temp_dir().join(format!("nodestorm-probe-timeout-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let pid_file = root.join("pid");
+        let command = CommandSpec {
+            program: "sh".into(),
+            args: vec![
+                "-c".into(),
+                format!(
+                    "printf '%s' $$ > {}; exec sleep 10",
+                    posix_quote(&pid_file.to_string_lossy())
+                ),
+            ],
+            current_dir: None,
+        };
+
+        let result = run_remote_probe(&command, false, std::time::Duration::from_millis(250));
+
+        assert2::assert!(
+            matches!(result, WorkspaceProbe::TransportError(message) if message.contains("timed out"))
+        );
+        let pid = std::fs::read_to_string(&pid_file).unwrap();
+        assert2::assert!(
+            !std::process::Command::new("kill")
+                .args(["-0", pid.trim()])
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[parameterized(
         password = { "Permission denied (publickey,password).", true },
         keyboard = { "Permission denied (publickey,keyboard-interactive).", true },
         key_only = { "Permission denied (publickey).", false },
+        password_in_host = { "alice@password-vault: Permission denied (publickey).", false },
         host_key = { "Host key verification failed.", false },
         timeout = { "ssh: connect to host build-box port 22: Connection timed out", false },
     )]
