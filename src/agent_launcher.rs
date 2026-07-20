@@ -355,6 +355,49 @@ fn remote_probe_script(req: &LaunchRequest) -> anyhow::Result<String> {
     Ok(lines.join("\n"))
 }
 
+fn check_remote_input(req: &LaunchRequest) -> Option<WorkspaceCheck> {
+    let repository = if req.repository.trim().is_empty() {
+        FieldCheck::Invalid("repository is required".into())
+    } else if !req.repository.starts_with('/') {
+        FieldCheck::Invalid("remote repository must be absolute".into())
+    } else {
+        FieldCheck::Valid
+    };
+    let branch = if repository != FieldCheck::Valid {
+        FieldCheck::Invalid("select a valid Git repository first".into())
+    } else if req.branch.trim().is_empty()
+        || checked_output("git", &["check-ref-format", "--branch", &req.branch]).is_err()
+    {
+        FieldCheck::Invalid("branch name is invalid".into())
+    } else {
+        FieldCheck::Valid
+    };
+    let worktree = match &req.git_mode {
+        GitMode::ExistingCheckout => None,
+        GitMode::NewWorktree { path } if path.trim().is_empty() => {
+            Some(FieldCheck::Invalid("worktree path is required".into()))
+        }
+        GitMode::NewWorktree { path } if !path.starts_with('/') => Some(FieldCheck::Invalid(
+            "remote worktree path must be absolute".into(),
+        )),
+        GitMode::NewWorktree { .. } => Some(FieldCheck::Valid),
+    };
+    let checked = WorkspaceCheck {
+        repository,
+        branch,
+        worktree,
+    };
+    let invalid = [
+        Some(&checked.repository),
+        Some(&checked.branch),
+        checked.worktree.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|check| matches!(check, FieldCheck::Invalid(_)));
+    invalid.then_some(checked)
+}
+
 pub fn remote_probe_command(req: &LaunchRequest) -> anyhow::Result<CommandSpec> {
     let LaunchTarget::Ssh { alias } = &req.target else {
         anyhow::bail!("remote workspace probe requires an SSH target");
@@ -527,6 +570,9 @@ fn run_remote_probe(
 pub fn probe_workspace(req: &LaunchRequest) -> WorkspaceProbe {
     if matches!(req.target, LaunchTarget::Local) {
         return WorkspaceProbe::Checked(check_local_workspace(req));
+    }
+    if let Some(checked) = check_remote_input(req) {
+        return WorkspaceProbe::Checked(checked);
     }
     let command = match remote_probe_command(req) {
         Ok(command) => command,
@@ -1047,6 +1093,48 @@ mod tests {
         assert2::assert!(script.contains("NODESTORM_WORKTREE"));
         assert2::assert!(!script.contains("mkdir"));
         assert2::assert!(!script.contains("worktree add"));
+    }
+
+    #[parameterized(
+        empty_repository = { "", "/srv/api-worktrees/feature/check", "repository is required", None },
+        relative_repository = { "srv/api", "/srv/api-worktrees/feature/check", "remote repository must be absolute", None },
+        empty_worktree = { "/srv/api", "", "", Some("worktree path is required") },
+        relative_worktree = { "/srv/api", "srv/api-worktrees/feature/check", "", Some("remote worktree path must be absolute") },
+    )]
+    fn remote_probe_reports_locally_invalid_paths_per_field_without_transport_error(
+        repository: &str,
+        worktree: &str,
+        repository_error: &str,
+        worktree_error: Option<&str>,
+    ) {
+        let mut req = request(AgentKind::Claude);
+        req.target = LaunchTarget::Ssh {
+            alias: "host-that-must-not-be-contacted".into(),
+        };
+        req.repository = repository.into();
+        req.git_mode = GitMode::NewWorktree {
+            path: worktree.into(),
+        };
+
+        let WorkspaceProbe::Checked(checked) = probe_workspace(&req) else {
+            panic!("locally invalid input must not be classified as a transport failure");
+        };
+        if repository_error.is_empty() {
+            assert2::assert!(checked.repository == FieldCheck::Valid);
+            assert2::assert!(checked.branch == FieldCheck::Valid);
+        } else {
+            assert2::assert!(checked.repository == FieldCheck::Invalid(repository_error.into()));
+            assert2::assert!(
+                checked.branch == FieldCheck::Invalid("select a valid Git repository first".into())
+            );
+        }
+        assert2::assert!(
+            checked.worktree
+                == Some(match worktree_error {
+                    Some(message) => FieldCheck::Invalid(message.into()),
+                    None => FieldCheck::Valid,
+                })
+        );
     }
 
     #[test]

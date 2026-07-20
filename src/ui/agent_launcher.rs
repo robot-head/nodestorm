@@ -385,8 +385,36 @@ fn start_attempt(
     });
 }
 
-fn is_current_generation(current: u64, completed: u64) -> bool {
-    current == completed
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ValidationPhase {
+    Editing,
+    Checking,
+}
+
+struct ValidationAttempt {
+    generation: u64,
+    phase: ValidationPhase,
+}
+
+impl ValidationAttempt {
+    fn new(generation: u64) -> Self {
+        Self {
+            generation,
+            phase: ValidationPhase::Editing,
+        }
+    }
+
+    fn begin_check(&mut self, current_generation: u64) -> bool {
+        if current_generation != self.generation || self.phase != ValidationPhase::Editing {
+            return false;
+        }
+        self.phase = ValidationPhase::Checking;
+        true
+    }
+
+    fn publish(&self, current_generation: u64) -> bool {
+        current_generation == self.generation && self.phase == ValidationPhase::Checking
+    }
 }
 
 fn queue_validation(
@@ -399,13 +427,14 @@ fn queue_validation(
     generation.set(queued);
     validation.set(ValidationUi::editing(worktree));
     spawn(async move {
+        let mut attempt = ValidationAttempt::new(queued);
         tokio::time::sleep(VALIDATION_COOLDOWN).await;
-        if !is_current_generation(generation(), queued) {
+        if !attempt.begin_check(generation()) {
             return;
         }
         validation.set(ValidationUi::checking(worktree));
         let probe = tokio::task::spawn_blocking(move || probe_workspace(&request)).await;
-        if !is_current_generation(generation(), queued) {
+        if !attempt.publish(generation()) {
             return;
         }
         validation.set(match probe {
@@ -857,16 +886,27 @@ mod tests {
         assert2::assert!(state.allows_launch(true));
     }
 
-    #[parameterized(
-        same = { 4, 4, true },
-        stale = { 5, 4, false },
-    )]
-    fn only_current_validation_generation_can_publish(
-        current: u64,
-        completed: u64,
-        expected: bool,
-    ) {
-        assert2::assert!(is_current_generation(current, completed) == expected);
+    #[test]
+    fn validation_attempt_advances_from_editing_through_publication() {
+        let mut attempt = ValidationAttempt::new(4);
+
+        assert2::assert!(attempt.begin_check(4));
+        assert2::assert!(attempt.publish(4));
+    }
+
+    #[test]
+    fn stale_validation_attempt_is_rejected_before_checking() {
+        let mut attempt = ValidationAttempt::new(4);
+
+        assert2::assert!(!attempt.begin_check(5));
+    }
+
+    #[test]
+    fn validation_attempt_that_becomes_stale_is_rejected_before_publication() {
+        let mut attempt = ValidationAttempt::new(4);
+
+        assert2::assert!(attempt.begin_check(4));
+        assert2::assert!(!attempt.publish(5));
     }
 
     fn tmp_path(name: &str) -> std::path::PathBuf {
