@@ -140,6 +140,7 @@ pub fn TopBar(
     let send_class = match m.send_status {
         SendStatus::Sent => "btn btn-send sent",
         SendStatus::Failed => "btn btn-send failed",
+        _ if can_send => "btn btn-send armed",
         _ => "btn btn-send",
     };
     let connection_rows = connections.read().clone();

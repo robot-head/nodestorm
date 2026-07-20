@@ -119,7 +119,13 @@ pub fn ChoicePanel(
     rsx! {
         aside { class: "panel",
             div { class: "panel-head",
-                h2 { "{node.label}" }
+                h2 {
+                    span {
+                        class: "panel-glyph tag-{super::node_card::status_class(node.status)}",
+                        "{super::node_card::kind_glyph(node.kind)}"
+                    }
+                    "{node.label}"
+                }
                 button {
                     class: "ctl-btn",
                     title: "Close",
@@ -542,6 +548,9 @@ fn ChoiceBlock(
                         }
                     },
                     "Skip this decision"
+                }
+                p { class: "choice-hint",
+                    "decisions queue until you Send ϟ — hover an option to preview its ripple"
                 }
             }
         }

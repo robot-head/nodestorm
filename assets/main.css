@@ -1,36 +1,37 @@
 /* nodestorm design tokens & base styles */
 
 :root {
-  --bg: #0f1117;
-  --bg-panel: #171a23;
-  --bg-card: #1c2030;
-  --bg-card-hover: #222741;
-  --border: #2a2f42;
-  --text: #e6e9f2;
-  --text-dim: #9aa1b5;
+  --bg: #0a0d15;
+  --bg-panel: #111624;
+  --bg-card: #171e31;
+  --bg-card-hover: #1d2740;
+  --border: #1e2a42;
+  --text: #e8ecf4;
+  --text-dim: #9aa3ba;
   --accent: #6c9ef8;
 
   /* Storm identity: derived from the active palette, never per-theme. */
   --glow: color-mix(in srgb, var(--accent) 55%, transparent);
   --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
   --font-display: "Space Grotesk", "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
 
   /* status palette */
   --status-existing: #566076;
   --status-proposed: #6c9ef8;
   --status-modified: #f0b34e;
   --status-affected: #b48af8;
-  --status-removed: #f06a6a;
+  --status-removed: #f08a8a;
 
-  --badge-open: #f0b34e;
-  --badge-decided: #5ec98a;
-  --badge-notes: #9aa1b5;
+  --badge-open: #ffd43d;
+  --badge-decided: #7dd88f;
+  --badge-notes: #9aa3ba;
 
   /* on-color text, shadows, and canvas furniture */
-  --on-accent: #0e1118;
+  --on-accent: #0a0d15;
   --on-badge: #10131c;
   --shadow: #000000;
-  --dot-grid: #1b1f2c;
+  --dot-grid: #172033;
   --mini-viewport-fill: color-mix(in srgb, var(--text) 8%, transparent);
 }
 
@@ -44,7 +45,7 @@ body {
   height: 100%;
   background: var(--bg);
   color: var(--text);
-  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 14px;
   overflow: hidden;
   user-select: none;
@@ -67,14 +68,21 @@ body {
 
 /* ---------- top bar ---------- */
 
+/* Floating "storm console": a rounded bar inset from the window edges,
+   still in normal flow so canvas coordinates and dropdown anchoring keep
+   working. */
 .topbar {
   display: flex;
   align-items: center;
   gap: 10px;
   height: 48px;
-  padding: 0 16px;
-  background: var(--bg-panel);
-  border-bottom: 1px solid var(--border);
+  margin: 10px 12px;
+  padding: 0 12px;
+  background: color-mix(in srgb, var(--bg-panel) 92%, transparent);
+  backdrop-filter: blur(8px);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  border-radius: 14px;
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--shadow) 40%, transparent);
   flex: 0 0 auto;
   z-index: 10;
   container-type: inline-size;
@@ -92,10 +100,12 @@ body {
 
 .topbar-mark {
   display: block;
-  flex: 0 0 17px;
-  width: 17px;
-  height: 17px;
-  color: var(--accent);
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  /* Brand volt yellow where the family defines it (nodestorm), accent
+     elsewhere. */
+  color: var(--volt, var(--accent));
 }
 
 .topbar-word {
@@ -186,7 +196,8 @@ body {
   border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
   border-radius: 999px;
   overflow: hidden;
-  font-size: 11.5px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
   white-space: nowrap;
 }
 
@@ -219,8 +230,8 @@ body {
 }
 
 .seg-open {
-  color: var(--badge-open);
-  background: color-mix(in srgb, var(--badge-open) 10%, transparent);
+  color: color-mix(in srgb, var(--accent) 80%, var(--text));
+  background: var(--accent-soft);
 }
 
 .seg-queued {
@@ -290,41 +301,30 @@ body {
   transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
 }
 
+/* Flat console controls: quiet outlined pods on the floating bar. */
 .topbar .btn,
 .topbar .send-comment,
 .topbar .search-box,
 .topbar .status-chip {
-  border-radius: 10px;
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 65%, transparent),
-    0 2px 0 color-mix(in srgb, var(--border) 72%, transparent),
-    0 5px 10px color-mix(in srgb, var(--shadow) 20%, transparent);
+  border-radius: 9px;
+  box-shadow: none;
 }
 
-.topbar .btn,
+.topbar .btn:not(.btn-send) {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--accent) 20%, var(--border));
+}
+
+/* Search and compose read as inset wells on the console bar. */
 .topbar .search-box,
 .topbar .send-comment {
-  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease,
-    transform 120ms ease;
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 15%, var(--border));
 }
 
-.topbar .btn:hover:not(:disabled),
-.topbar .search-box:hover,
-.topbar .send-comment:hover {
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 72%, transparent),
-    0 3px 0 color-mix(in srgb, var(--border) 72%, transparent),
-    0 7px 12px color-mix(in srgb, var(--shadow) 24%, transparent);
-}
-
-.topbar .btn:active:not(:disabled),
-.topbar .search-box:active,
-.topbar .send-comment:active {
-  transform: translateY(2px);
-  box-shadow:
-    inset 0 1px 2px color-mix(in srgb, var(--shadow) 20%, transparent),
-    0 1px 0 color-mix(in srgb, var(--border) 72%, transparent),
-    0 2px 5px color-mix(in srgb, var(--shadow) 14%, transparent);
+.topbar .btn:not(.btn-send):hover:not(:disabled) {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
 }
 
 .topbar .btn:focus-visible,
@@ -345,15 +345,30 @@ body {
 }
 
 .btn-send {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--on-accent);
+  background: var(--volt, var(--accent));
+  border-color: var(--volt, var(--accent));
+  color: var(--on-volt, var(--on-accent));
   font-weight: 700;
 }
 
 .btn-send:hover:not(:disabled) {
-  background: var(--accent);
-  box-shadow: 0 0 12px var(--glow);
+  background: var(--volt, var(--accent));
+  box-shadow: 0 0 12px color-mix(in srgb, var(--volt, var(--accent)) 55%, transparent);
+}
+
+/* Something is queued and deliverable: pulse a volt ring. */
+@keyframes ns-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--volt, var(--accent)) 55%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 9px transparent;
+  }
+}
+
+.btn-send.armed {
+  animation: ns-pulse 2.2s infinite;
 }
 
 .btn-send.sent {
@@ -374,9 +389,9 @@ body {
 }
 
 .ctl-btn {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 999px;
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+  border-radius: 8px;
   color: var(--text-dim);
   padding: 4px 10px;
   cursor: pointer;
@@ -699,15 +714,19 @@ fieldset.agent-launch-options {
 
 /* ---------- side panel ---------- */
 
+/* Floating inspector card, inset from the window edge like the topbar. */
 .panel {
   width: min(360px, 100vw);
   flex: 0 0 auto;
+  margin: 0 12px 12px 0;
   background: var(--bg-panel);
-  border-left: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: 16px;
+  box-shadow: -16px 0 44px color-mix(in srgb, var(--shadow) 45%, transparent);
   overflow-x: hidden;
   overflow-y: auto;
   overflow-wrap: anywhere;
-  padding: 14px 16px 24px;
+  padding: 16px 18px 24px;
   user-select: text;
 }
 
@@ -721,8 +740,17 @@ fieldset.agent-launch-options {
 .panel-head h2 {
   min-width: 0;
   margin: 0;
-  font-size: 17px;
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  font-size: 19px;
+  font-weight: 700;
   overflow-wrap: anywhere;
+}
+
+.panel-glyph {
+  flex: 0 0 auto;
+  font-size: 15px;
 }
 
 .panel-head .ctl-btn {
@@ -760,10 +788,10 @@ fieldset.agent-launch-options {
 
 .choice {
   margin-top: 16px;
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--accent) 14%, var(--border));
   border-radius: 12px;
   padding: 12px;
-  background: var(--bg);
+  background: transparent;
 }
 
 .choice-decided {
@@ -898,17 +926,17 @@ fieldset.agent-launch-options {
 }
 
 .option {
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: 12px;
+  padding: 12px 13px;
   cursor: pointer;
-  background: var(--bg-card);
-  transition: border-color 100ms ease, background 100ms ease;
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  transition: border-color 150ms ease, background 150ms ease;
 }
 
 .option:hover {
   border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
-  background: var(--bg-card-hover);
+  background: var(--accent-soft);
 }
 
 .option.picked {
@@ -1039,13 +1067,23 @@ fieldset.agent-launch-options {
 .option-affects {
   min-width: 0;
   margin-top: 7px;
-  font-size: 11.5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
   color: var(--status-affected);
   overflow-wrap: anywhere;
 }
 
 .affect-chip {
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
+}
+
+/* Console footnote under the decision list. */
+.choice-hint {
+  margin: 10px 0 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
 }
 
 .panel-notes {
@@ -1134,8 +1172,22 @@ fieldset.agent-launch-options {
 .panel-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 7px;
   margin: 0 0 12px;
+}
+
+/* Equal-width action row (Edit / Connect → / Delete). */
+.panel-actions .btn {
+  flex: 1 1 0;
+  justify-content: center;
+  border-radius: 8px;
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+  background: var(--accent-soft);
+}
+
+.panel-actions .btn-danger {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--status-removed) 40%, transparent);
 }
 
 .btn-danger {
@@ -1826,8 +1878,9 @@ fieldset.agent-launch-options {
   color: var(--text-dim);
   cursor: pointer;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-size: 10.5px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.12em;
+  font-size: 9.5px;
   padding: 2px 0 4px;
 }
 
@@ -1910,17 +1963,16 @@ fieldset.agent-launch-options {
 
 /* ---------- swimlanes ---------- */
 
+/* Blueprint bands: a dashed top rule and a whisper of tint, labeled in
+   small caps monospace. */
 .swimlane {
   position: absolute;
   z-index: auto;
-  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  border-radius: 14px;
+  border: 0;
+  border-top: 1px dashed color-mix(in srgb, var(--text-dim) 40%, transparent);
+  border-radius: 2px;
   background: color-mix(in srgb, var(--text-dim) 5%, transparent);
   pointer-events: none;
-}
-
-.swimlane:nth-child(even) {
-  background: color-mix(in srgb, var(--text-dim) 9%, transparent);
 }
 
 .swimlane.drop-target {
@@ -1931,18 +1983,18 @@ fieldset.agent-launch-options {
 .swimlane-label {
   position: absolute;
   z-index: 4;
-  top: 8px;
-  left: 12px;
+  top: 6px;
+  left: 10px;
   display: inline-flex;
   align-items: center;
   gap: 4px;
   padding: 1px 6px;
   border-radius: 6px;
   background: color-mix(in srgb, var(--bg) 88%, transparent);
-  font-family: var(--font-display);
-  font-size: 14px;
+  font-family: var(--font-mono);
+  font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.16em;
   color: var(--text-dim);
   text-transform: uppercase;
   pointer-events: auto;
@@ -2244,18 +2296,23 @@ fieldset.agent-launch-options {
 .node-card {
   position: absolute;
   z-index: 1;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
+  background: linear-gradient(
+    180deg,
+    var(--bg-card),
+    color-mix(in srgb, var(--bg-card) 72%, var(--bg))
+  );
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
   border-radius: 12px;
   padding: 8px 13px 10px;
   cursor: pointer;
   overflow: hidden;
-  transition: box-shadow 120ms ease, border-color 120ms ease,
+  transition: box-shadow 250ms ease, border-color 250ms ease,
     background 120ms ease, transform 120ms ease;
-  box-shadow: 0 2px 10px color-mix(in srgb, var(--shadow) 35%, transparent);
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--shadow) 35%, transparent);
 }
 
-.node-card::before {
+/* Status rail only at far zoom, where the tag chips are not rendered. */
+.node-card.zoom-far::before {
   content: "";
   position: absolute;
   inset: 0 0 auto 0;
@@ -2267,7 +2324,7 @@ fieldset.agent-launch-options {
   z-index: 2;
   background: var(--bg-card-hover);
   transform: translateY(-1px);
-  box-shadow: 0 4px 14px color-mix(in srgb, var(--shadow) 40%, transparent);
+  box-shadow: 0 10px 26px color-mix(in srgb, var(--shadow) 40%, transparent);
 }
 
 .node-card.selected {
@@ -2287,57 +2344,56 @@ fieldset.agent-launch-options {
 .node-card.status-affected::before { background: var(--status-affected); }
 .node-card.status-removed::before { background: var(--status-removed); }
 
+/* Glyph takes the status color, like the console mock. */
+.node-card.status-proposed .node-glyph { color: var(--status-proposed); }
+.node-card.status-modified .node-glyph { color: var(--status-modified); }
+.node-card.status-affected .node-glyph { color: var(--status-affected); }
+.node-card.status-removed .node-glyph { color: var(--status-removed); }
+
 .node-card.status-removed {
   opacity: 0.65;
 }
 
-/* Build lifecycle: a bottom rail complementing the top status rail. */
-.node-card[class*="build-"]::after {
+/* Build lifecycle rail, far zoom only (the meta row is not rendered there). */
+.node-card.zoom-far[class*="build-"]::after {
   content: "";
   position: absolute;
   inset: auto 0 0 0;
   height: 3px;
   background: var(--text-dim);
 }
-.node-card.build-planned::after { background: var(--text-dim); }
-.node-card.build-building::after {
+.node-card.zoom-far.build-planned::after { background: var(--text-dim); }
+.node-card.zoom-far.build-building::after {
   background: repeating-linear-gradient(
     90deg,
     var(--status-modified) 0 8px,
     transparent 8px 14px
   );
 }
-.node-card.build-built::after { background: var(--accent); }
-.node-card.build-verified::after { background: var(--badge-decided); }
+.node-card.zoom-far.build-built::after { background: var(--accent); }
+.node-card.zoom-far.build-verified::after { background: var(--badge-decided); }
 
 .node-build {
   flex: 0 0 auto;
-  font-size: 10px;
+  font-size: 9.5px;
   font-weight: 600;
   letter-spacing: 0.04em;
-  padding: 1px 7px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
+  padding: 0;
+  border-radius: 0;
+  border: 0;
   white-space: nowrap;
 }
 .build-tag-planned {
   color: var(--text-dim);
-  border-color: color-mix(in srgb, var(--text-dim) 40%, transparent);
 }
 .build-tag-building {
   color: var(--status-modified);
-  border-color: color-mix(in srgb, var(--status-modified) 45%, transparent);
-  background: color-mix(in srgb, var(--status-modified) 10%, transparent);
 }
 .build-tag-built {
   color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 .build-tag-verified {
   color: var(--badge-decided);
-  border-color: color-mix(in srgb, var(--badge-decided) 45%, transparent);
-  background: color-mix(in srgb, var(--badge-decided) 12%, transparent);
 }
 
 .seg-build {
@@ -2393,7 +2449,7 @@ fieldset.agent-launch-options {
   overflow: hidden;
   overflow-wrap: anywhere;
   font-family: var(--font-display);
-  font-weight: 500;
+  font-weight: 600;
   font-size: 13.5px;
   letter-spacing: -0.01em;
   line-height: 18px;
@@ -2402,21 +2458,30 @@ fieldset.agent-launch-options {
 .node-meta {
   min-width: 0;
   display: flex;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
   min-height: 20px;
-  font-size: 11px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
   color: var(--text-dim);
 }
 
+/* Outlined status chip, PCB-label style. */
 .node-status-tag {
-  padding: 0;
-  border-radius: 0;
-  font-size: 10px;
+  padding: 1px 5px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  font-size: 9.5px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.07em;
   background: none;
+}
+
+.tag-existing {
+  color: var(--status-existing);
 }
 
 .tag-proposed {
@@ -2512,17 +2577,17 @@ fieldset.agent-launch-options {
 }
 
 .badge {
-  font-size: 11px;
-  padding: 1px 8px;
-  border-radius: 999px;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 5px;
   border: 1px solid var(--border);
 }
 
 .badge-open {
-  color: var(--on-badge);
-  background: var(--badge-open);
-  border-color: var(--badge-open);
-  font-weight: 700;
+  color: var(--badge-open);
+  background: color-mix(in srgb, var(--badge-open) 14%, transparent);
+  border-color: transparent;
+  font-weight: 600;
 }
 
 .badge-decided {
@@ -2623,27 +2688,32 @@ fieldset.agent-launch-options {
    section and the registry in lock-step. Selectors are bare attributes (not
    :root-scoped) so a picker row can re-scope a family locally for swatches. */
 @supports (color: light-dark(#000, #fff)) {
-  [data-theme="nodestorm"] { /* Nodestorm product palette */
-    --bg: light-dark(#f2f4fa, #0f1117);
-    --bg-panel: light-dark(#fafbfe, #171a23);
-    --bg-card: light-dark(#ffffff, #1c2030);
-    --bg-card-hover: light-dark(#eef2fe, #222741);
-    --border: light-dark(#d8dce9, #2a2f42);
-    --text: light-dark(#23283a, #e6e9f2);
-    --text-dim: light-dark(#5f6880, #9aa1b5);
+  [data-theme="nodestorm"] { /* Nodestorm storm-console / warm-paper palette */
+    --bg: light-dark(#f3f1ea, #0a0d15);
+    --bg-panel: light-dark(#ffffff, #111624);
+    --bg-card: light-dark(#ffffff, #171e31);
+    --bg-card-hover: light-dark(#faf9f5, #1d2740);
+    --border: light-dark(rgba(28, 32, 48, 0.14), rgba(108, 158, 248, 0.2));
+    --text: light-dark(#1c2030, #e8ecf4);
+    --text-dim: light-dark(#636a7e, #9aa3ba);
     --accent: light-dark(#3d6fe0, #6c9ef8);
-    --status-existing: light-dark(#8b93a8, #566076);
-    --status-proposed: light-dark(#3d6fe0, #6c9ef8);
-    --status-modified: light-dark(#b97b12, #f0b34e);
-    --status-affected: light-dark(#8656d6, #b48af8);
-    --status-removed: light-dark(#d94f4f, #f06a6a);
-    --badge-open: light-dark(#b97b12, #f0b34e);
-    --badge-decided: light-dark(#1f9e63, #5ec98a);
-    --badge-notes: light-dark(#5f6880, #9aa1b5);
-    --on-accent: light-dark(#ffffff, #0e1118);
+    --status-existing: #566076;
+    --status-proposed: light-dark(#4a7fe0, #6c9ef8);
+    --status-modified: light-dark(#c98a1e, #f0b34e);
+    --status-affected: light-dark(#8a5fd0, #b48af8);
+    --status-removed: light-dark(#c04747, #f08a8a);
+    --badge-open: light-dark(#c98a1e, #ffd43d);
+    --badge-decided: light-dark(#2c8a4b, #7dd88f);
+    --badge-notes: light-dark(#636a7e, #9aa3ba);
+    --on-accent: light-dark(#ffffff, #0a0d15);
     --on-badge: light-dark(#ffffff, #10131c);
-    --shadow: light-dark(#23283a59, #000000);
-    --dot-grid: light-dark(#dde1ee, #1b1f2c);
+    --shadow: light-dark(#1c203059, #000000);
+    --dot-grid: light-dark(rgba(28, 32, 48, 0.09), rgba(108, 158, 248, 0.13));
+    /* Brand volt: the Send action and the bolt mark. Yellow on storm-dark,
+       inverted ink-on-volt on paper-light. Families without these fall back
+       to their accent. */
+    --volt: light-dark(#1c2030, #ffd43d);
+    --on-volt: light-dark(#ffd43d, #141200);
   }
 
   [data-theme="solarized"] { /* accents are single-valued by design */
