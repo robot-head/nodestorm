@@ -73,6 +73,7 @@ impl ValidationUi {
 
     fn from_probe(probe: WorkspaceProbe, worktree: bool) -> Self {
         let map = |check| match check {
+            FieldCheck::Unchecked => FieldStatus::Editing,
             FieldCheck::Valid => FieldStatus::Valid,
             FieldCheck::Invalid(message) => FieldStatus::Invalid(message),
         };
@@ -385,36 +386,8 @@ fn start_attempt(
     });
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ValidationPhase {
-    Editing,
-    Checking,
-}
-
-struct ValidationAttempt {
-    generation: u64,
-    phase: ValidationPhase,
-}
-
-impl ValidationAttempt {
-    fn new(generation: u64) -> Self {
-        Self {
-            generation,
-            phase: ValidationPhase::Editing,
-        }
-    }
-
-    fn begin_check(&mut self, current_generation: u64) -> bool {
-        if current_generation != self.generation || self.phase != ValidationPhase::Editing {
-            return false;
-        }
-        self.phase = ValidationPhase::Checking;
-        true
-    }
-
-    fn publish(&self, current_generation: u64) -> bool {
-        current_generation == self.generation && self.phase == ValidationPhase::Checking
-    }
+fn allows_validation_transition(current_generation: u64, queued_generation: u64) -> bool {
+    current_generation == queued_generation
 }
 
 fn queue_validation(
@@ -427,14 +400,13 @@ fn queue_validation(
     generation.set(queued);
     validation.set(ValidationUi::editing(worktree));
     spawn(async move {
-        let mut attempt = ValidationAttempt::new(queued);
         tokio::time::sleep(VALIDATION_COOLDOWN).await;
-        if !attempt.begin_check(generation()) {
+        if !allows_validation_transition(generation(), queued) {
             return;
         }
         validation.set(ValidationUi::checking(worktree));
         let probe = tokio::task::spawn_blocking(move || probe_workspace(&request)).await;
-        if !attempt.publish(generation()) {
+        if !allows_validation_transition(generation(), queued) {
             return;
         }
         validation.set(match probe {
@@ -876,6 +848,18 @@ mod tests {
         );
         assert2::assert!(!invalid.allows_launch(true));
         assert2::assert!(invalid.branch == FieldStatus::Invalid("branch already exists".into()));
+
+        let unchecked = ValidationUi::from_probe(
+            WorkspaceProbe::Checked(WorkspaceCheck {
+                repository: FieldCheck::Unchecked,
+                branch: FieldCheck::Unchecked,
+                worktree: Some(FieldCheck::Invalid("worktree path is required".into())),
+            }),
+            true,
+        );
+        assert2::assert!(unchecked.repository == FieldStatus::Editing);
+        assert2::assert!(unchecked.branch == FieldStatus::Editing);
+        assert2::assert!(!unchecked.allows_launch(true));
     }
 
     #[test]
@@ -887,26 +871,34 @@ mod tests {
     }
 
     #[test]
-    fn validation_attempt_advances_from_editing_through_publication() {
-        let mut attempt = ValidationAttempt::new(4);
-
-        assert2::assert!(attempt.begin_check(4));
-        assert2::assert!(attempt.publish(4));
+    fn validation_transition_requires_the_queued_generation() {
+        assert2::assert!(allows_validation_transition(4, 4));
+        assert2::assert!(!allows_validation_transition(5, 4));
     }
 
     #[test]
-    fn stale_validation_attempt_is_rejected_before_checking() {
-        let mut attempt = ValidationAttempt::new(4);
+    fn queue_validation_gates_both_checking_and_publication() {
+        let source = include_str!("agent_launcher.rs");
+        let queue = source
+            .split_once("fn queue_validation(")
+            .expect("queue_validation")
+            .1
+            .split_once("fn field_status(")
+            .expect("field_status")
+            .0;
+        let gate = "allows_validation_transition(generation(), queued)";
 
-        assert2::assert!(!attempt.begin_check(5));
-    }
-
-    #[test]
-    fn validation_attempt_that_becomes_stale_is_rejected_before_publication() {
-        let mut attempt = ValidationAttempt::new(4);
-
-        assert2::assert!(attempt.begin_check(4));
-        assert2::assert!(!attempt.publish(5));
+        assert2::assert!(queue.matches(gate).count() == 2);
+        let checking = queue.find("ValidationUi::checking(worktree)").unwrap();
+        let probe = queue.find("spawn_blocking").unwrap();
+        let publication = queue.find("validation.set(match probe").unwrap();
+        let mut gates = queue.match_indices(gate).map(|(index, _)| index);
+        let before_checking = gates.next().unwrap();
+        let before_publication = gates.next().unwrap();
+        assert2::assert!(before_checking < checking);
+        assert2::assert!(checking < probe);
+        assert2::assert!(probe < before_publication);
+        assert2::assert!(before_publication < publication);
     }
 
     fn tmp_path(name: &str) -> std::path::PathBuf {

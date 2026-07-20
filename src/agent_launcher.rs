@@ -185,6 +185,7 @@ pub fn agent_command(agent: AgentKind, slug: &str, prompt: &str, cwd: &str) -> C
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FieldCheck {
+    Unchecked,
     Valid,
     Invalid(String),
 }
@@ -213,8 +214,10 @@ impl WorkspaceCheck {
         .into_iter()
         .flatten()
         {
-            if let FieldCheck::Invalid(message) = check {
-                anyhow::bail!(message.clone());
+            match check {
+                FieldCheck::Unchecked => anyhow::bail!("workspace validation is incomplete"),
+                FieldCheck::Invalid(message) => anyhow::bail!(message.clone()),
+                FieldCheck::Valid => {}
             }
         }
         Ok(())
@@ -355,22 +358,26 @@ fn remote_probe_script(req: &LaunchRequest) -> anyhow::Result<String> {
     Ok(lines.join("\n"))
 }
 
-fn check_remote_input(req: &LaunchRequest) -> Option<WorkspaceCheck> {
+fn check_remote_input_with(
+    req: &LaunchRequest,
+    check_branch: impl FnOnce(&str) -> Option<bool>,
+) -> Option<WorkspaceCheck> {
     let repository = if req.repository.trim().is_empty() {
         FieldCheck::Invalid("repository is required".into())
     } else if !req.repository.starts_with('/') {
         FieldCheck::Invalid("remote repository must be absolute".into())
     } else {
-        FieldCheck::Valid
+        FieldCheck::Unchecked
     };
-    let branch = if repository != FieldCheck::Valid {
+    let branch = if matches!(repository, FieldCheck::Invalid(_)) {
         FieldCheck::Invalid("select a valid Git repository first".into())
-    } else if req.branch.trim().is_empty()
-        || checked_output("git", &["check-ref-format", "--branch", &req.branch]).is_err()
-    {
+    } else if req.branch.trim().is_empty() {
         FieldCheck::Invalid("branch name is invalid".into())
     } else {
-        FieldCheck::Valid
+        match check_branch(&req.branch) {
+            Some(false) => FieldCheck::Invalid("branch name is invalid".into()),
+            Some(true) | None => FieldCheck::Unchecked,
+        }
     };
     let worktree = match &req.git_mode {
         GitMode::ExistingCheckout => None,
@@ -380,7 +387,7 @@ fn check_remote_input(req: &LaunchRequest) -> Option<WorkspaceCheck> {
         GitMode::NewWorktree { path } if !path.starts_with('/') => Some(FieldCheck::Invalid(
             "remote worktree path must be absolute".into(),
         )),
-        GitMode::NewWorktree { .. } => Some(FieldCheck::Valid),
+        GitMode::NewWorktree { .. } => Some(FieldCheck::Unchecked),
     };
     let checked = WorkspaceCheck {
         repository,
@@ -396,6 +403,18 @@ fn check_remote_input(req: &LaunchRequest) -> Option<WorkspaceCheck> {
     .flatten()
     .any(|check| matches!(check, FieldCheck::Invalid(_)));
     invalid.then_some(checked)
+}
+
+fn check_remote_input(req: &LaunchRequest) -> Option<WorkspaceCheck> {
+    check_remote_input_with(req, |branch| {
+        std::process::Command::new("git")
+            .args(["check-ref-format", "--branch", branch])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .ok()
+            .map(|status| status.success())
+    })
 }
 
 pub fn remote_probe_command(req: &LaunchRequest) -> anyhow::Result<CommandSpec> {
@@ -1068,6 +1087,23 @@ mod tests {
     }
 
     #[test]
+    fn unchecked_workspace_cannot_pass_authoritative_validation() {
+        let checked = WorkspaceCheck {
+            repository: FieldCheck::Unchecked,
+            branch: FieldCheck::Unchecked,
+            worktree: Some(FieldCheck::Unchecked),
+        };
+
+        assert2::assert!(
+            checked
+                .require_valid()
+                .unwrap_err()
+                .to_string()
+                .contains("validation is incomplete")
+        );
+    }
+
+    #[test]
     fn remote_probe_is_one_bounded_noninteractive_ssh_command() {
         let mut req = request(AgentKind::Claude);
         req.target = LaunchTarget::Ssh {
@@ -1120,8 +1156,8 @@ mod tests {
             panic!("locally invalid input must not be classified as a transport failure");
         };
         if repository_error.is_empty() {
-            assert2::assert!(checked.repository == FieldCheck::Valid);
-            assert2::assert!(checked.branch == FieldCheck::Valid);
+            assert2::assert!(checked.repository == FieldCheck::Unchecked);
+            assert2::assert!(checked.branch == FieldCheck::Unchecked);
         } else {
             assert2::assert!(checked.repository == FieldCheck::Invalid(repository_error.into()));
             assert2::assert!(
@@ -1132,9 +1168,25 @@ mod tests {
             checked.worktree
                 == Some(match worktree_error {
                     Some(message) => FieldCheck::Invalid(message.into()),
-                    None => FieldCheck::Valid,
+                    None => FieldCheck::Unchecked,
                 })
         );
+    }
+
+    #[test]
+    fn unavailable_local_git_defers_remote_branch_validation_to_ssh() {
+        let mut req = request(AgentKind::Claude);
+        req.target = LaunchTarget::Ssh {
+            alias: "build-box".into(),
+        };
+        req.repository = "/srv/api".into();
+        req.git_mode = GitMode::NewWorktree {
+            path: "/srv/api-worktrees/feature/check".into(),
+        };
+
+        assert2::assert!(check_remote_input_with(&req, |_| None).is_none());
+        let command = remote_probe_command(&req).unwrap();
+        assert2::assert!(command.program == "ssh");
     }
 
     #[test]
