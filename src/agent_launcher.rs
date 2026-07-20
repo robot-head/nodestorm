@@ -455,10 +455,10 @@ fn parsed_remote_probe(output: &str, wants_worktree: bool) -> WorkspaceProbe {
 const REMOTE_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 fn terminate_and_reap(child: &mut std::process::Child) -> std::io::Result<()> {
-    if let Err(error) = child.kill() {
-        if child.try_wait()?.is_none() {
-            return Err(error);
-        }
+    if let Err(error) = child.kill()
+        && child.try_wait()?.is_none()
+    {
+        return Err(error);
     }
     child.wait().map(|_| ())
 }
