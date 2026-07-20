@@ -27,6 +27,12 @@
   --badge-decided: #7dd88f;
   --badge-notes: #9aa3ba;
 
+  /* Keep validation hues recognizable while meeting non-text 3:1 contrast. */
+  --agent-status-editing: color-mix(in srgb, var(--text-dim) 40%, var(--text));
+  --agent-status-checking: color-mix(in srgb, var(--status-modified) 40%, var(--text));
+  --agent-status-valid: color-mix(in srgb, var(--badge-decided) 40%, var(--text));
+  --agent-status-invalid: color-mix(in srgb, var(--status-removed) 40%, var(--text));
+
   /* on-color text, shadows, and canvas furniture */
   --on-accent: #0a0d15;
   --on-badge: #10131c;
@@ -603,6 +609,35 @@ button.empty-cmd code {
 .agent-launch-field textarea {
   min-height: 78px;
   resize: vertical;
+}
+
+.agent-field-control { position: relative; }
+.agent-field-control input { padding-right: 34px; }
+
+.agent-field-status {
+  position: absolute;
+  right: 11px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: auto;
+}
+
+.agent-field-status.editing { color: var(--agent-status-editing); }
+.agent-field-status.checking { color: var(--agent-status-checking); }
+.agent-field-status.valid { color: var(--agent-status-valid); }
+.agent-field-status.invalid { color: var(--agent-status-invalid); }
+
+.agent-validation-note {
+  margin: 14px 0 0;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
 }
 
 .agent-launch-field input:focus,

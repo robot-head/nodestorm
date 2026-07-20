@@ -130,6 +130,7 @@ mod tests {
     use yare::parameterized;
 
     const CSS: &str = include_str!("../assets/main.css");
+    const AGENT_LAUNCHER_SOURCE: &str = include_str!("ui/agent_launcher.rs");
     const APP_SOURCE: &str = include_str!("ui/app.rs");
     const TOPBAR_SOURCE: &str = include_str!("ui/topbar.rs");
 
@@ -177,6 +178,57 @@ mod tests {
             block.contains(declaration),
             "{selector} must contain `{declaration}`, got: {block}"
         );
+    }
+
+    fn declaration<'a>(block: &'a str, token: &str) -> &'a str {
+        block
+            .split(&format!("{token}:"))
+            .nth(1)
+            .and_then(|rest| rest.split(';').next())
+            .map(str::trim)
+            .unwrap_or_else(|| panic!("missing {token}"))
+    }
+
+    fn hex_rgb(value: &str) -> [f64; 3] {
+        assert2::assert!(
+            value.len() == 7 && value.starts_with('#'),
+            "invalid color: {value}"
+        );
+        let channel =
+            |start| u8::from_str_radix(&value[start..start + 2], 16).unwrap() as f64 / 255.0;
+        [channel(1), channel(3), channel(5)]
+    }
+
+    fn mode_color(value: &str, dark: bool) -> [f64; 3] {
+        if let Some(inner) = value
+            .strip_prefix("light-dark(")
+            .and_then(|value| value.strip_suffix(')'))
+        {
+            let (light, dark_value) = inner.split_once(',').expect("light-dark pair");
+            hex_rgb(if dark {
+                dark_value.trim()
+            } else {
+                light.trim()
+            })
+        } else {
+            hex_rgb(value)
+        }
+    }
+
+    fn contrast_ratio(foreground: [f64; 3], background: [f64; 3]) -> f64 {
+        let luminance = |color: [f64; 3]| {
+            let linear = |channel: f64| {
+                if channel <= 0.04045 {
+                    channel / 12.92
+                } else {
+                    ((channel + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * linear(color[0]) + 0.7152 * linear(color[1]) + 0.0722 * linear(color[2])
+        };
+        let first = luminance(foreground);
+        let second = luminance(background);
+        (first.max(second) + 0.05) / (first.min(second) + 0.05)
     }
 
     #[test]
@@ -311,6 +363,80 @@ mod tests {
         assert_block_contains(".delivery-toast-error", "color: var(--status-removed)");
         assert_block_contains(".btn-send.sent", "color: var(--on-badge)");
         assert_block_contains(".btn-send.failed", "color: var(--on-badge)");
+    }
+
+    #[test]
+    fn launcher_validation_states_are_accessible_and_theme_aware() {
+        assert2::assert!(AGENT_LAUNCHER_SOURCE.contains(r#"role: "status""#));
+        assert2::assert!(AGENT_LAUNCHER_SOURCE.contains(r#"aria_label: "{label}""#));
+        assert2::assert!(AGENT_LAUNCHER_SOURCE.contains(r#"title: "{label}""#));
+        assert2::assert!(AGENT_LAUNCHER_SOURCE.contains("requires interactive authentication"));
+        assert2::assert!(AGENT_LAUNCHER_SOURCE.contains("allows_launch(draft.read().worktree)"));
+        assert_block_contains(".agent-field-control", "position: relative");
+        assert_block_contains(".agent-field-status", "pointer-events: auto");
+        assert_block_contains(
+            ".agent-field-status.editing",
+            "color: var(--agent-status-editing)",
+        );
+        assert_block_contains(
+            ".agent-field-status.checking",
+            "color: var(--agent-status-checking)",
+        );
+        assert_block_contains(
+            ".agent-field-status.valid",
+            "color: var(--agent-status-valid)",
+        );
+        assert_block_contains(
+            ".agent-field-status.invalid",
+            "color: var(--agent-status-invalid)",
+        );
+    }
+
+    #[test]
+    fn launcher_status_glyphs_have_three_to_one_contrast_in_every_palette() {
+        let root = block_for(":root");
+        for declaration in [
+            "--agent-status-editing: color-mix(in srgb, var(--text-dim) 40%, var(--text))",
+            "--agent-status-checking: color-mix(in srgb, var(--status-modified) 40%, var(--text))",
+            "--agent-status-valid: color-mix(in srgb, var(--badge-decided) 40%, var(--text))",
+            "--agent-status-invalid: color-mix(in srgb, var(--status-removed) 40%, var(--text))",
+        ] {
+            assert2::assert!(root.contains(declaration), "missing {declaration}");
+        }
+
+        for family in FAMILIES {
+            let block = block_for(&format!("[data-theme=\"{}\"]", family.id));
+            for (mode, dark) in [
+                (Mode::Light, false),
+                (Mode::Dark, true),
+                (Mode::Auto, false),
+                (Mode::Auto, true),
+            ] {
+                let background = mode_color(declaration(block, "--bg-card"), dark);
+                let text = mode_color(declaration(block, "--text"), dark);
+                for token in [
+                    "--text-dim",
+                    "--status-modified",
+                    "--badge-decided",
+                    "--status-removed",
+                ] {
+                    let hue = mode_color(declaration(block, token), dark);
+                    let foreground = std::array::from_fn(|i| 0.4 * hue[i] + 0.6 * text[i]);
+                    let ratio = contrast_ratio(foreground, background);
+                    assert2::assert!(
+                        ratio >= 3.0,
+                        "{} {}{} {token} contrast is {ratio:.2}:1",
+                        family.id,
+                        mode.as_str(),
+                        if mode == Mode::Auto {
+                            if dark { " (dark OS)" } else { " (light OS)" }
+                        } else {
+                            ""
+                        }
+                    );
+                }
+            }
+        }
     }
 
     #[test]

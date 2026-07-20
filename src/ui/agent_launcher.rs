@@ -1,13 +1,15 @@
 //! Start a local or SSH coding-agent session from Nodestorm.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use dioxus::prelude::*;
 
 use crate::agent_launcher::{
-    AgentKind, CommandSpec, GitMode, LaunchRequest, LaunchTarget, PreparedWorkspace, agent_command,
-    compose_prompt, ensure_executable, inspect_local, open_terminal, prepare_local,
-    read_ssh_aliases, remote_agent_command, suggest_branch, suggest_worktree, validate_request,
+    AgentKind, CommandSpec, FieldCheck, GitMode, LaunchRequest, LaunchTarget, PreparedWorkspace,
+    WorkspaceProbe, agent_command, compose_prompt, ensure_executable, inspect_local, open_terminal,
+    prepare_local, probe_workspace, read_ssh_aliases, remote_agent_command, suggest_branch,
+    suggest_worktree, validate_request,
 };
 use crate::cli::Cli;
 use crate::prefs::Preferences;
@@ -27,6 +29,82 @@ struct LaunchDraft {
     branch_edited: bool,
     worktree_edited: bool,
     integrated: bool,
+}
+
+const VALIDATION_COOLDOWN: Duration = Duration::from_millis(500);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FieldStatus {
+    Editing,
+    Checking,
+    Valid,
+    Invalid(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ValidationUi {
+    repository: FieldStatus,
+    branch: FieldStatus,
+    worktree: Option<FieldStatus>,
+    password_only: bool,
+    transport_error: Option<String>,
+}
+
+impl ValidationUi {
+    fn editing(worktree: bool) -> Self {
+        Self {
+            repository: FieldStatus::Editing,
+            branch: FieldStatus::Editing,
+            worktree: worktree.then_some(FieldStatus::Editing),
+            password_only: false,
+            transport_error: None,
+        }
+    }
+
+    fn checking(worktree: bool) -> Self {
+        Self {
+            repository: FieldStatus::Checking,
+            branch: FieldStatus::Checking,
+            worktree: worktree.then_some(FieldStatus::Checking),
+            password_only: false,
+            transport_error: None,
+        }
+    }
+
+    fn from_probe(probe: WorkspaceProbe, worktree: bool) -> Self {
+        let map = |check| match check {
+            FieldCheck::Unchecked => FieldStatus::Editing,
+            FieldCheck::Valid => FieldStatus::Valid,
+            FieldCheck::Invalid(message) => FieldStatus::Invalid(message),
+        };
+        match probe {
+            WorkspaceProbe::Checked(checked) => Self {
+                repository: map(checked.repository),
+                branch: map(checked.branch),
+                worktree: checked.worktree.map(map),
+                password_only: false,
+                transport_error: None,
+            },
+            WorkspaceProbe::PasswordOnly => Self {
+                password_only: true,
+                ..Self::editing(worktree)
+            },
+            WorkspaceProbe::TransportError(message) => Self {
+                repository: FieldStatus::Invalid(message.clone()),
+                branch: FieldStatus::Invalid(message.clone()),
+                worktree: worktree.then(|| FieldStatus::Invalid(message.clone())),
+                password_only: false,
+                transport_error: Some(message),
+            },
+        }
+    }
+
+    fn allows_launch(&self, worktree: bool) -> bool {
+        self.password_only
+            || (self.repository == FieldStatus::Valid
+                && self.branch == FieldStatus::Valid
+                && (!worktree || self.worktree == Some(FieldStatus::Valid)))
+    }
 }
 
 impl Default for LaunchDraft {
@@ -308,12 +386,65 @@ fn start_attempt(
     });
 }
 
+fn allows_validation_transition(current_generation: u64, queued_generation: u64) -> bool {
+    current_generation == queued_generation
+}
+
+fn queue_validation(
+    request: LaunchRequest,
+    mut generation: Signal<u64>,
+    mut validation: Signal<ValidationUi>,
+) {
+    let worktree = matches!(request.git_mode, GitMode::NewWorktree { .. });
+    let queued = generation() + 1;
+    generation.set(queued);
+    validation.set(ValidationUi::editing(worktree));
+    spawn(async move {
+        tokio::time::sleep(VALIDATION_COOLDOWN).await;
+        if !allows_validation_transition(generation(), queued) {
+            return;
+        }
+        validation.set(ValidationUi::checking(worktree));
+        let probe = tokio::task::spawn_blocking(move || probe_workspace(&request)).await;
+        if !allows_validation_transition(generation(), queued) {
+            return;
+        }
+        validation.set(match probe {
+            Ok(probe) => ValidationUi::from_probe(probe, worktree),
+            Err(error) => ValidationUi::from_probe(
+                WorkspaceProbe::TransportError(format!("validation worker failed: {error}")),
+                worktree,
+            ),
+        });
+    });
+}
+
+fn field_status(field: &str, status: &FieldStatus) -> Element {
+    let (class, glyph, detail) = match status {
+        FieldStatus::Editing => ("editing", "●", "editing; not checked"),
+        FieldStatus::Checking => ("checking", "●", "checking"),
+        FieldStatus::Valid => ("valid", "✓", "valid"),
+        FieldStatus::Invalid(message) => ("invalid", "!", message.as_str()),
+    };
+    let label = format!("{field}: {detail}");
+    rsx! {
+        span {
+            class: "agent-field-status {class}",
+            role: "status",
+            aria_label: "{label}",
+            title: "{label}",
+            "{glyph}"
+        }
+    }
+}
+
 #[component]
 pub fn AgentLauncher() -> Element {
     let sessions = use_context::<Arc<Sessions>>();
     let cli = use_context::<Cli>();
     let terminal_manager = use_context::<Arc<crate::terminal::TerminalManager>>();
     let panel = use_context::<super::TerminalPanel>();
+    let mcp_port = cli.port;
     let mut open = use_context::<super::AgentLauncherOpen>().0;
     let mut prefs = use_context::<super::ThemePref>().0;
     let mut draft = use_signal(LaunchDraft::default);
@@ -324,6 +455,8 @@ pub fn AgentLauncher() -> Element {
     let mut error: Signal<Option<String>> = use_signal(|| None);
     let retained: Signal<Option<String>> = use_signal(|| None);
     let retry: Signal<Option<(CommandSpec, String, Option<String>)>> = use_signal(|| None);
+    let validation_generation = use_signal(|| 0_u64);
+    let validation = use_signal(|| ValidationUi::editing(true));
 
     rsx! {
         div { class: "agent-launch-overlay",
@@ -359,7 +492,14 @@ pub fn AgentLauncher() -> Element {
                             id: "agent-session-name",
                             placeholder: "cache redesign",
                             value: "{draft.read().session_name}",
-                            oninput: move |event| draft.write().set_session_name(event.value()),
+                            oninput: move |event| {
+                                draft.write().set_session_name(event.value());
+                                queue_validation(
+                                    draft.read().request(mcp_port),
+                                    validation_generation,
+                                    validation,
+                                );
+                            },
                         }
                     }
                     label { class: "agent-launch-field",
@@ -381,7 +521,14 @@ pub fn AgentLauncher() -> Element {
                                 r#type: "radio",
                                 name: "agent-target",
                                 checked: !draft.read().remote,
-                                oninput: move |_| draft.write().set_remote(false),
+                                oninput: move |_| {
+                                    draft.write().set_remote(false);
+                                    queue_validation(
+                                        draft.read().request(mcp_port),
+                                        validation_generation,
+                                        validation,
+                                    );
+                                },
                             }
                             "Local"
                         }
@@ -390,7 +537,14 @@ pub fn AgentLauncher() -> Element {
                                 r#type: "radio",
                                 name: "agent-target",
                                 checked: draft.read().remote,
-                                oninput: move |_| draft.write().set_remote(true),
+                                oninput: move |_| {
+                                    draft.write().set_remote(true);
+                                    queue_validation(
+                                        draft.read().request(mcp_port),
+                                        validation_generation,
+                                        validation,
+                                    );
+                                },
                             }
                             "SSH"
                         }
@@ -424,7 +578,14 @@ pub fn AgentLauncher() -> Element {
                                 list: "ssh-hosts",
                                 placeholder: "build-box",
                                 value: "{draft.read().ssh_alias}",
-                                oninput: move |event| draft.write().ssh_alias = event.value(),
+                                oninput: move |event| {
+                                    draft.write().ssh_alias = event.value();
+                                    queue_validation(
+                                        draft.read().request(mcp_port),
+                                        validation_generation,
+                                        validation,
+                                    );
+                                },
                             }
                             datalist { id: "ssh-hosts",
                                 for alias in aliases.read().iter() {
@@ -435,12 +596,22 @@ pub fn AgentLauncher() -> Element {
                     }
                     label { class: "agent-launch-field agent-launch-wide",
                         span { if draft.read().remote { "Remote repository path" } else { "Repository path" } }
-                        input {
-                            id: "agent-repository",
-                            list: "recent-repositories",
-                            placeholder: if draft.read().remote { "/srv/projects/api" } else { "/home/me/projects/api" },
-                            value: "{draft.read().repository}",
-                            oninput: move |event| draft.write().set_repository(event.value()),
+                        div { class: "agent-field-control",
+                            input {
+                                id: "agent-repository",
+                                list: "recent-repositories",
+                                placeholder: if draft.read().remote { "/srv/projects/api" } else { "/home/me/projects/api" },
+                                value: "{draft.read().repository}",
+                                oninput: move |event| {
+                                    draft.write().set_repository(event.value());
+                                    queue_validation(
+                                        draft.read().request(mcp_port),
+                                        validation_generation,
+                                        validation,
+                                    );
+                                },
+                            }
+                            {field_status("Repository path", &validation.read().repository)}
                         }
                         datalist { id: "recent-repositories",
                             for repo in prefs.read().recent_repositories.iter() {
@@ -459,16 +630,25 @@ pub fn AgentLauncher() -> Element {
                     }
                     label { class: "agent-launch-field agent-launch-wide",
                         span { "Branch name" }
-                        input {
-                            id: "agent-branch",
-                            placeholder: "nodestorm/cache-redesign",
-                            value: "{draft.read().branch}",
-                            oninput: move |event| {
-                                let mut value = draft.write();
-                                value.branch = event.value();
-                                value.branch_edited = true;
-                                value.refresh_worktree();
-                            },
+                        div { class: "agent-field-control",
+                            input {
+                                id: "agent-branch",
+                                placeholder: "nodestorm/cache-redesign",
+                                value: "{draft.read().branch}",
+                                oninput: move |event| {
+                                    let mut value = draft.write();
+                                    value.branch = event.value();
+                                    value.branch_edited = true;
+                                    value.refresh_worktree();
+                                    drop(value);
+                                    queue_validation(
+                                        draft.read().request(mcp_port),
+                                        validation_generation,
+                                        validation,
+                                    );
+                                },
+                            }
+                            {field_status("Branch name", &validation.read().branch)}
                         }
                     }
                     fieldset { class: "agent-launch-field agent-launch-options agent-launch-wide",
@@ -478,7 +658,14 @@ pub fn AgentLauncher() -> Element {
                                 r#type: "radio",
                                 name: "agent-workspace",
                                 checked: !draft.read().worktree,
-                                oninput: move |_| draft.write().worktree = false,
+                                oninput: move |_| {
+                                    draft.write().worktree = false;
+                                    queue_validation(
+                                        draft.read().request(mcp_port),
+                                        validation_generation,
+                                        validation,
+                                    );
+                                },
                             }
                             "Branch in existing checkout"
                         }
@@ -487,7 +674,14 @@ pub fn AgentLauncher() -> Element {
                                 r#type: "radio",
                                 name: "agent-workspace",
                                 checked: draft.read().worktree,
-                                oninput: move |_| draft.write().worktree = true,
+                                oninput: move |_| {
+                                    draft.write().worktree = true;
+                                    queue_validation(
+                                        draft.read().request(mcp_port),
+                                        validation_generation,
+                                        validation,
+                                    );
+                                },
                             }
                             "New worktree (recommended)"
                         }
@@ -495,17 +689,40 @@ pub fn AgentLauncher() -> Element {
                     if draft.read().worktree {
                         label { class: "agent-launch-field agent-launch-wide",
                             span { if draft.read().remote { "Remote worktree path" } else { "Worktree path" } }
-                            input {
-                                id: "agent-worktree",
-                                value: "{draft.read().worktree_path}",
-                                oninput: move |event| {
-                                    let mut value = draft.write();
-                                    value.worktree_path = event.value();
-                                    value.worktree_edited = true;
-                                },
+                            div { class: "agent-field-control",
+                                input {
+                                    id: "agent-worktree",
+                                    value: "{draft.read().worktree_path}",
+                                    oninput: move |event| {
+                                        let mut value = draft.write();
+                                        value.worktree_path = event.value();
+                                        value.worktree_edited = true;
+                                        drop(value);
+                                        queue_validation(
+                                            draft.read().request(mcp_port),
+                                            validation_generation,
+                                            validation,
+                                        );
+                                    },
+                                }
+                                {field_status(
+                                    "Worktree path",
+                                    validation.read().worktree.as_ref().expect("visible worktree has status"),
+                                )}
                             }
                         }
                     }
+                }
+
+                if validation.read().password_only {
+                    p {
+                        class: "agent-validation-note",
+                        role: "note",
+                        "This SSH host requires interactive authentication, so Nodestorm did not check the remote repository, branch, or worktree. Launch may fail."
+                    }
+                }
+                if let Some(message) = validation.read().transport_error.as_ref() {
+                    div { class: "agent-launch-error", role: "alert", "{message}" }
                 }
 
                 if dirty_warning() {
@@ -570,10 +787,12 @@ pub fn AgentLauncher() -> Element {
                     } else {
                         button {
                             class: "btn btn-primary",
-                            disabled: running() || (dirty_warning() && !allow_dirty()),
+                            disabled: running()
+                                || !validation.read().allows_launch(draft.read().worktree)
+                                || (dirty_warning() && !allow_dirty()),
                             onclick: move |_| {
                                 start_attempt(
-                                    draft.read().request(cli.port),
+                                    draft.read().request(mcp_port),
                                     sessions.clone(),
                                     allow_dirty(),
                                     draft.read().integrated.then(|| terminal_manager.clone()),
@@ -602,8 +821,85 @@ pub fn AgentLauncher() -> Element {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_launcher::WorkspaceCheck;
     use clap::Parser;
     use yare::parameterized;
+
+    #[test]
+    fn checked_workspace_maps_to_status_and_gates_visible_worktree() {
+        let valid = ValidationUi::from_probe(
+            WorkspaceProbe::Checked(WorkspaceCheck {
+                repository: FieldCheck::Valid,
+                branch: FieldCheck::Valid,
+                worktree: Some(FieldCheck::Valid),
+            }),
+            true,
+        );
+        assert2::assert!(valid.allows_launch(true));
+        assert2::assert!(valid.repository == FieldStatus::Valid);
+
+        let invalid = ValidationUi::from_probe(
+            WorkspaceProbe::Checked(WorkspaceCheck {
+                repository: FieldCheck::Valid,
+                branch: FieldCheck::Invalid("branch already exists".into()),
+                worktree: Some(FieldCheck::Valid),
+            }),
+            true,
+        );
+        assert2::assert!(!invalid.allows_launch(true));
+        assert2::assert!(invalid.branch == FieldStatus::Invalid("branch already exists".into()));
+
+        let unchecked = ValidationUi::from_probe(
+            WorkspaceProbe::Checked(WorkspaceCheck {
+                repository: FieldCheck::Unchecked,
+                branch: FieldCheck::Unchecked,
+                worktree: Some(FieldCheck::Invalid("worktree path is required".into())),
+            }),
+            true,
+        );
+        assert2::assert!(unchecked.repository == FieldStatus::Editing);
+        assert2::assert!(unchecked.branch == FieldStatus::Editing);
+        assert2::assert!(!unchecked.allows_launch(true));
+    }
+
+    #[test]
+    fn password_only_fallback_allows_unchecked_remote_launch() {
+        let state = ValidationUi::from_probe(WorkspaceProbe::PasswordOnly, true);
+        assert2::assert!(state.password_only);
+        assert2::assert!(state.repository == FieldStatus::Editing);
+        assert2::assert!(state.allows_launch(true));
+    }
+
+    #[test]
+    fn validation_transition_requires_the_queued_generation() {
+        assert2::assert!(allows_validation_transition(4, 4));
+        assert2::assert!(!allows_validation_transition(5, 4));
+    }
+
+    #[test]
+    fn queue_validation_gates_both_checking_and_publication() {
+        let source = include_str!("agent_launcher.rs");
+        let queue = source
+            .split_once("fn queue_validation(")
+            .expect("queue_validation")
+            .1
+            .split_once("fn field_status(")
+            .expect("field_status")
+            .0;
+        let gate = "allows_validation_transition(generation(), queued)";
+
+        assert2::assert!(queue.matches(gate).count() == 2);
+        let checking = queue.find("ValidationUi::checking(worktree)").unwrap();
+        let probe = queue.find("spawn_blocking").unwrap();
+        let publication = queue.find("validation.set(match probe").unwrap();
+        let mut gates = queue.match_indices(gate).map(|(index, _)| index);
+        let before_checking = gates.next().unwrap();
+        let before_publication = gates.next().unwrap();
+        assert2::assert!(before_checking < checking);
+        assert2::assert!(checking < probe);
+        assert2::assert!(probe < before_publication);
+        assert2::assert!(before_publication < publication);
+    }
 
     fn tmp_path(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
