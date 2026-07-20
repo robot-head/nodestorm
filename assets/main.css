@@ -2034,6 +2034,13 @@ fieldset.agent-launch-options {
   gap: 4px;
   font-family: var(--font-mono);
   font-size: 11px;
+  /* Shrink as a group and scroll internally rather than wrapping chip text
+     or pushing into the search box. */
+  flex-shrink: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
 }
 
 .term-chip {
@@ -2046,9 +2053,18 @@ fieldset.agent-launch-options {
   background: var(--bg-card);
   color: var(--text-dim);
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .term-chip:hover { background: var(--bg-card-hover); color: var(--text); }
+
+.term-chip-name {
+  display: inline-block;
+  max-width: 16ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .agent-clickable {
   cursor: pointer;

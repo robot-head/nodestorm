@@ -98,11 +98,13 @@ integrated path, the final step calls `TerminalManager::spawn` instead of
 - Topbar chips: one per open terminal, showing name and status dot. Clicking
   a chip expands the panel and selects that tab. The chip disappears when the
   tab is closed.
-- Agent-name attributions in the activity feed, node cards, choice panel,
-  questions panel, and queued changes become clickable when the name matches
-  an open terminal tab; hover shows a pointer and underline. Names without a
-  matching terminal render as today, since agents may connect from outside
-  Nodestorm.
+- Agent-name attributions in the activity feed, node cards, and choice panel
+  become clickable when the name matches an open terminal tab; hover shows a
+  pointer and underline. Names without a matching terminal render as today,
+  since agents may connect from outside Nodestorm. The questions panel and
+  queued-changes panel render no agent names today, so this rule has nothing
+  to attach to there yet; future surfaces that do render agent names should
+  adopt the same rule.
 - Closing a tab whose agent is still running asks for confirmation, then
   kills the PTY. Quitting the app with any running agent asks once.
 - An exited agent's tab and scrollback stay readable until the user closes

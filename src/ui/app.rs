@@ -83,6 +83,13 @@ pub fn App() -> Element {
                 dioxus::desktop::WindowCloseBehaviour::WindowCloses
             };
             desktop.set_close_behavior(behaviour);
+            // Race guard: a close click landing just before this effect
+            // flips the behaviour back can still hide the window under the
+            // old WindowHides behaviour, with quit_confirm never set —
+            // reveal it so the next close takes the WindowCloses path.
+            if manager.running_count() == 0 && !quit_confirm() && !desktop.window.is_visible() {
+                desktop.window.set_visible(true);
+            }
         }
     });
     dioxus::desktop::use_wry_event_handler({

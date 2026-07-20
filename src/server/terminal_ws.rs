@@ -251,6 +251,13 @@ mod tests {
         let url = format!("{base}/terminal/ws-echo/ws?token={}", manager.token());
         let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
 
+        // The reader thread's CPR auto-responder now defers to any attached
+        // client, so this attached test client has to answer ConPTY's
+        // cursor-position query itself, exactly as Ferroterm would, or the
+        // Windows child stays blocked on the startup handshake forever.
+        const CPR_QUERY: &[u8] = b"\x1b[6n";
+        const CPR_REPLY: &[u8] = b"\x1b[1;1R";
+
         let mut seen = Vec::new();
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
         while !String::from_utf8_lossy(&seen).contains("ws-pty-hello") {
@@ -260,6 +267,11 @@ mod tests {
                 .expect("socket open")
                 .unwrap();
             if let tungstenite::Message::Binary(bytes) = frame {
+                if bytes.windows(CPR_QUERY.len()).any(|w| w == CPR_QUERY) {
+                    ws.send(tungstenite::Message::Binary(CPR_REPLY.to_vec().into()))
+                        .await
+                        .unwrap();
+                }
                 seen.extend_from_slice(&bytes);
             }
         }

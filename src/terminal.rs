@@ -19,9 +19,12 @@ pub const SCROLLBACK_LIMIT: usize = 1024 * 1024;
 
 /// ConPTY's win32-input-mode startup handshake: a Device Status Report query
 /// asking the terminal for the cursor position. The child stays blocked in
-/// startup until something answers it, so we always do — see the reader
-/// thread in `spawn`.
+/// startup until something answers it, so we do — see the reader thread in
+/// `spawn`. Windows-only: ConPTY is the only platform that blocks on this at
+/// startup.
+#[cfg(windows)]
 const CPR_QUERY: &[u8] = b"\x1b[6n";
+#[cfg(windows)]
 const CPR_REPLY: &[u8] = b"\x1b[1;1R";
 
 /// Cap enforcement: keep the newest bytes, drop the oldest.
@@ -150,14 +153,20 @@ impl TerminalManager {
                         // Receivers may lag or be absent; both are fine.
                         let _ = entry.tx.send(buf[..n].to_vec());
                         // ConPTY's win32-input-mode handshake asks the
-                        // terminal for its cursor position right after
-                        // spawn and blocks the child until it gets an
-                        // answer. Nothing here renders a screen, so any
-                        // fixed position works.
+                        // terminal for its cursor position right after spawn
+                        // and blocks the child until it gets an answer, so
+                        // we answer on its behalf — but only while no client
+                        // is attached yet. Once Ferroterm attaches it
+                        // answers CPR itself; replying here too would race
+                        // it and send a spurious extra `ESC[1;1R` into a
+                        // TUI's mid-session cursor probe.
                         // ponytail: scans only within one read() chunk; a
                         // query split across two reads would be missed.
                         // Upgrade to a cross-chunk scan if that's observed.
-                        if buf[..n].windows(CPR_QUERY.len()).any(|w| w == CPR_QUERY) {
+                        #[cfg(windows)]
+                        if entry.tx.receiver_count() == 0
+                            && buf[..n].windows(CPR_QUERY.len()).any(|w| w == CPR_QUERY)
+                        {
                             let _ = entry.writer.write_all(CPR_REPLY);
                             let _ = entry.writer.flush();
                         }

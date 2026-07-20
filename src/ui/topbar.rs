@@ -621,7 +621,11 @@ pub fn TopBar(
                             },
                             "●"
                         }
-                        span { style: "color: {super::agent_color(&info.id)};", "{info.id}" }
+                        span {
+                            class: "term-chip-name",
+                            style: "color: {super::agent_color(&info.id)};",
+                            "{info.id}"
+                        }
                     }
                 }
             }
