@@ -45,7 +45,7 @@ pub(crate) fn build_glyph(build: BuildStatus) -> &'static str {
     }
 }
 
-fn kind_glyph(kind: NodeKind) -> &'static str {
+pub(crate) fn kind_glyph(kind: NodeKind) -> &'static str {
     match kind {
         NodeKind::Service => "⬢",
         NodeKind::Module => "▣",
