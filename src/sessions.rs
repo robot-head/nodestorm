@@ -41,7 +41,11 @@ pub struct ConnectionInfo {
     pub state: ConnectionState,
 }
 
-fn client_label(client_name: &str, version: &str) -> String {
+fn client_label(title: Option<&str>, client_name: &str, version: &str) -> String {
+    let client_name = title
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .unwrap_or(client_name);
     match version.trim() {
         "" => client_name.to_owned(),
         version => format!("{client_name} {version}"),
@@ -72,6 +76,7 @@ struct Inner {
 
 struct RegistryEntry {
     info: ConnectionInfo,
+    log_label: String,
     live: bool,
 }
 
@@ -239,18 +244,35 @@ impl Sessions {
     }
 
     pub fn connect_client(&self, id: ConnectionId, client_name: String, version: String) {
+        self.connect_client_with_title(id, client_name, version, None);
+    }
+
+    pub(crate) fn connect_client_with_title(
+        &self,
+        id: ConnectionId,
+        client_name: String,
+        version: String,
+        title: Option<String>,
+    ) {
         let info = ConnectionInfo {
             id,
             client_name,
             version,
             state: ConnectionState::Connected,
         };
-        let label = client_label(&info.client_name, &info.version);
+        let log_label = client_label(title.as_deref(), &info.client_name, &info.version);
         self.connections
             .lock()
             .expect("connections mutex poisoned")
-            .insert(id, RegistryEntry { info, live: true });
-        tracing::info!("{label} connected");
+            .insert(
+                id,
+                RegistryEntry {
+                    info,
+                    log_label: log_label.clone(),
+                    live: true,
+                },
+            );
+        tracing::info!("{log_label} connected");
         self.bump_connections();
     }
 
@@ -297,14 +319,13 @@ impl Sessions {
                     return None;
                 }
                 entry.live = false;
-                Some(entry.info.clone())
+                Some((entry.info.clone(), entry.log_label.clone()))
             });
-        if let Some(info) = &disconnected {
-            let label = client_label(&info.client_name, &info.version);
-            tracing::info!("{label} disconnected");
+        if let Some((_, log_label)) = &disconnected {
+            tracing::info!("{log_label} disconnected");
             self.bump_connections();
         }
-        disconnected
+        disconnected.map(|(info, _)| info)
     }
 
     pub fn connection(&self, id: ConnectionId) -> Option<ConnectionInfo> {
@@ -722,13 +743,13 @@ mod tests {
     }
 
     #[test]
-    fn client_label_omits_an_empty_version() {
+    fn client_label_prefers_title_and_omits_an_empty_version() {
         assert_eq!(
-            client_label("claude-code", "2.1.215"),
-            "claude-code 2.1.215"
+            client_label(Some("Claude Code"), "claude-code", "2.1.215"),
+            "Claude Code 2.1.215"
         );
-        assert_eq!(client_label("claude-code", ""), "claude-code");
-        assert_eq!(client_label("claude-code", "   "), "claude-code");
+        assert_eq!(client_label(Some("   "), "claude-code", ""), "claude-code");
+        assert_eq!(client_label(None, "claude-code", "   "), "claude-code");
     }
 
     #[test]

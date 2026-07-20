@@ -609,10 +609,11 @@ impl ServerHandler for NodestormServer {
             return;
         };
         if !self.connection.initialized.swap(true, Ordering::AcqRel) {
-            self.sessions.connect_client(
+            self.sessions.connect_client_with_title(
                 self.connection.id,
                 info.client_info.name.clone(),
                 info.client_info.version.clone(),
+                info.client_info.title.clone(),
             );
             if let Some(session_id) = context
                 .extensions
