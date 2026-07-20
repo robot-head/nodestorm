@@ -99,11 +99,13 @@ pub fn suggest_worktree(repository: &str, branch: &str, remote: bool) -> anyhow:
         .file_name()
         .ok_or_else(|| anyhow::anyhow!("repository has no directory name"))?
         .to_string_lossy();
+    // Forward slashes everywhere: git accepts them on Windows, and the
+    // suggestion stays identical across platforms (branch names already use /).
     Ok(parent
         .join(format!("{name}-worktrees"))
         .join(branch)
         .to_string_lossy()
-        .into_owned())
+        .replace('\\', "/"))
 }
 
 pub fn parse_ssh_aliases(text: &str) -> Vec<String> {
