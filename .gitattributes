@@ -1,0 +1,3 @@
+# Tests include_str! source and CSS files and match exact newlines;
+# force LF on checkout so Windows (core.autocrlf=true) matches Linux CI.
+* text=auto eol=lf
