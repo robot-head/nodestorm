@@ -13,6 +13,7 @@ use crate::layout::Layout;
 use crate::model::{AnnotationKind, EdgeKind, NodeId, NodeKind, Point, SessionDoc};
 
 use super::ViewTransform;
+use super::activity::ActivityFeed;
 use super::annotation_layer::AnnotationLayer;
 use super::app::use_store;
 use super::cluster_card::ClusterCard;
@@ -101,6 +102,7 @@ pub fn Canvas(
     layout: Memo<Layout>,
     selected: Signal<Option<NodeId>>,
     hovered_affects: Signal<Vec<NodeId>>,
+    meta: Signal<crate::store::UiMeta>,
 ) -> Element {
     let store = use_store();
     let mut viewport = use_signal(|| ViewportSize::FALLBACK);
@@ -935,6 +937,9 @@ pub fn Canvas(
                 }
             }
             Minimap { doc, layout, transform, viewport: viewport_size }
+            // Inside the viewport so its width cap tracks the canvas (not the
+            // window) when the right panel is open.
+            ActivityFeed { meta }
         }
     }
 }

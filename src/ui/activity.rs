@@ -28,6 +28,9 @@ pub fn ActivityFeed(meta: Signal<UiMeta>) -> Element {
 
     rsx! {
         div { class: if expanded() { "activity expanded" } else { "activity" },
+            // Lives inside the pan/zoom viewport: keep presses from starting
+            // a canvas pan gesture.
+            onmousedown: move |ev| ev.stop_propagation(),
             // Anywhere on the collapsed box expands it, not just the tiny head.
             onclick: move |_| {
                 if !expanded() {
