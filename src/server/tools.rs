@@ -683,7 +683,7 @@ mod tests {
         store.request_flush(None).expect("create active receipt");
         first.abort();
         let _ = first.await;
-        assert_eq!(store.snapshot_meta().send_status, SendStatus::Reconnecting);
+        assert2::assert!((store.snapshot_meta().send_status) == (SendStatus::Reconnecting));
 
         let request_cancel = CancellationToken::new();
         request_cancel.cancel();
@@ -702,15 +702,15 @@ mod tests {
         )
         .await;
 
-        assert!(
+        assert2::assert!(
             result
                 .expect_err("ready cancellation wins")
                 .to_string()
                 .contains("request cancelled")
         );
-        assert_eq!(store.read(|state| state.delivery_cursor), 0);
-        assert_eq!(store.snapshot_meta().waiting_agents, 0);
-        assert_eq!(store.snapshot_meta().send_status, SendStatus::Reconnecting);
+        assert2::assert!((store.read(|state| state.delivery_cursor)) == (0));
+        assert2::assert!((store.snapshot_meta().waiting_agents) == (0));
+        assert2::assert!((store.snapshot_meta().send_status) == (SendStatus::Reconnecting));
     }
 
     use rmcp::ServiceExt;
@@ -751,15 +751,15 @@ mod tests {
     #[test]
     fn parameter_defaults_and_result_helpers_are_exact() {
         let params: AwaitDecisionsParams = serde_json::from_value(serde_json::json!({})).unwrap();
-        assert_eq!(params.timeout_seconds, 240);
-        assert_eq!(default_await_secs(), 240);
+        assert2::assert!((params.timeout_seconds) == (240));
+        assert2::assert!((default_await_secs()) == (240));
 
         let result = json_result(serde_json::json!({"answer": 42})).unwrap();
-        assert!(result_text(&result).contains("answer"));
-        assert!(result_text(&result).contains("42"));
+        assert2::assert!(result_text(&result).contains("answer"));
+        assert2::assert!(result_text(&result).contains("42"));
 
         let error = store_err(StoreError::UnknownNode(NodeId::from("missing")));
-        assert!(error.message.contains("missing"));
+        assert2::assert!(error.message.contains("missing"));
     }
 
     #[test]
@@ -778,15 +778,15 @@ mod tests {
                 sessions: server.sessions.clone(),
             };
         }
-        assert_eq!(
-            server.sessions.connection(id).unwrap().state,
-            crate::sessions::ConnectionState::Connected
+        assert2::assert!(
+            (server.sessions.connection(id).unwrap().state)
+                == (crate::sessions::ConnectionState::Connected)
         );
 
         let first = ActiveAwaitGuard::enter(server.connection.clone()).unwrap();
-        assert!(ActiveAwaitGuard::enter(server.connection.clone()).is_err());
+        assert2::assert!(ActiveAwaitGuard::enter(server.connection.clone()).is_err());
         drop(first);
-        assert!(ActiveAwaitGuard::enter(server.connection.clone()).is_ok());
+        assert2::assert!(ActiveAwaitGuard::enter(server.connection.clone()).is_ok());
     }
 
     #[test]
@@ -799,7 +799,7 @@ mod tests {
         server.connection.initialized.store(true, Ordering::Release);
         let sessions = server.sessions.clone();
         drop(server);
-        assert!(sessions.connections().is_empty());
+        assert2::assert!(sessions.connections().is_empty());
     }
 
     #[tokio::test]
@@ -817,11 +817,8 @@ mod tests {
             }))
             .await
             .unwrap();
-        assert!(result_text(&proposed).contains("node_count"));
-        assert_eq!(
-            server.sessions.active_store().snapshot_doc().title,
-            "Original"
-        );
+        assert2::assert!(result_text(&proposed).contains("node_count"));
+        assert2::assert!((server.sessions.active_store().snapshot_doc().title) == ("Original"));
 
         let updated = server
             .update_graph(Parameters(UpdateGraphParams {
@@ -833,18 +830,15 @@ mod tests {
             }))
             .await
             .unwrap();
-        assert!(result_text(&updated).contains("revision"));
-        assert_eq!(
-            server.sessions.active_store().snapshot_doc().title,
-            "Updated"
-        );
+        assert2::assert!(result_text(&updated).contains("revision"));
+        assert2::assert!((server.sessions.active_store().snapshot_doc().title) == ("Updated"));
 
         let store = server.sessions.active_store();
         let idle_state = server
             .get_state(Parameters(SessionOnlyParams { session: None }))
             .await
             .unwrap();
-        assert!(
+        assert2::assert!(
             idle_state.content[0]
                 .as_text()
                 .unwrap()
@@ -865,14 +859,14 @@ mod tests {
                 .await
         });
         tokio::task::yield_now().await;
-        assert_eq!(store.snapshot_meta().waiting_agents, 1);
+        assert2::assert!((store.snapshot_meta().waiting_agents) == (1));
         let state = server
             .get_state(Parameters(SessionOnlyParams { session: None }))
             .await
             .unwrap();
         let state_text = result_text(&state);
-        assert!(state_text.contains("Updated"));
-        assert!(
+        assert2::assert!(state_text.contains("Updated"));
+        assert2::assert!(
             state.content[0]
                 .as_text()
                 .unwrap()
@@ -885,7 +879,7 @@ mod tests {
             .list_sessions(Parameters(EmptyParams {}))
             .await
             .unwrap();
-        assert!(result_text(&listed).contains("default"));
+        assert2::assert!(result_text(&listed).contains("default"));
 
         let exported = server
             .export_markdown(Parameters(ExportParams {
@@ -894,14 +888,14 @@ mod tests {
             }))
             .await
             .unwrap();
-        assert!(result_text(&exported).contains("Updated"));
+        assert2::assert!(result_text(&exported).contains("Updated"));
 
         let cleared = server
             .clear_session(Parameters(SessionOnlyParams { session: None }))
             .await
             .unwrap();
-        assert!(result_text(&cleared).contains("node_count"));
-        assert!(
+        assert2::assert!(result_text(&cleared).contains("node_count"));
+        assert2::assert!(
             server
                 .sessions
                 .active_store()
@@ -934,9 +928,9 @@ mod tests {
             }))
             .await
             .unwrap();
-        assert!(!diff.content.is_empty());
-        assert!(result_text(&diff).contains("default"));
-        assert!(
+        assert2::assert!(!diff.content.is_empty());
+        assert2::assert!(result_text(&diff).contains("default"));
+        assert2::assert!(
             server
                 .diff_record(Parameters(DiffRecordParams {
                     path: "/definitely/missing/nodestorm-record.md".into(),
@@ -982,8 +976,8 @@ mod tests {
         let result = call.await.unwrap().unwrap();
 
         let text = result_text(&result);
-        assert!(text.contains("delivered"));
-        assert!(text.contains("decisions"));
+        assert2::assert!(text.contains("delivered"));
+        assert2::assert!(text.contains("decisions"));
         server_task.abort();
     }
 
@@ -991,9 +985,9 @@ mod tests {
     fn server_info_identifies_nodestorm_and_enables_tools() {
         let (_dir, server) = server();
         let info = server.get_info();
-        assert_eq!(info.server_info.name, "nodestorm");
-        assert_eq!(info.server_info.version, env!("CARGO_PKG_VERSION"));
-        assert!(info.capabilities.tools.is_some());
-        assert!(info.instructions.unwrap().contains("await_decisions"));
+        assert2::assert!((info.server_info.name) == ("nodestorm"));
+        assert2::assert!((info.server_info.version) == (env!("CARGO_PKG_VERSION")));
+        assert2::assert!(info.capabilities.tools.is_some());
+        assert2::assert!(info.instructions.unwrap().contains("await_decisions"));
     }
 }

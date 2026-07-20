@@ -201,9 +201,9 @@ mod tests {
             interaction_error: None,
         };
 
-        assert_eq!(
-            queued_change_label(&doc, &change),
-            "edited “Widget” — blocked: node widget no longer exists"
+        assert2::assert!(
+            (queued_change_label(&doc, &change))
+                == ("edited “Widget” — blocked: node widget no longer exists")
         );
     }
 
@@ -249,15 +249,15 @@ mod tests {
             interaction_error: None,
         };
 
-        assert!(matches!(
+        assert2::assert!(matches!(
             queued_edit_replacement(&added),
             Some(QueueEditReplacement::Node(node)) if node.label == "Widget" && node.description == "needs tuning"
         ));
-        assert_eq!(
-            queued_edit_replacement(&comment),
-            Some(QueueEditReplacement::Comment(
-                "please keep the cache local".into()
-            ))
+        assert2::assert!(
+            (queued_edit_replacement(&comment))
+                == (Some(QueueEditReplacement::Comment(
+                    "please keep the cache local".into()
+                )))
         );
     }
 }

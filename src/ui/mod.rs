@@ -242,13 +242,14 @@ pub fn launch(sessions: Arc<crate::sessions::Sessions>, cli: Cli) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use yare::parameterized;
 
     #[test]
     fn embedded_app_icon_is_a_256px_rgba_png() {
         let image = image::load_from_memory_with_format(APP_ICON_PNG, image::ImageFormat::Png)
             .expect("embedded app icon must be a valid PNG");
-        assert_eq!((image.width(), image.height()), (256, 256));
-        assert_eq!(image.color(), image::ColorType::Rgba8);
+        assert2::assert!((image.width(), image.height()) == (256, 256));
+        assert2::assert!((image.color()) == (image::ColorType::Rgba8));
     }
 
     #[test]
@@ -256,12 +257,16 @@ mod tests {
         let _icon = app_icon();
     }
 
-    #[test]
-    fn tao_theme_maps_modes() {
-        use dioxus::desktop::tao::window::Theme;
-        assert_eq!(tao_theme(crate::theme::Mode::Auto), None);
-        assert_eq!(tao_theme(crate::theme::Mode::Dark), Some(Theme::Dark));
-        assert_eq!(tao_theme(crate::theme::Mode::Light), Some(Theme::Light));
+    #[parameterized(
+        auto = { crate::theme::Mode::Auto, None },
+        dark = { crate::theme::Mode::Dark, Some(dioxus::desktop::tao::window::Theme::Dark) },
+        light = { crate::theme::Mode::Light, Some(dioxus::desktop::tao::window::Theme::Light) },
+    )]
+    fn tao_theme_maps_modes(
+        mode: crate::theme::Mode,
+        expected: Option<dioxus::desktop::tao::window::Theme>,
+    ) {
+        assert2::assert!(tao_theme(mode) == expected);
     }
 
     #[test]
@@ -275,11 +280,11 @@ mod tests {
             h: 60_000.0,
         };
         let t = ViewTransform::fit(&huge, 1280.0, 780.0);
-        assert!(t.scale >= MIN_FIT_SCALE, "scale: {}", t.scale);
+        assert2::assert!(t.scale >= MIN_FIT_SCALE, "scale: {}", t.scale);
         let center_x = (1280.0 / 2.0 - t.tx) / t.scale;
         let center_y = (780.0 / 2.0 - t.ty) / t.scale;
-        assert!((center_x - 50_000.0).abs() < 1.0, "center x: {center_x}");
-        assert!((center_y - 30_000.0).abs() < 1.0, "center y: {center_y}");
+        assert2::assert!((center_x - 50_000.0).abs() < 1.0, "center x: {center_x}");
+        assert2::assert!((center_y - 30_000.0).abs() < 1.0, "center y: {center_y}");
 
         // Small graphs keep the old behavior (never zoom past 1:1).
         let small = crate::layout::Rect {
@@ -288,7 +293,7 @@ mod tests {
             w: 500.0,
             h: 300.0,
         };
-        assert_eq!(ViewTransform::fit(&small, 1280.0, 780.0).scale, 1.0);
+        assert2::assert!((ViewTransform::fit(&small, 1280.0, 780.0).scale) == (1.0));
     }
 
     #[test]
@@ -299,16 +304,16 @@ mod tests {
             w: 400.0,
             h: 200.0,
         };
-        assert_eq!(
-            ViewTransform::fit(&bounds, 200.0, 300.0),
-            ViewTransform {
-                tx: -5.0,
-                ty: 90.0,
-                scale: 0.5,
-            }
+        assert2::assert!(
+            (ViewTransform::fit(&bounds, 200.0, 300.0))
+                == (ViewTransform {
+                    tx: -5.0,
+                    ty: 90.0,
+                    scale: 0.5,
+                })
         );
-        assert_eq!(
-            ViewTransform::fit(
+        assert2::assert!(
+            (ViewTransform::fit(
                 &crate::layout::Rect {
                     w: 100.0,
                     h: 400.0,
@@ -316,15 +321,14 @@ mod tests {
                 },
                 300.0,
                 200.0,
-            ),
-            ViewTransform {
+            )) == (ViewTransform {
                 tx: 120.0,
                 ty: -10.0,
                 scale: 0.5,
-            }
+            })
         );
-        assert_eq!(
-            ViewTransform::fit(
+        assert2::assert!(
+            (ViewTransform::fit(
                 &crate::layout::Rect {
                     w: 0.0,
                     h: 10.0,
@@ -332,11 +336,10 @@ mod tests {
                 },
                 200.0,
                 300.0,
-            ),
-            ViewTransform::default()
+            )) == (ViewTransform::default())
         );
-        assert_eq!(
-            ViewTransform::fit(
+        assert2::assert!(
+            (ViewTransform::fit(
                 &crate::layout::Rect {
                     w: 10.0,
                     h: 0.0,
@@ -344,26 +347,25 @@ mod tests {
                 },
                 200.0,
                 300.0,
-            ),
-            ViewTransform::default()
+            )) == (ViewTransform::default())
         );
     }
 
     #[test]
     fn agent_colors_and_node_search_are_deterministic() {
-        assert_eq!(agent_hue("alice"), 239);
-        assert_eq!(agent_hue("bob"), 284);
-        assert_eq!(agent_hue(""), 61);
-        assert_eq!(agent_color("alice"), "hsl(239, 62%, 55%)");
+        assert2::assert!((agent_hue("alice")) == (239));
+        assert2::assert!((agent_hue("bob")) == (284));
+        assert2::assert!((agent_hue("")) == (61));
+        assert2::assert!((agent_color("alice")) == ("hsl(239, 62%, 55%)"));
 
         let mut node = crate::demo::demo_doc().nodes.remove(0);
         node.label = "Alpha Service".into();
         node.group = Some("Platform".into());
-        assert!(node_matches(&node, "ALPHA"));
-        assert!(node_matches(&node, "web-ui"));
-        assert!(node_matches(&node, "platform"));
-        assert!(!node_matches(&node, "missing"));
-        assert!(!node_matches(&node, "   "));
+        assert2::assert!(node_matches(&node, "ALPHA"));
+        assert2::assert!(node_matches(&node, "web-ui"));
+        assert2::assert!(node_matches(&node, "platform"));
+        assert2::assert!(!node_matches(&node, "missing"));
+        assert2::assert!(!node_matches(&node, "   "));
     }
 
     #[test]
@@ -376,18 +378,20 @@ mod tests {
             scale: 0.8,
         };
         let plane_center = transform.plane_center(old);
-        assert_eq!(plane_center, (625.0, 562.5));
+        assert2::assert!((plane_center) == (625.0, 562.5));
 
         transform.reframe(old, new);
 
-        assert_eq!(transform.plane_center(new), plane_center);
+        assert2::assert!((transform.plane_center(new)) == (plane_center));
     }
 
-    #[test]
-    fn viewport_size_rejects_invalid_observations() {
-        assert!(ViewportSize::observed(0.0, 780.0).is_none());
-        assert!(ViewportSize::observed(520.0, 0.0).is_none());
-        assert!(ViewportSize::observed(520.0, -1.0).is_none());
-        assert!(ViewportSize::observed(f64::NAN, 780.0).is_none());
+    #[parameterized(
+        zero_width = { 0.0, 780.0 },
+        zero_height = { 520.0, 0.0 },
+        negative_height = { 520.0, -1.0 },
+        non_finite_width = { f64::NAN, 780.0 },
+    )]
+    fn viewport_size_rejects_invalid_observations(width: f64, height: f64) {
+        assert2::assert!(ViewportSize::observed(width, height).is_none());
     }
 }

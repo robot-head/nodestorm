@@ -942,15 +942,17 @@ pub fn Canvas(
 #[cfg(test)]
 mod tests {
     use super::{edge_kind_label, group_outline_rects};
+    use crate::model::EdgeKind;
+    use yare::parameterized;
 
-    #[test]
-    fn edge_kind_labels_are_exact() {
-        use crate::model::EdgeKind;
-
-        assert_eq!(edge_kind_label(EdgeKind::DependsOn), "depends");
-        assert_eq!(edge_kind_label(EdgeKind::DataFlow), "data");
-        assert_eq!(edge_kind_label(EdgeKind::Contains), "contains");
-        assert_eq!(edge_kind_label(EdgeKind::Other), "other");
+    #[parameterized(
+        depends_on = { EdgeKind::DependsOn, "depends" },
+        data_flow = { EdgeKind::DataFlow, "data" },
+        contains = { EdgeKind::Contains, "contains" },
+        other = { EdgeKind::Other, "other" },
+    )]
+    fn edge_kind_labels_are_exact(kind: EdgeKind, expected: &str) {
+        assert2::assert!(edge_kind_label(kind) == expected);
     }
 
     #[test]
@@ -1017,28 +1019,28 @@ mod tests {
             },
         );
 
-        assert_eq!(
-            group_outline_rects(&doc, &layout),
-            vec![
-                (
-                    "g".to_owned(),
-                    Rect {
-                        x: -8.0,
-                        y: 2.0,
-                        w: 266.0,
-                        h: 156.0,
-                    }
-                ),
-                (
-                    "h".to_owned(),
-                    Rect {
-                        x: -18.0,
-                        y: 2.0,
-                        w: 346.0,
-                        h: 236.0,
-                    }
-                )
-            ]
+        assert2::assert!(
+            (group_outline_rects(&doc, &layout))
+                == (vec![
+                    (
+                        "g".to_owned(),
+                        Rect {
+                            x: -8.0,
+                            y: 2.0,
+                            w: 266.0,
+                            h: 156.0,
+                        }
+                    ),
+                    (
+                        "h".to_owned(),
+                        Rect {
+                            x: -18.0,
+                            y: 2.0,
+                            w: 346.0,
+                            h: 236.0,
+                        }
+                    )
+                ])
         );
     }
 
@@ -1048,7 +1050,7 @@ mod tests {
         let doc = crate::demo::big_doc(24);
         let layout = crate::layout::compute(&doc);
         let outlines = group_outline_rects(&doc, &layout);
-        assert_eq!(outlines.len(), 2, "one outline per expanded group");
+        assert2::assert!((outlines.len()) == (2), "one outline per expanded group");
         for (group, rect) in &outlines {
             // Every member card sits inside its group's outline.
             for node in doc
@@ -1057,7 +1059,7 @@ mod tests {
                 .filter(|n| n.group.as_deref() == Some(group.as_str()))
             {
                 let m = layout.rects[&node.id];
-                assert!(
+                assert2::assert!(
                     rect.x <= m.x
                         && rect.y <= m.y
                         && rect.x + rect.w >= m.x + m.w

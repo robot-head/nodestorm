@@ -233,46 +233,62 @@ pub fn NodeCard(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use yare::parameterized;
 
-    #[test]
-    fn zoom_tier_thresholds() {
-        assert_eq!(ZoomTier::from_scale(0.15), ZoomTier::Far);
-        assert_eq!(ZoomTier::from_scale(0.39), ZoomTier::Far);
-        assert_eq!(ZoomTier::from_scale(0.40), ZoomTier::Mid);
-        assert_eq!(ZoomTier::from_scale(0.77), ZoomTier::Mid);
-        assert_eq!(ZoomTier::from_scale(0.78), ZoomTier::Near);
-        assert_eq!(ZoomTier::from_scale(2.5), ZoomTier::Near);
-        assert_eq!(ZoomTier::Far.class(), "zoom-far");
-        assert_eq!(ZoomTier::Mid.class(), "zoom-mid");
-        assert_eq!(ZoomTier::Near.class(), "zoom-near");
+    #[parameterized(
+        far = { 0.15, ZoomTier::Far },
+        below_mid_boundary = { 0.39, ZoomTier::Far },
+        at_mid_boundary = { 0.40, ZoomTier::Mid },
+        below_near_boundary = { 0.77, ZoomTier::Mid },
+        at_near_boundary = { 0.78, ZoomTier::Near },
+        zoomed_in = { 2.5, ZoomTier::Near },
+    )]
+    fn zoom_tier_thresholds(scale: f64, expected: ZoomTier) {
+        assert2::assert!(ZoomTier::from_scale(scale) == expected);
     }
 
-    #[test]
-    fn node_glyphs_labels_and_statuses_are_exact() {
-        assert_eq!(build_glyph(BuildStatus::Planned), "○");
-        assert_eq!(build_glyph(BuildStatus::Building), "◐");
-        assert_eq!(build_glyph(BuildStatus::Built), "●");
-        assert_eq!(build_glyph(BuildStatus::Verified), "✓");
+    #[parameterized(
+        far = { ZoomTier::Far, "zoom-far" },
+        mid = { ZoomTier::Mid, "zoom-mid" },
+        near = { ZoomTier::Near, "zoom-near" },
+    )]
+    fn zoom_tier_classes_are_exact(tier: ZoomTier, expected: &str) {
+        assert2::assert!(tier.class() == expected);
+    }
 
-        let kinds = [
-            (NodeKind::Service, "⬢", "service"),
-            (NodeKind::Module, "▣", "module"),
-            (NodeKind::Component, "◆", "component"),
-            (NodeKind::DataStore, "🗃", "data store"),
-            (NodeKind::Queue, "☰", "queue"),
-            (NodeKind::Ui, "▢", "ui"),
-            (NodeKind::External, "↗", "external"),
-            (NodeKind::Other, "●", "other"),
-        ];
-        for (kind, glyph, label) in kinds {
-            assert_eq!(kind_glyph(kind), glyph);
-            assert_eq!(kind_label(kind), label);
-        }
+    #[parameterized(
+        planned = { BuildStatus::Planned, "○" },
+        building = { BuildStatus::Building, "◐" },
+        built = { BuildStatus::Built, "●" },
+        verified = { BuildStatus::Verified, "✓" },
+    )]
+    fn build_glyphs_are_exact(build: BuildStatus, expected: &str) {
+        assert2::assert!(build_glyph(build) == expected);
+    }
 
-        assert_eq!(status_class(ElementStatus::Existing), "existing");
-        assert_eq!(status_class(ElementStatus::Proposed), "proposed");
-        assert_eq!(status_class(ElementStatus::Modified), "modified");
-        assert_eq!(status_class(ElementStatus::Affected), "affected");
-        assert_eq!(status_class(ElementStatus::Removed), "removed");
+    #[parameterized(
+        service = { NodeKind::Service, "⬢", "service" },
+        module = { NodeKind::Module, "▣", "module" },
+        component = { NodeKind::Component, "◆", "component" },
+        data_store = { NodeKind::DataStore, "🗃", "data store" },
+        queue = { NodeKind::Queue, "☰", "queue" },
+        ui = { NodeKind::Ui, "▢", "ui" },
+        external = { NodeKind::External, "↗", "external" },
+        other = { NodeKind::Other, "●", "other" },
+    )]
+    fn node_glyphs_and_labels_are_exact(kind: NodeKind, glyph: &str, label: &str) {
+        assert2::assert!(kind_glyph(kind) == glyph);
+        assert2::assert!(kind_label(kind) == label);
+    }
+
+    #[parameterized(
+        existing = { ElementStatus::Existing, "existing" },
+        proposed = { ElementStatus::Proposed, "proposed" },
+        modified = { ElementStatus::Modified, "modified" },
+        affected = { ElementStatus::Affected, "affected" },
+        removed = { ElementStatus::Removed, "removed" },
+    )]
+    fn node_status_classes_are_exact(status: ElementStatus, expected: &str) {
+        assert2::assert!(status_class(status) == expected);
     }
 }

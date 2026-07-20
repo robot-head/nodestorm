@@ -117,8 +117,10 @@ type.
 
 Work in independently verifiable batches:
 
-1. Add dependencies and prove one synchronous and one async multi-case syntax
-   spike using natural existing families.
+1. Add dependencies and prove a synchronous multi-case syntax spike using a
+   natural existing family. If the audit identifies a natural async family,
+   prove its custom test-macro syntax in that batch rather than manufacturing
+   an async table solely as a framework demonstration.
 2. Migrate smaller pure modules and consolidate natural tables.
 3. Migrate layout, model, theme, export, and other larger synchronous suites.
 4. Migrate sessions, store, server, and async/stateful suites.

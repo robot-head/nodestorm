@@ -29,7 +29,9 @@ rfd = "0.17.2"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 
 [dev-dependencies]
+assert2 = "0.4"
 tokio = { version = "1", features = ["test-util"] }
+yare = "3"
 # Raw HTTP client for the session-restore regression test.
 reqwest = { version = "0.13", default-features = false }
 rmcp = { version = "2.2.0", features = [

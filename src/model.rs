@@ -1020,11 +1020,11 @@ mod tests {
     #[test]
     fn document_lookups_and_open_question_count_are_exact() {
         let mut doc = crate::demo::demo_doc();
-        assert_eq!(doc.node(&NodeId::from("web-ui")).unwrap().label, "Web UI");
-        assert!(doc.node(&NodeId::from("missing")).is_none());
-        assert_eq!(doc.open_question_count(), 1);
+        assert2::assert!((doc.node(&NodeId::from("web-ui")).unwrap().label) == ("Web UI"));
+        assert2::assert!(doc.node(&NodeId::from("missing")).is_none());
+        assert2::assert!((doc.open_question_count()) == (1));
         doc.questions[0].answer = Some("answer".into());
-        assert_eq!(doc.open_question_count(), 0);
+        assert2::assert!((doc.open_question_count()) == (0));
     }
 
     fn option(id: &str) -> ChoiceOption {
@@ -1121,7 +1121,7 @@ mod tests {
         };
         let json = serde_json::to_string_pretty(&doc).unwrap();
         let back: SessionDoc = serde_json::from_str(&json).unwrap();
-        assert_eq!(doc, back);
+        assert2::assert!((doc) == (back));
     }
 
     #[test]
@@ -1129,9 +1129,9 @@ mod tests {
         // Agent-facing JSON is unchanged: origin absent parses as Agent and
         // agent origin never serializes.
         let n: Node = serde_json::from_str(r#"{"id":"a","label":"A"}"#).unwrap();
-        assert_eq!(n.origin, Origin::Agent);
+        assert2::assert!((n.origin) == (Origin::Agent));
         let out = serde_json::to_string(&n).unwrap();
-        assert!(
+        assert2::assert!(
             !out.contains("origin"),
             "agent origin must not serialize: {out}"
         );
@@ -1139,12 +1139,12 @@ mod tests {
         let mut user = n.clone();
         user.origin = Origin::User;
         let out = serde_json::to_string(&user).unwrap();
-        assert!(
+        assert2::assert!(
             out.contains(r#""origin":"user""#),
             "user origin must persist: {out}"
         );
         let back: Node = serde_json::from_str(&out).unwrap();
-        assert_eq!(back.origin, Origin::User);
+        assert2::assert!((back.origin) == (Origin::User));
     }
 
     #[test]
@@ -1231,25 +1231,25 @@ mod tests {
             r#""kind":"edge_added""#,
             r#""kind":"edge_deleted""#,
         ] {
-            assert!(json.contains(tag), "missing {tag} in: {json}");
+            assert2::assert!(json.contains(tag), "missing {tag} in: {json}");
         }
         let back: Vec<DecisionEvent> = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, events, "round-trip");
+        assert2::assert!((back) == (events), "round-trip");
     }
 
     #[test]
     fn edge_origin_defaults_and_round_trips() {
         let e: Edge = serde_json::from_str(r#"{"from":"a","to":"b"}"#).unwrap();
-        assert_eq!(e.origin, Origin::Agent);
+        assert2::assert!((e.origin) == (Origin::Agent));
         let out = serde_json::to_string(&e).unwrap();
-        assert!(!out.contains("origin"), "in: {out}");
+        assert2::assert!(!out.contains("origin"), "in: {out}");
 
         let mut user = e.clone();
         user.origin = Origin::User;
         let out = serde_json::to_string(&user).unwrap();
-        assert!(out.contains(r#""origin":"user""#), "in: {out}");
+        assert2::assert!(out.contains(r#""origin":"user""#), "in: {out}");
         let back: Edge = serde_json::from_str(&out).unwrap();
-        assert_eq!(back.origin, Origin::User);
+        assert2::assert!((back.origin) == (Origin::User));
     }
 
     #[test]
@@ -1265,26 +1265,26 @@ mod tests {
             }"#,
         )
         .unwrap();
-        assert_eq!(doc.version, SessionDoc::VERSION);
-        assert_eq!(doc.nodes[0].kind, NodeKind::Component);
-        assert_eq!(doc.nodes[1].kind, NodeKind::DataStore);
-        assert_eq!(doc.nodes[1].status, ElementStatus::Existing);
-        assert_eq!(doc.edges[0].kind, EdgeKind::DependsOn);
-        assert!(doc.validate().is_ok());
+        assert2::assert!((doc.version) == (SessionDoc::VERSION));
+        assert2::assert!((doc.nodes[0].kind) == (NodeKind::Component));
+        assert2::assert!((doc.nodes[1].kind) == (NodeKind::DataStore));
+        assert2::assert!((doc.nodes[1].status) == (ElementStatus::Existing));
+        assert2::assert!((doc.edges[0].kind) == (EdgeKind::DependsOn));
+        assert2::assert!(doc.validate().is_ok());
     }
 
     #[test]
     fn unknown_fields_are_rejected() {
         let err = serde_json::from_str::<Node>(r#"{"id": "a", "label": "A", "colour": "red"}"#)
             .unwrap_err();
-        assert!(err.to_string().contains("colour"), "{err}");
+        assert2::assert!(err.to_string().contains("colour"), "{err}");
     }
 
     #[test]
     fn unknown_node_kind_degrades_to_other() {
         let n: Node =
             serde_json::from_str(r#"{"id": "a", "label": "A", "kind": "blockchain"}"#).unwrap();
-        assert_eq!(n.kind, NodeKind::Other);
+        assert2::assert!((n.kind) == (NodeKind::Other));
     }
 
     #[test]
@@ -1301,11 +1301,11 @@ mod tests {
             },
         };
         let json = serde_json::to_value(&ev).unwrap();
-        assert_eq!(json["kind"], "option_selected");
-        assert_eq!(json["seq"], 3);
-        assert_eq!(json["option_id"], "sqlite");
+        assert2::assert!((json["kind"]) == ("option_selected"));
+        assert2::assert!((json["seq"]) == (3));
+        assert2::assert!((json["option_id"]) == ("sqlite"));
         let back: DecisionEvent = serde_json::from_value(json).unwrap();
-        assert_eq!(ev, back);
+        assert2::assert!((ev) == (back));
     }
 
     #[test]
@@ -1314,9 +1314,9 @@ mod tests {
             r#"{"op": "resolve_choice", "node_id": "api", "choice_id": "persistence", "selected": "sqlite"}"#,
         )
         .unwrap();
-        assert!(matches!(op, GraphOp::ResolveChoice { .. }));
+        assert2::assert!(matches!(op, GraphOp::ResolveChoice { .. }));
         let op: GraphOp = serde_json::from_str(r#"{"op": "announce", "message": "hi"}"#).unwrap();
-        assert!(matches!(op, GraphOp::Announce { .. }));
+        assert2::assert!(matches!(op, GraphOp::Announce { .. }));
     }
 
     #[test]
@@ -1327,15 +1327,15 @@ mod tests {
         .unwrap();
         match op {
             GraphOp::Ask { question } => {
-                assert_eq!(question.id, QuestionId::from("deploy"));
-                assert_eq!(question.node_id, Some(NodeId::from("api")));
-                assert!(question.answer.is_none());
+                assert2::assert!((question.id) == (QuestionId::from("deploy")));
+                assert2::assert!((question.node_id) == (Some(NodeId::from("api"))));
+                assert2::assert!(question.answer.is_none());
             }
             _ => panic!("expected ask"),
         }
         let op: GraphOp =
             serde_json::from_str(r#"{"op": "remove_question", "id": "deploy"}"#).unwrap();
-        assert!(matches!(op, GraphOp::RemoveQuestion { .. }));
+        assert2::assert!(matches!(op, GraphOp::RemoveQuestion { .. }));
 
         let ev = DecisionEvent {
             seq: 1,
@@ -1347,10 +1347,10 @@ mod tests {
             },
         };
         let json = serde_json::to_value(&ev).unwrap();
-        assert_eq!(json["kind"], "question_answered");
-        assert_eq!(json["answer"], "staging");
+        assert2::assert!((json["kind"]) == ("question_answered"));
+        assert2::assert!((json["answer"]) == ("staging"));
         let back: DecisionEvent = serde_json::from_value(json).unwrap();
-        assert_eq!(back, ev);
+        assert2::assert!((back) == (ev));
     }
 
     #[test]
@@ -1359,24 +1359,24 @@ mod tests {
             serde_json::from_str(r#"{"op":"set_lane","id":"api","lane":"backend"}"#).unwrap();
         match op {
             GraphOp::SetLane { id, lane } => {
-                assert_eq!(id, NodeId::from("api"));
-                assert_eq!(lane.as_deref(), Some("backend"));
+                assert2::assert!((id) == (NodeId::from("api")));
+                assert2::assert!((lane.as_deref()) == (Some("backend")));
             }
             _ => panic!("expected set_lane"),
         }
         let op: GraphOp = serde_json::from_str(r#"{"op":"set_lane","id":"api"}"#).unwrap();
-        assert!(matches!(op, GraphOp::SetLane { lane: None, .. }));
+        assert2::assert!(matches!(op, GraphOp::SetLane { lane: None, .. }));
 
         // A user lane override survives an agent upsert that doesn't restate it.
         let mut current = node("a");
         current.lane = Some("frontend".into());
         current.merge_from_agent(node("a"));
-        assert_eq!(current.lane.as_deref(), Some("frontend"));
+        assert2::assert!((current.lane.as_deref()) == (Some("frontend")));
         // An upsert that restates the lane wins.
         let mut incoming = node("a");
         incoming.lane = Some("backend".into());
         current.merge_from_agent(incoming);
-        assert_eq!(current.lane.as_deref(), Some("backend"));
+        assert2::assert!((current.lane.as_deref()) == (Some("backend")));
     }
 
     #[test]
@@ -1386,12 +1386,12 @@ mod tests {
             r#"{"id":"b","prompt":"?","options":[{"id":"x","label":"X"}],"depends_on":[{"node":"n","choice":"a"}]}"#,
         )
         .unwrap();
-        assert_eq!(
-            c.depends_on,
-            vec![ChoiceRef {
-                node: NodeId::from("n"),
-                choice: ChoiceId::from("a")
-            }]
+        assert2::assert!(
+            (c.depends_on)
+                == (vec![ChoiceRef {
+                    node: NodeId::from("n"),
+                    choice: ChoiceId::from("a")
+                }])
         );
 
         let mut doc = SessionDoc {
@@ -1405,12 +1405,12 @@ mod tests {
         }];
         doc.nodes[0].choices = vec![choice("a", &["x"]), child];
         // Locked while the parent is open.
-        assert!(doc.is_choice_locked(&doc.nodes[0].choices[1]));
+        assert2::assert!(doc.is_choice_locked(&doc.nodes[0].choices[1]));
         doc.nodes[0].choices[0].status = ChoiceStatus::Decided;
-        assert!(!doc.is_choice_locked(&doc.nodes[0].choices[1]));
+        assert2::assert!(!doc.is_choice_locked(&doc.nodes[0].choices[1]));
         // A dismissed parent also unblocks.
         doc.nodes[0].choices[0].status = ChoiceStatus::Dismissed;
-        assert!(!doc.is_choice_locked(&doc.nodes[0].choices[1]));
+        assert2::assert!(!doc.is_choice_locked(&doc.nodes[0].choices[1]));
 
         // A dangling dependency warns (not errors) and keeps the child locked.
         let mut doc2 = SessionDoc {
@@ -1424,9 +1424,9 @@ mod tests {
         }];
         doc2.nodes[0].choices = vec![orphan];
         let v = doc2.validate();
-        assert!(v.is_ok(), "dangling dep only warns: {:?}", v.errors);
-        assert!(v.warnings.iter().any(|w| w.contains("unknown choice")));
-        assert!(doc2.is_choice_locked(&doc2.nodes[0].choices[0]));
+        assert2::assert!(v.is_ok(), "dangling dep only warns: {:?}", v.errors);
+        assert2::assert!(v.warnings.iter().any(|w| w.contains("unknown choice")));
+        assert2::assert!(doc2.is_choice_locked(&doc2.nodes[0].choices[0]));
     }
 
     #[test]
@@ -1447,8 +1447,8 @@ mod tests {
         }];
         doc.nodes[0].choices = vec![a, b];
         let v = doc.validate();
-        assert!(!v.is_ok());
-        assert!(v.errors.iter().any(|e| e.contains("cycle")));
+        assert2::assert!(!v.is_ok());
+        assert2::assert!(v.errors.iter().any(|e| e.contains("cycle")));
 
         // A self-dependency is also a cycle.
         let mut doc2 = SessionDoc {
@@ -1461,7 +1461,7 @@ mod tests {
             choice: ChoiceId::from("s"),
         }];
         doc2.nodes[0].choices = vec![s];
-        assert!(!doc2.validate().is_ok());
+        assert2::assert!(!doc2.validate().is_ok());
     }
 
     #[test]
@@ -1470,30 +1470,30 @@ mod tests {
             serde_json::from_str(r#"{"op":"set_build","id":"api","build":"verified"}"#).unwrap();
         match op {
             GraphOp::SetBuild { id, build } => {
-                assert_eq!(id, NodeId::from("api"));
-                assert_eq!(build, Some(BuildStatus::Verified));
+                assert2::assert!((id) == (NodeId::from("api")));
+                assert2::assert!((build) == (Some(BuildStatus::Verified)));
             }
             _ => panic!("expected set_build"),
         }
         // Omitting build clears it.
         let op: GraphOp = serde_json::from_str(r#"{"op":"set_build","id":"api"}"#).unwrap();
-        assert!(matches!(op, GraphOp::SetBuild { build: None, .. }));
+        assert2::assert!(matches!(op, GraphOp::SetBuild { build: None, .. }));
 
         // Agent-owned but sticky: an upsert that doesn't restate build keeps it.
         let mut current = node("a");
         current.build = Some(BuildStatus::Built);
         current.merge_from_agent(node("a"));
-        assert_eq!(current.build, Some(BuildStatus::Built));
+        assert2::assert!((current.build) == (Some(BuildStatus::Built)));
         // A restating upsert wins.
         let mut incoming = node("a");
         incoming.build = Some(BuildStatus::Verified);
         current.merge_from_agent(incoming);
-        assert_eq!(current.build, Some(BuildStatus::Verified));
+        assert2::assert!((current.build) == (Some(BuildStatus::Verified)));
 
         // `build: None` never serializes; a value round-trips.
         let plain = node("a");
-        assert!(!serde_json::to_string(&plain).unwrap().contains("build"));
-        assert!(
+        assert2::assert!(!serde_json::to_string(&plain).unwrap().contains("build"));
+        assert2::assert!(
             serde_json::to_string(&current)
                 .unwrap()
                 .contains(r#""build":"verified""#)
@@ -1516,8 +1516,8 @@ mod tests {
         };
         doc.questions = vec![q("dup", None), q("dup", None), q("stray", Some("ghost"))];
         let v = doc.validate();
-        assert!(v.errors.iter().any(|e| e.contains("duplicate question id")));
-        assert!(
+        assert2::assert!(v.errors.iter().any(|e| e.contains("duplicate question id")));
+        assert2::assert!(
             v.warnings
                 .iter()
                 .any(|w| w.contains("unknown node `ghost`"))
@@ -1533,10 +1533,10 @@ mod tests {
         };
         doc.nodes[0].choices.push(choice("c", &[]));
         let v = doc.validate();
-        assert!(!v.is_ok());
-        assert!(v.errors.iter().any(|e| e.contains("duplicate node id")));
-        assert!(v.errors.iter().any(|e| e.contains("unknown node `ghost`")));
-        assert!(v.errors.iter().any(|e| e.contains("has no options")));
+        assert2::assert!(!v.is_ok());
+        assert2::assert!(v.errors.iter().any(|e| e.contains("duplicate node id")));
+        assert2::assert!(v.errors.iter().any(|e| e.contains("unknown node `ghost`")));
+        assert2::assert!(v.errors.iter().any(|e| e.contains("has no options")));
     }
 
     #[test]
@@ -1561,12 +1561,12 @@ mod tests {
         doc.annotations = vec![annotation.clone(), annotation];
 
         let v = doc.validate();
-        assert!(
+        assert2::assert!(
             v.errors
                 .iter()
                 .any(|e| e.contains("selects unknown option `missing`"))
         );
-        assert!(
+        assert2::assert!(
             v.errors
                 .iter()
                 .any(|e| e.contains("duplicate annotation id `duplicate`"))
@@ -1583,8 +1583,8 @@ mod tests {
         c.options[0].affects.push(NodeId::from("missing"));
         doc.nodes[0].choices.push(c);
         let v = doc.validate();
-        assert!(v.is_ok());
-        assert_eq!(v.warnings.len(), 1);
+        assert2::assert!(v.is_ok());
+        assert2::assert!((v.warnings.len()) == (1));
     }
 
     #[test]
@@ -1607,14 +1607,14 @@ mod tests {
         incoming.choices.push(choice("stay", &["x", "y", "z"]));
 
         current.merge_from_agent(incoming);
-        assert_eq!(current.label, "A v2");
-        assert_eq!(current.position, Some(Point { x: 1.0, y: 2.0 }));
-        assert_eq!(current.notes.len(), 1);
+        assert2::assert!((current.label) == ("A v2"));
+        assert2::assert!((current.position) == (Some(Point { x: 1.0, y: 2.0 })));
+        assert2::assert!((current.notes.len()) == (1));
         // Decided choice survives the upsert untouched.
         let c = current.choice(&ChoiceId::from("stay")).unwrap();
-        assert_eq!(c.status, ChoiceStatus::Decided);
-        assert_eq!(c.selected, Some(OptionId::from("x")));
-        assert_eq!(c.options.len(), 2);
+        assert2::assert!((c.status) == (ChoiceStatus::Decided));
+        assert2::assert!((c.selected) == (Some(OptionId::from("x"))));
+        assert2::assert!((c.options.len()) == (2));
     }
 
     #[test]
@@ -1632,8 +1632,8 @@ mod tests {
 
         current.merge_from_agent(incoming);
         let c = current.choice(&ChoiceId::from("c")).unwrap();
-        assert_eq!(c.status, ChoiceStatus::Open);
-        assert_eq!(c.options.len(), 2);
-        assert!(!c.reopen, "reopen flag is consumed, not persisted");
+        assert2::assert!((c.status) == (ChoiceStatus::Open));
+        assert2::assert!((c.options.len()) == (2));
+        assert2::assert!(!c.reopen, "reopen flag is consumed, not persisted");
     }
 }

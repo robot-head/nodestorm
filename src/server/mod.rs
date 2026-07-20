@@ -209,19 +209,19 @@ mod tests {
             rmcp::model::Implementation::default(),
         ));
 
-        assert!(store.load("session").await.unwrap().is_none());
+        assert2::assert!(store.load("session").await.unwrap().is_none());
         store.store("session", &state).await.unwrap();
-        assert_eq!(
-            store
+        assert2::assert!(
+            (store
                 .load("session")
                 .await
                 .unwrap()
                 .unwrap()
-                .initialize_params,
-            state.initialize_params
+                .initialize_params)
+                == (state.initialize_params)
         );
         store.delete("session").await.unwrap();
-        assert!(store.load("session").await.unwrap().is_none());
+        assert2::assert!(store.load("session").await.unwrap().is_none());
     }
 
     #[test]
@@ -233,12 +233,12 @@ mod tests {
         let cancel = CancellationToken::new();
 
         connections.connect("transport".into(), id, cancel.clone());
-        assert_eq!(connections.connections.lock().unwrap()["transport"].id, id);
+        assert2::assert!((connections.connections.lock().unwrap()["transport"].id) == (id));
         connections.disconnect("transport");
 
-        assert!(cancel.is_cancelled());
-        assert!(connections.connections.lock().unwrap().is_empty());
-        assert!(sessions.connections().is_empty());
+        assert2::assert!(cancel.is_cancelled());
+        assert2::assert!(connections.connections.lock().unwrap().is_empty());
+        assert2::assert!(sessions.connections().is_empty());
     }
 
     #[test]
@@ -246,21 +246,18 @@ mod tests {
         use axum::http::{HeaderValue, StatusCode};
 
         let id = HeaderValue::from_static("transport");
-        assert_eq!(
-            disconnect_session_id(&Method::DELETE, StatusCode::NO_CONTENT, Some(&id)).as_deref(),
-            Some("transport")
+        assert2::assert!(
+            (disconnect_session_id(&Method::DELETE, StatusCode::NO_CONTENT, Some(&id)).as_deref())
+                == (Some("transport"))
         );
-        assert_eq!(
-            disconnect_session_id(&Method::POST, StatusCode::NO_CONTENT, Some(&id)),
-            None
+        assert2::assert!(
+            (disconnect_session_id(&Method::POST, StatusCode::NO_CONTENT, Some(&id))) == (None)
         );
-        assert_eq!(
-            disconnect_session_id(&Method::DELETE, StatusCode::BAD_REQUEST, Some(&id)),
-            None
+        assert2::assert!(
+            (disconnect_session_id(&Method::DELETE, StatusCode::BAD_REQUEST, Some(&id))) == (None)
         );
-        assert_eq!(
-            disconnect_session_id(&Method::DELETE, StatusCode::NO_CONTENT, None),
-            None
+        assert2::assert!(
+            (disconnect_session_id(&Method::DELETE, StatusCode::NO_CONTENT, None)) == (None)
         );
     }
 
@@ -275,7 +272,7 @@ mod tests {
         let task = tokio::spawn(serve(listener, sessions, shutdown_rx));
         tokio::task::yield_now().await;
 
-        assert!(!task.is_finished());
+        assert2::assert!(!task.is_finished());
         shutdown_tx.send(true).unwrap();
         task.await.unwrap().unwrap();
         let _ = std::fs::remove_dir_all(root);

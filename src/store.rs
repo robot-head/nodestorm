@@ -2444,6 +2444,7 @@ fn consume_reopen(mut c: crate::model::Choice) -> crate::model::Choice {
 mod tests {
     use super::*;
     use crate::demo::demo_doc;
+    use yare::parameterized;
 
     fn demo_store() -> Arc<Store> {
         Store::with_doc(demo_doc())
@@ -2496,16 +2497,15 @@ mod tests {
         let cache = doc
             .node(&NodeId::from("my-cache"))
             .expect("user node survives a propose that omits it");
-        assert_eq!(cache.origin, Origin::User);
-        assert!(
+        assert2::assert!((cache.origin) == (Origin::User));
+        assert2::assert!(
             doc.edges
                 .iter()
                 .any(|e| e.from.as_str() == "my-cache" && e.origin == Origin::User),
             "user edge survives"
         );
-        assert_eq!(
-            doc.node(&NodeId::from("web-ui")).unwrap().origin,
-            Origin::Agent,
+        assert2::assert!(
+            (doc.node(&NodeId::from("web-ui")).unwrap().origin) == (Origin::Agent),
             "claimed user origin is normalized"
         );
     }
@@ -2525,24 +2525,26 @@ mod tests {
         let summary = store.apply_propose(incoming).unwrap();
 
         let doc = store.snapshot_doc();
-        assert!(doc.node(&NodeId::from("widget")).is_some(), "node survives");
-        assert!(
+        assert2::assert!(doc.node(&NodeId::from("widget")).is_some(), "node survives");
+        assert2::assert!(
             !doc.edges.iter().any(|e| e.from.as_str() == "widget"),
             "user edge with vanished endpoint is dropped"
         );
-        assert!(
+        assert2::assert!(
             summary.warnings.iter().any(|w| w.contains("user edge")),
             "warnings: {:?}",
             summary.warnings
         );
     }
 
-    #[test]
-    fn slugify_cases() {
-        assert_eq!(slugify("My Cache!"), "my-cache");
-        assert_eq!(slugify("  "), "component");
-        assert_eq!(slugify("Ünïcode Näme"), "n-code-n-me");
-        assert_eq!(slugify("API Gateway 2"), "api-gateway-2");
+    #[parameterized(
+        words_and_punctuation = { "My Cache!", "my-cache" },
+        blank = { "  ", "component" },
+        non_ascii = { "Ünïcode Näme", "n-code-n-me" },
+        digits = { "API Gateway 2", "api-gateway-2" },
+    )]
+    fn slugify_cases(input: &str, expected: &str) {
+        assert2::assert!(slugify(input) == expected);
     }
 
     #[test]
@@ -2558,26 +2560,26 @@ mod tests {
                 Some(Point { x: 10.0, y: 20.0 }),
             )
             .unwrap();
-        assert_eq!(id.as_str(), "my-cache");
+        assert2::assert!((id.as_str()) == ("my-cache"));
         let id2 = store
             .add_user_node("My Cache".into(), NodeKind::DataStore, None)
             .unwrap();
-        assert_eq!(id2.as_str(), "my-cache-2", "id collision suffixed");
+        assert2::assert!((id2.as_str()) == ("my-cache-2"), "id collision suffixed");
         let id3 = store
             .add_user_node("My Cache".into(), NodeKind::DataStore, None)
             .unwrap();
-        assert_eq!(id3.as_str(), "my-cache-3", "suffix increments again");
+        assert2::assert!((id3.as_str()) == ("my-cache-3"), "suffix increments again");
 
         let doc = store.snapshot_doc();
         let n = doc.node(&id).unwrap();
-        assert_eq!(n.origin, Origin::User);
-        assert_eq!(n.status, ElementStatus::Proposed);
-        assert_eq!(n.kind, NodeKind::DataStore);
-        assert_eq!(n.label, "My Cache");
-        assert_eq!(n.position, Some(Point { x: 10.0, y: 20.0 }));
+        assert2::assert!((n.origin) == (Origin::User));
+        assert2::assert!((n.status) == (ElementStatus::Proposed));
+        assert2::assert!((n.kind) == (NodeKind::DataStore));
+        assert2::assert!((n.label) == ("My Cache"));
+        assert2::assert!((n.position) == (Some(Point { x: 10.0, y: 20.0 })));
 
         let log = store.read(|s| s.decision_log.clone());
-        assert!(
+        assert2::assert!(
             matches!(
                 &log.last().unwrap().kind,
                 DecisionKind::NodeAdded { node }
@@ -2586,12 +2588,11 @@ mod tests {
             "last event: {:?}",
             log.last()
         );
-        assert_eq!(
-            store.read(|s| s.flush_seq),
-            flush_before,
+        assert2::assert!(
+            (store.read(|s| s.flush_seq)) == (flush_before),
             "editing never autoflushes"
         );
-        assert!(
+        assert2::assert!(
             store
                 .snapshot_meta()
                 .activity
@@ -2618,16 +2619,16 @@ mod tests {
             .unwrap();
         let doc = store.snapshot_doc();
         let n = doc.node(&NodeId::from("redis")).unwrap();
-        assert_eq!(n.label, "Redis Cluster");
-        assert_eq!(n.description, "now clustered");
+        assert2::assert!((n.label) == ("Redis Cluster"));
+        assert2::assert!((n.description) == ("now clustered"));
 
         let log = store.read(|s| s.decision_log.clone());
-        assert!(matches!(
+        assert2::assert!(matches!(
             &log.last().unwrap().kind,
             DecisionKind::NodeEdited { node_id, label, description, .. }
                 if node_id.as_str() == "redis" && label == "Redis Cluster" && description == "now clustered"
         ));
-        assert!(
+        assert2::assert!(
             store
                 .edit_node(
                     &NodeId::from("ghost"),
@@ -2652,14 +2653,14 @@ mod tests {
         // User-origin: hard delete, incident edges included.
         store.delete_node(&NodeId::from("mine")).unwrap();
         let doc = store.snapshot_doc();
-        assert!(doc.node(&NodeId::from("mine")).is_none());
-        assert!(
+        assert2::assert!(doc.node(&NodeId::from("mine")).is_none());
+        assert2::assert!(
             !doc.edges
                 .iter()
                 .any(|e| e.from.as_str() == "mine" || e.to.as_str() == "mine")
         );
         let log = store.read(|s| s.decision_log.clone());
-        assert!(matches!(
+        assert2::assert!(matches!(
             &log.last().unwrap().kind,
             DecisionKind::NodeDeleted { node_id } if node_id.as_str() == "mine"
         ));
@@ -2667,12 +2668,11 @@ mod tests {
         // Agent-origin: soft — marked removed, node stays.
         store.delete_node(&NodeId::from("redis")).unwrap();
         let doc = store.snapshot_doc();
-        assert_eq!(
-            doc.node(&NodeId::from("redis")).unwrap().status,
-            ElementStatus::Removed
+        assert2::assert!(
+            (doc.node(&NodeId::from("redis")).unwrap().status) == (ElementStatus::Removed)
         );
         let log = store.read(|s| s.decision_log.clone());
-        assert!(matches!(
+        assert2::assert!(matches!(
             &log.last().unwrap().kind,
             DecisionKind::RemovalRequested { node_id } if node_id.as_str() == "redis"
         ));
@@ -2680,9 +2680,9 @@ mod tests {
         // Idempotent: a second delete of an already-Removed agent node is a no-op.
         let log_len = store.read(|s| s.decision_log.len());
         store.delete_node(&NodeId::from("redis")).unwrap();
-        assert_eq!(store.read(|s| s.decision_log.len()), log_len);
+        assert2::assert!((store.read(|s| s.decision_log.len())) == (log_len));
 
-        assert!(store.delete_node(&NodeId::from("ghost")).is_err());
+        assert2::assert!(store.delete_node(&NodeId::from("ghost")).is_err());
     }
 
     #[test]
@@ -2702,10 +2702,10 @@ mod tests {
             .iter()
             .find(|e| e.from.as_str() == "web-ui" && e.to.as_str() == "postgres")
             .unwrap();
-        assert_eq!(e.origin, Origin::User);
-        assert_eq!(e.status, ElementStatus::Proposed);
+        assert2::assert!((e.origin) == (Origin::User));
+        assert2::assert!((e.status) == (ElementStatus::Proposed));
         let log = store.read(|s| s.decision_log.clone());
-        assert!(matches!(
+        assert2::assert!(matches!(
             &log.last().unwrap().kind,
             DecisionKind::EdgeAdded { from, to, edge_kind }
                 if from.as_str() == "web-ui" && to.as_str() == "postgres"
@@ -2713,7 +2713,7 @@ mod tests {
         ));
 
         // Duplicate of the edge we just added, and of a demo edge.
-        assert!(
+        assert2::assert!(
             store
                 .add_user_edge(
                     &NodeId::from("web-ui"),
@@ -2722,7 +2722,7 @@ mod tests {
                 )
                 .is_err()
         );
-        assert!(
+        assert2::assert!(
             store
                 .add_user_edge(
                     &NodeId::from("web-ui"),
@@ -2732,7 +2732,7 @@ mod tests {
                 .is_err()
         );
         // Self-loop and dangling endpoint.
-        assert!(
+        assert2::assert!(
             store
                 .add_user_edge(
                     &NodeId::from("web-ui"),
@@ -2741,7 +2741,7 @@ mod tests {
                 )
                 .is_err()
         );
-        assert!(
+        assert2::assert!(
             store
                 .add_user_edge(
                     &NodeId::from("web-ui"),
@@ -2764,17 +2764,17 @@ mod tests {
             )
             .unwrap();
         let doc = store.snapshot_doc();
-        assert!(
+        assert2::assert!(
             !doc.edges
                 .iter()
                 .any(|e| e.from.as_str() == "web-ui" && e.to.as_str() == "api-gateway")
         );
         let log = store.read(|s| s.decision_log.clone());
-        assert!(matches!(
+        assert2::assert!(matches!(
             &log.last().unwrap().kind,
             DecisionKind::EdgeDeleted { from, .. } if from.as_str() == "web-ui"
         ));
-        assert!(
+        assert2::assert!(
             store
                 .delete_edge(
                     &NodeId::from("web-ui"),
@@ -2808,10 +2808,13 @@ mod tests {
 
         let doc = store.snapshot_doc();
         let n = doc.node(&NodeId::from("adoptee")).unwrap();
-        assert_eq!(n.origin, Origin::Agent, "agent upsert adopts the node");
-        assert_eq!(n.label, "Adoptee (enriched)");
-        assert_eq!(n.notes.len(), 1, "user note survives adoption");
-        assert_eq!(n.position, Some(Point { x: 5.0, y: 6.0 }));
+        assert2::assert!(
+            (n.origin) == (Origin::Agent),
+            "agent upsert adopts the node"
+        );
+        assert2::assert!((n.label) == ("Adoptee (enriched)"));
+        assert2::assert!((n.notes.len()) == (1), "user note survives adoption");
+        assert2::assert!((n.position) == (Some(Point { x: 5.0, y: 6.0 })));
     }
 
     #[test]
@@ -2822,23 +2825,23 @@ mod tests {
             .add_user_node("Widget".into(), NodeKind::Component, None)
             .unwrap();
         let meta = store.snapshot_meta();
-        assert!(meta.undo_available);
-        assert!(!meta.redo_available);
+        assert2::assert!(meta.undo_available);
+        assert2::assert!(!meta.redo_available);
 
-        assert!(store.undo());
-        assert!(store.snapshot_doc().node(&id).is_none(), "node gone");
-        assert_eq!(store.read(|s| s.decision_log.len()), 0, "event gone");
+        assert2::assert!(store.undo());
+        assert2::assert!(store.snapshot_doc().node(&id).is_none(), "node gone");
+        assert2::assert!((store.read(|s| s.decision_log.len())) == (0), "event gone");
         let meta = store.snapshot_meta();
-        assert!(!meta.undo_available);
-        assert!(meta.redo_available);
-        assert!(
+        assert2::assert!(!meta.undo_available);
+        assert2::assert!(meta.redo_available);
+        assert2::assert!(
             meta.activity.iter().any(|a| a.text.contains("undid")),
             "receipt"
         );
 
-        assert!(store.redo());
-        assert!(store.snapshot_doc().node(&id).is_some(), "node back");
-        assert_eq!(store.read(|s| s.decision_log.len()), 1, "event back");
+        assert2::assert!(store.redo());
+        assert2::assert!(store.snapshot_doc().node(&id).is_some(), "node back");
+        assert2::assert!((store.read(|s| s.decision_log.len())) == (1), "event back");
     }
 
     #[test]
@@ -2846,15 +2849,15 @@ mod tests {
         let store = demo_store();
         pick_first_choice(&store); // demo has two open choices — no autoflush
         let rev_after_pick = store.snapshot_doc().revision;
-        assert_eq!(store.read(|s| s.decision_log.len()), 1);
+        assert2::assert!((store.read(|s| s.decision_log.len())) == (1));
 
-        assert!(store.undo());
+        assert2::assert!(store.undo());
         let doc = store.snapshot_doc();
         let choice = &doc.node(&NodeId::from("sync-engine")).unwrap().choices[0];
-        assert_eq!(choice.status, ChoiceStatus::Open, "choice open again");
-        assert!(choice.selected.is_none());
-        assert_eq!(store.read(|s| s.decision_log.len()), 0);
-        assert!(
+        assert2::assert!((choice.status) == (ChoiceStatus::Open), "choice open again");
+        assert2::assert!(choice.selected.is_none());
+        assert2::assert!((store.read(|s| s.decision_log.len())) == (0));
+        assert2::assert!(
             doc.revision > rev_after_pick,
             "revision stays monotonic: {} vs {rev_after_pick}",
             doc.revision
@@ -2868,7 +2871,7 @@ mod tests {
         store
             .add_user_node("Widget".into(), NodeKind::Component, None)
             .unwrap();
-        assert!(store.snapshot_meta().undo_available);
+        assert2::assert!(store.snapshot_meta().undo_available);
         let waiting = tokio::spawn({
             let store = store.clone();
             async move {
@@ -2880,9 +2883,9 @@ mod tests {
         wait_until(&store, 1).await;
         store.request_flush(None).unwrap();
         let meta = store.snapshot_meta();
-        assert!(!meta.undo_available, "delivered decisions are facts");
-        assert!(!meta.redo_available);
-        assert!(!store.undo(), "nothing to undo after a flush");
+        assert2::assert!(!meta.undo_available, "delivered decisions are facts");
+        assert2::assert!(!meta.redo_available);
+        assert2::assert!(!store.undo(), "nothing to undo after a flush");
         waiting.await.unwrap().unwrap();
     }
 
@@ -2898,10 +2901,10 @@ mod tests {
                 vec![],
             )
             .unwrap(); // last open choice → autoflush
-        assert!(store.read(|s| s.flush_seq) > 0, "autoflush fired");
+        assert2::assert!(store.read(|s| s.flush_seq) > 0, "autoflush fired");
         let meta = store.snapshot_meta();
-        assert!(!meta.undo_available);
-        assert!(!meta.redo_available);
+        assert2::assert!(!meta.undo_available);
+        assert2::assert!(!meta.redo_available);
     }
 
     #[test]
@@ -2916,7 +2919,7 @@ mod tests {
                 title: "new title".into(),
             }])
             .unwrap();
-        assert!(
+        assert2::assert!(
             !store.snapshot_meta().undo_available,
             "agent turn invalidates the undo window"
         );
@@ -2925,7 +2928,7 @@ mod tests {
             .add_user_node("Widget 2".into(), NodeKind::Component, None)
             .unwrap();
         store.apply_propose(demo_doc()).unwrap();
-        assert!(!store.snapshot_meta().undo_available);
+        assert2::assert!(!store.snapshot_meta().undo_available);
     }
 
     #[test]
@@ -2941,9 +2944,9 @@ mod tests {
                 },
             );
         }
-        assert_eq!(store.read(|s| s.undo.len()), 1, "one entry per drag");
-        assert!(store.undo());
-        assert!(
+        assert2::assert!((store.read(|s| s.undo.len())) == (1), "one entry per drag");
+        assert2::assert!(store.undo());
+        assert2::assert!(
             store
                 .snapshot_doc()
                 .node(&NodeId::from("web-ui"))
@@ -2958,24 +2961,24 @@ mod tests {
     fn set_lane_sets_and_clears_membership() {
         let store = demo_store();
         store.set_lane(&NodeId::from("redis"), Some("  data  ".into()));
-        assert_eq!(
-            store
+        assert2::assert!(
+            (store
                 .snapshot_doc()
                 .node(&NodeId::from("redis"))
                 .unwrap()
                 .lane
-                .as_deref(),
-            Some("data"),
+                .as_deref())
+                == (Some("data")),
             "lane is trimmed and set"
         );
         store.set_lane(&NodeId::from("redis"), Some("   ".into()));
-        assert_eq!(
-            store
+        assert2::assert!(
+            (store
                 .snapshot_doc()
                 .node(&NodeId::from("redis"))
                 .unwrap()
-                .lane,
-            None,
+                .lane)
+                == (None),
             "blank lane clears membership"
         );
     }
@@ -2989,13 +2992,13 @@ mod tests {
         store.checkpoint_position(&NodeId::from("redis")); // drag start
         store.set_position(&NodeId::from("redis"), Point { x: 5.0, y: 5.0 });
         store.set_lane(&NodeId::from("redis"), Some("data".into()));
-        assert!(store.undo(), "one undo available for the drag");
+        assert2::assert!(store.undo(), "one undo available for the drag");
         let redis = store
             .snapshot_doc()
             .node(&NodeId::from("redis"))
             .unwrap()
             .clone();
-        assert_eq!(redis.lane, None, "undo reverts the lane change");
+        assert2::assert!((redis.lane) == (None), "undo reverts the lane change");
     }
 
     #[test]
@@ -3004,7 +3007,7 @@ mod tests {
         // email-provider is the sole "External" member; dragging it out must
         // not erase the lane — it survives as a declared empty band.
         store.set_lane(&NodeId::from("email-provider"), None);
-        assert!(
+        assert2::assert!(
             store
                 .snapshot_meta()
                 .declared_lanes
@@ -3014,7 +3017,7 @@ mod tests {
         // redis leaves "Data" but postgres/search-index remain members:
         // no rescue needed, the lane still exists by reference.
         store.set_lane(&NodeId::from("redis"), None);
-        assert!(
+        assert2::assert!(
             !store
                 .snapshot_meta()
                 .declared_lanes
@@ -3026,12 +3029,12 @@ mod tests {
     #[test]
     fn add_lane_appends_unique_names() {
         let store = demo_store();
-        assert_eq!(store.add_lane(), "New lane");
-        assert_eq!(store.add_lane(), "New lane 2");
-        assert_eq!(store.add_lane(), "New lane 3");
-        assert_eq!(
-            store.snapshot_meta().declared_lanes,
-            vec!["New lane", "New lane 2", "New lane 3"]
+        assert2::assert!((store.add_lane()) == ("New lane"));
+        assert2::assert!((store.add_lane()) == ("New lane 2"));
+        assert2::assert!((store.add_lane()) == ("New lane 3"));
+        assert2::assert!(
+            (store.snapshot_meta().declared_lanes)
+                == (vec!["New lane", "New lane 2", "New lane 3"])
         );
     }
 
@@ -3045,7 +3048,7 @@ mod tests {
             "review".to_owned(),
         ];
         dedupe_in_place(&mut lanes);
-        assert_eq!(lanes, vec!["build", "review", "ship"]);
+        assert2::assert!((lanes) == (vec!["build", "review", "ship"]));
     }
 
     #[test]
@@ -3055,18 +3058,18 @@ mod tests {
         store.add_lane(); // "New lane"
         store.rename_lane("New lane", "data"); // collides → merges
         store.rename_lane("data", "backend");
-        assert_eq!(store.snapshot_meta().declared_lanes, vec!["backend"]);
-        assert_eq!(
-            store
+        assert2::assert!((store.snapshot_meta().declared_lanes) == (vec!["backend"]));
+        assert2::assert!(
+            (store
                 .snapshot_doc()
                 .node(&NodeId::from("redis"))
                 .unwrap()
                 .lane
-                .as_deref(),
-            Some("backend")
+                .as_deref())
+                == (Some("backend"))
         );
         store.rename_lane("backend", "  "); // blank ignored
-        assert_eq!(store.snapshot_meta().declared_lanes, vec!["backend"]);
+        assert2::assert!((store.snapshot_meta().declared_lanes) == (vec!["backend"]));
     }
 
     #[test]
@@ -3076,14 +3079,14 @@ mod tests {
         store.add_lane();
         store.rename_lane("New lane", "data");
         store.delete_lane("data");
-        assert!(store.snapshot_meta().declared_lanes.is_empty());
-        assert_eq!(
-            store
+        assert2::assert!(store.snapshot_meta().declared_lanes.is_empty());
+        assert2::assert!(
+            (store
                 .snapshot_doc()
                 .node(&NodeId::from("redis"))
                 .unwrap()
-                .lane,
-            None
+                .lane)
+                == (None)
         );
     }
 
@@ -3092,23 +3095,23 @@ mod tests {
         let store = demo_store();
         store.set_lane(&NodeId::from("redis"), Some("data".into()));
         store.delete_lane("data");
-        assert_eq!(
-            store
+        assert2::assert!(
+            (store
                 .snapshot_doc()
                 .node(&NodeId::from("redis"))
                 .unwrap()
-                .lane,
-            None
+                .lane)
+                == (None)
         );
-        assert!(store.undo(), "delete_lane left an undo entry");
-        assert_eq!(
-            store
+        assert2::assert!(store.undo(), "delete_lane left an undo entry");
+        assert2::assert!(
+            (store
                 .snapshot_doc()
                 .node(&NodeId::from("redis"))
                 .unwrap()
                 .lane
-                .as_deref(),
-            Some("data"),
+                .as_deref())
+                == (Some("data")),
             "undo restores member lane membership"
         );
     }
@@ -3118,24 +3121,24 @@ mod tests {
         let store = demo_store();
         store.set_lane(&NodeId::from("redis"), Some("data".into()));
         store.rename_lane("data", "backend");
-        assert_eq!(
-            store
+        assert2::assert!(
+            (store
                 .snapshot_doc()
                 .node(&NodeId::from("redis"))
                 .unwrap()
                 .lane
-                .as_deref(),
-            Some("backend")
+                .as_deref())
+                == (Some("backend"))
         );
-        assert!(store.undo(), "rename_lane left an undo entry");
-        assert_eq!(
-            store
+        assert2::assert!(store.undo(), "rename_lane left an undo entry");
+        assert2::assert!(
+            (store
                 .snapshot_doc()
                 .node(&NodeId::from("redis"))
                 .unwrap()
                 .lane
-                .as_deref(),
-            Some("data")
+                .as_deref())
+                == (Some("data"))
         );
     }
 
@@ -3147,7 +3150,7 @@ mod tests {
                 .add_note(&NodeId::from("web-ui"), format!("note {i}"))
                 .unwrap();
         }
-        assert_eq!(store.read(|s| s.undo.len()), 50, "capped");
+        assert2::assert!((store.read(|s| s.undo.len())) == (50), "capped");
     }
 
     #[test]
@@ -3155,15 +3158,11 @@ mod tests {
         let store = demo_store();
         let log_before = store.read(|s| s.decision_log.len());
         store.toggle_group_collapsed("Platform");
-        assert_eq!(
-            store.snapshot_meta().collapsed_groups,
-            vec!["Platform".to_owned()]
-        );
+        assert2::assert!((store.snapshot_meta().collapsed_groups) == (vec!["Platform".to_owned()]));
         store.toggle_group_collapsed("Platform");
-        assert!(store.snapshot_meta().collapsed_groups.is_empty());
-        assert_eq!(
-            store.read(|s| s.decision_log.len()),
-            log_before,
+        assert2::assert!(store.snapshot_meta().collapsed_groups.is_empty());
+        assert2::assert!(
+            (store.read(|s| s.decision_log.len())) == (log_before),
             "view state emits no decision events"
         );
     }
@@ -3200,19 +3199,19 @@ mod tests {
 
         match &state.decision_log[0].kind {
             DecisionKind::NoteAdded { node_id, note } => {
-                assert_eq!(node_id, &NodeId::from("legacy-node"));
-                assert_eq!(note.id, NoteId::from("legacy-note-1"));
-                assert_eq!(note.text, "Keep this context");
-                assert_eq!(note.created_at.to_rfc3339(), "2026-07-01T12:00:00+00:00");
+                assert2::assert!((node_id) == (&NodeId::from("legacy-node")));
+                assert2::assert!((note.id) == (NoteId::from("legacy-note-1")));
+                assert2::assert!((note.text) == ("Keep this context"));
+                assert2::assert!((note.created_at.to_rfc3339()) == ("2026-07-01T12:00:00+00:00"));
             }
             event => panic!("expected migrated note event, got {event:?}"),
         }
         match &state.decision_log[1].kind {
             DecisionKind::NodeAdded { node } => {
-                assert_eq!(node.id, NodeId::from("legacy-service"));
-                assert_eq!(node.label, "Legacy Service");
-                assert_eq!(node.kind, NodeKind::Service);
-                assert_eq!(node.origin, Origin::User);
+                assert2::assert!((node.id) == (NodeId::from("legacy-service")));
+                assert2::assert!((node.label) == ("Legacy Service"));
+                assert2::assert!((node.kind) == (NodeKind::Service));
+                assert2::assert!((node.origin) == (Origin::User));
             }
             event => panic!("expected migrated node event, got {event:?}"),
         }
@@ -3224,8 +3223,8 @@ mod tests {
         store.record_export(std::path::Path::new("some/dir/session.export.md"));
         let meta = store.snapshot_meta();
         let entry = meta.activity.last().expect("an activity entry");
-        assert_eq!(entry.origin, ActivityOrigin::User);
-        assert!(
+        assert2::assert!((entry.origin) == (ActivityOrigin::User));
+        assert2::assert!(
             entry.text.contains("session.export.md"),
             "text: {}",
             entry.text
@@ -3234,7 +3233,7 @@ mod tests {
         store.record_export_failed("disk full");
         let meta = store.snapshot_meta();
         let entry = meta.activity.last().unwrap();
-        assert!(
+        assert2::assert!(
             entry.text.contains("export failed: disk full"),
             "text: {}",
             entry.text
@@ -3243,8 +3242,8 @@ mod tests {
         store.record_user_action("copied the diagram to the clipboard".into());
         let meta = store.snapshot_meta();
         let entry = meta.activity.last().unwrap();
-        assert_eq!(entry.origin, ActivityOrigin::User);
-        assert!(entry.text.contains("clipboard"), "text: {}", entry.text);
+        assert2::assert!((entry.origin) == (ActivityOrigin::User));
+        assert2::assert!(entry.text.contains("clipboard"), "text: {}", entry.text);
     }
 
     #[tokio::test]
@@ -3263,14 +3262,14 @@ mod tests {
         });
         wait_until(&store, 1).await;
         store.request_flush(None).unwrap();
-        assert!(matches!(
+        assert2::assert!(matches!(
             waiting.await.unwrap().unwrap(),
             FlushOutcome::Delivered(_)
         ));
         store
             .add_user_node("second".into(), NodeKind::Component, None)
             .unwrap();
-        assert_eq!(store.snapshot_meta().undelivered, 1);
+        assert2::assert!((store.snapshot_meta().undelivered) == (1));
     }
 
     fn pick_first_choice(store: &Arc<Store>) {
@@ -3313,10 +3312,10 @@ mod tests {
 
         let err = store.request_flush(None).unwrap_err();
 
-        assert!(matches!(err, StoreError::NoWaitingClient));
-        assert_eq!(store.peek_undelivered(), before);
-        assert_eq!(store.snapshot_meta().send_status, SendStatus::Failed);
-        assert!(
+        assert2::assert!(matches!(err, StoreError::NoWaitingClient));
+        assert2::assert!((store.peek_undelivered()) == (before));
+        assert2::assert!((store.snapshot_meta().send_status) == (SendStatus::Failed));
+        assert2::assert!(
             store
                 .snapshot_meta()
                 .toast
@@ -3325,10 +3324,10 @@ mod tests {
                 .contains("waiting")
         );
         let guard = WaitGuard::enter(store.clone(), awaiter(99, None)).unwrap();
-        assert_eq!(store.snapshot_meta().send_status, SendStatus::Idle);
-        assert!(store.snapshot_meta().toast.is_some());
+        assert2::assert!((store.snapshot_meta().send_status) == (SendStatus::Idle));
+        assert2::assert!(store.snapshot_meta().toast.is_some());
         store.dismiss_toast();
-        assert!(store.snapshot_meta().toast.is_none());
+        assert2::assert!(store.snapshot_meta().toast.is_none());
         drop(guard);
     }
 
@@ -3356,8 +3355,8 @@ mod tests {
 
         let err = store.request_flush(None).unwrap_err();
 
-        assert!(matches!(err, StoreError::AmbiguousWaitingClients(_)));
-        assert_eq!(store.read(|s| s.delivery_cursor), 0);
+        assert2::assert!(matches!(err, StoreError::AmbiguousWaitingClients(_)));
+        assert2::assert!((store.read(|s| s.delivery_cursor)) == (0));
         a.abort();
         b.abort();
     }
@@ -3384,14 +3383,14 @@ mod tests {
         .expect("a duplicate await is rejected immediately")
         .expect_err("a connection may own only one active await");
 
-        assert!(matches!(error, StoreError::ConnectionAlreadyWaiting));
-        assert_eq!(store.snapshot_meta().waiting_agents, 1);
+        assert2::assert!(matches!(error, StoreError::ConnectionAlreadyWaiting));
+        assert2::assert!((store.snapshot_meta().waiting_agents) == (1));
         store.request_flush(None).expect("original waiter remains");
-        assert!(matches!(
+        assert2::assert!(matches!(
             first.await.expect("first task").expect("first result"),
             FlushOutcome::Delivered(batch) if batch.len() == 1
         ));
-        assert_eq!(store.read(|state| state.delivery_cursor), 1);
+        assert2::assert!((store.read(|state| state.delivery_cursor)) == (1));
     }
 
     #[test]
@@ -3399,7 +3398,7 @@ mod tests {
         let store = Store::new(SessionState::default());
         let before = store.snapshot_doc().revision;
         let guard = WaitGuard::enter(store.clone(), awaiter(300, None)).unwrap();
-        assert_eq!(store.snapshot_doc().revision, before + 1);
+        assert2::assert!((store.snapshot_doc().revision) == (before + 1));
         drop(guard);
     }
 
@@ -3434,12 +3433,12 @@ mod tests {
             ),
             target(RecipientKey::Agent("beta".into()), false, None),
         ]);
-        assert!(register_waiter(&mut state, awaiter(3, Some("alpha"))).unwrap());
+        assert2::assert!(register_waiter(&mut state, awaiter(3, Some("alpha"))).unwrap());
         let targets = &state.send_receipt.as_ref().unwrap().targets;
-        assert_eq!(targets[0].connection_id, Some(ConnectionId(3)));
-        assert_eq!(targets[1].connection_id, None);
-        assert_eq!(targets[2].connection_id, Some(ConnectionId(2)));
-        assert_eq!(targets[3].connection_id, None);
+        assert2::assert!((targets[0].connection_id) == (Some(ConnectionId(3))));
+        assert2::assert!((targets[1].connection_id) == (None));
+        assert2::assert!((targets[2].connection_id) == (Some(ConnectionId(2))));
+        assert2::assert!((targets[3].connection_id) == (None));
 
         for invalid in [
             target(RecipientKey::Agent("alpha".into()), true, None),
@@ -3451,15 +3450,15 @@ mod tests {
             target(RecipientKey::Agent("beta".into()), false, None),
         ] {
             let mut state = state_with(vec![invalid]);
-            assert!(!register_waiter(&mut state, awaiter(30, Some("alpha"))).unwrap());
+            assert2::assert!(!register_waiter(&mut state, awaiter(30, Some("alpha"))).unwrap());
         }
 
         let anonymous = || target(RecipientKey::Anonymous(ConnectionId(10)), false, None);
         let mut state = state_with(vec![anonymous()]);
-        assert!(register_waiter(&mut state, awaiter(11, None)).unwrap());
+        assert2::assert!(register_waiter(&mut state, awaiter(11, None)).unwrap());
 
         let mut state = state_with(vec![anonymous(), anonymous()]);
-        assert!(!register_waiter(&mut state, awaiter(11, None)).unwrap());
+        assert2::assert!(!register_waiter(&mut state, awaiter(11, None)).unwrap());
 
         let mut state = state_with(vec![anonymous()]);
         state.waiters.insert(
@@ -3469,7 +3468,7 @@ mod tests {
                 recipient: RecipientKey::Anonymous(ConnectionId(12)),
             },
         );
-        assert!(!register_waiter(&mut state, awaiter(13, None)).unwrap());
+        assert2::assert!(!register_waiter(&mut state, awaiter(13, None)).unwrap());
 
         for invalid in [
             target(RecipientKey::Anonymous(ConnectionId(10)), true, None),
@@ -3481,7 +3480,7 @@ mod tests {
             target(RecipientKey::Agent("alpha".into()), false, None),
         ] {
             let mut state = state_with(vec![invalid]);
-            assert!(!register_waiter(&mut state, awaiter(31, None)).unwrap());
+            assert2::assert!(!register_waiter(&mut state, awaiter(31, None)).unwrap());
         }
 
         let valid = || target(RecipientKey::Anonymous(ConnectionId(10)), false, None);
@@ -3490,7 +3489,7 @@ mod tests {
             target(RecipientKey::Agent("alpha".into()), false, None),
         ] {
             let mut state = state_with(vec![valid(), extra]);
-            assert!(register_waiter(&mut state, awaiter(32, None)).unwrap());
+            assert2::assert!(register_waiter(&mut state, awaiter(32, None)).unwrap());
         }
 
         for (invalid, expected_connection) in [
@@ -3508,10 +3507,10 @@ mod tests {
             ),
         ] {
             let mut state = state_with(vec![invalid, valid()]);
-            assert!(register_waiter(&mut state, awaiter(33, None)).unwrap());
+            assert2::assert!(register_waiter(&mut state, awaiter(33, None)).unwrap());
             let targets = &state.send_receipt.as_ref().unwrap().targets;
-            assert_eq!(targets[0].connection_id, expected_connection);
-            assert_eq!(targets[1].connection_id, Some(ConnectionId(33)));
+            assert2::assert!((targets[0].connection_id) == (expected_connection));
+            assert2::assert!((targets[1].connection_id) == (Some(ConnectionId(33))));
         }
     }
 
@@ -3539,27 +3538,27 @@ mod tests {
         let mut state = state_with_receipt();
         state.agent_flush.insert("alpha".into(), 4);
         register_waiter(&mut state, awaiter(20, Some("alpha"))).unwrap();
-        assert_eq!(state.send_receipt.as_ref().unwrap().targets.len(), 1);
+        assert2::assert!((state.send_receipt.as_ref().unwrap().targets.len()) == (1));
 
         let mut state = state_with_receipt();
         state.agent_flush.insert("alpha".into(), 5);
         register_waiter(&mut state, awaiter(20, Some("alpha"))).unwrap();
-        assert!(state.send_receipt.as_ref().unwrap().targets.is_empty());
+        assert2::assert!(state.send_receipt.as_ref().unwrap().targets.is_empty());
 
         let mut state = state_with_receipt();
         state.agent_flush.insert("alpha".into(), 6);
         register_waiter(&mut state, awaiter(20, Some("alpha"))).unwrap();
-        assert!(state.send_receipt.as_ref().unwrap().targets.is_empty());
+        assert2::assert!(state.send_receipt.as_ref().unwrap().targets.is_empty());
 
         let mut state = state_with_receipt();
         state.delivered_flush_seq = 5;
         register_waiter(&mut state, awaiter(21, None)).unwrap();
-        assert!(state.send_receipt.as_ref().unwrap().targets.is_empty());
+        assert2::assert!(state.send_receipt.as_ref().unwrap().targets.is_empty());
 
         let mut state = state_with_receipt();
         state.delivered_flush_seq = 6;
         register_waiter(&mut state, awaiter(21, None)).unwrap();
-        assert!(state.send_receipt.as_ref().unwrap().targets.is_empty());
+        assert2::assert!(state.send_receipt.as_ref().unwrap().targets.is_empty());
 
         let mut state = state_with_receipt();
         state.send_receipt.as_mut().unwrap().targets.push(target(
@@ -3568,36 +3567,48 @@ mod tests {
             None,
         ));
         register_waiter(&mut state, awaiter(20, Some("alpha"))).unwrap();
-        assert_eq!(state.send_receipt.as_ref().unwrap().targets.len(), 1);
+        assert2::assert!((state.send_receipt.as_ref().unwrap().targets.len()) == (1));
     }
 
     #[test]
     fn waiter_creates_a_receipt_only_when_its_cursor_is_behind() {
-        let state_at = |delivered| SessionState {
+        let mut state = SessionState {
             flush_seq: 5,
-            delivered_flush_seq: delivered,
+            delivered_flush_seq: 0,
             ..SessionState::default()
         };
-
-        let mut state = state_at(0);
         state.agent_flush.insert("alpha".into(), 4);
         register_waiter(&mut state, awaiter(40, Some("alpha"))).unwrap();
-        assert!(state.send_receipt.is_some());
-
-        for cursor in [5, 6] {
-            let mut state = state_at(0);
-            state.agent_flush.insert("alpha".into(), cursor);
-            register_waiter(&mut state, awaiter(40, Some("alpha"))).unwrap();
-            assert!(state.send_receipt.is_none());
-
-            let mut state = state_at(cursor);
-            register_waiter(&mut state, awaiter(41, None)).unwrap();
-            assert!(state.send_receipt.is_none());
-        }
+        assert2::assert!(state.send_receipt.is_some());
     }
 
-    #[test]
-    fn delivery_keeps_a_replay_baseline_only_for_post_receipt_events() {
+    #[parameterized(at_flush = { 5 }, ahead_of_flush = { 6 })]
+    fn waiter_does_not_create_a_receipt_when_its_cursor_is_current(cursor: u64) {
+        let mut named_state = SessionState {
+            flush_seq: 5,
+            ..SessionState::default()
+        };
+        named_state.agent_flush.insert("alpha".into(), cursor);
+        register_waiter(&mut named_state, awaiter(40, Some("alpha"))).unwrap();
+        assert2::assert!(named_state.send_receipt.is_none());
+
+        let mut anonymous_state = SessionState {
+            flush_seq: 5,
+            delivered_flush_seq: cursor,
+            ..SessionState::default()
+        };
+        register_waiter(&mut anonymous_state, awaiter(41, None)).unwrap();
+        assert2::assert!(anonymous_state.send_receipt.is_none());
+    }
+
+    #[parameterized(
+        post_receipt_event = { 2, Some("at send") },
+        receipt_only = { 1, None },
+    )]
+    fn delivery_keeps_a_replay_baseline_only_for_post_receipt_events(
+        event_count: u64,
+        expected_title: Option<&str>,
+    ) {
         let event = |seq| DecisionEvent {
             seq,
             at: Utc::now(),
@@ -3628,13 +3639,11 @@ mod tests {
             state
         };
 
-        let mut state = state_with_events(2);
-        assert!(try_deliver_locked(&mut state, ConnectionId(50)).is_some());
-        assert_eq!(state.pending_base.as_ref().unwrap().title, "at send");
-
-        let mut state = state_with_events(1);
-        assert!(try_deliver_locked(&mut state, ConnectionId(50)).is_some());
-        assert!(state.pending_base.is_none());
+        let mut state = state_with_events(event_count);
+        assert2::assert!(try_deliver_locked(&mut state, ConnectionId(50)).is_some());
+        assert2::assert!(
+            state.pending_base.as_ref().map(|doc| doc.title.as_str()) == expected_title
+        );
     }
 
     #[test]
@@ -3668,8 +3677,8 @@ mod tests {
             ..SessionState::default()
         };
         push(&mut state);
-        assert!(state.send_receipt.is_none());
-        assert!(state.pending_base.is_some());
+        assert2::assert!(state.send_receipt.is_none());
+        assert2::assert!(state.pending_base.is_some());
 
         for retained in [
             receipt(true, vec![target(true)]),
@@ -3682,7 +3691,7 @@ mod tests {
                 ..SessionState::default()
             };
             push(&mut state);
-            assert!(state.send_receipt.is_some());
+            assert2::assert!(state.send_receipt.is_some());
         }
 
         let mut state = SessionState {
@@ -3696,7 +3705,7 @@ mod tests {
             ..SessionState::default()
         };
         push(&mut state);
-        assert!(state.pending_base.is_none());
+        assert2::assert!(state.pending_base.is_none());
     }
 
     #[tokio::test]
@@ -3721,7 +3730,7 @@ mod tests {
         });
         wait_until(&store, 2).await;
 
-        assert!(matches!(
+        assert2::assert!(matches!(
             store.request_flush(None).unwrap_err(),
             StoreError::AmbiguousWaitingClients(_)
         ));
@@ -3748,17 +3757,15 @@ mod tests {
         let FlushOutcome::Delivered(batch) = waiting.await.unwrap().unwrap() else {
             panic!("expected delivery");
         };
-        assert_eq!(
-            batch.len(),
-            1,
+        assert2::assert!(
+            (batch.len()) == (1),
             "post-send annotation stays out of the receipt"
         );
-        assert_eq!(
-            store.peek_undelivered().len(),
-            1,
+        assert2::assert!(
+            (store.peek_undelivered().len()) == (1),
             "later edit remains queued"
         );
-        assert_eq!(store.snapshot_meta().send_status, SendStatus::Idle);
+        assert2::assert!((store.snapshot_meta().send_status) == (SendStatus::Idle));
     }
 
     #[test]
@@ -3771,9 +3778,9 @@ mod tests {
 
         store.remove_queued_change(2).unwrap();
 
-        assert_eq!(store.read(|s| (s.flush_seq, s.delivered_flush_seq)), (1, 0));
-        assert!(store.try_deliver(ConnectionId(20)).is_some());
-        assert_eq!(store.read(|s| (s.flush_seq, s.delivered_flush_seq)), (1, 1));
+        assert2::assert!((store.read(|s| (s.flush_seq, s.delivered_flush_seq))) == (1, 0));
+        assert2::assert!(store.try_deliver(ConnectionId(20)).is_some());
+        assert2::assert!((store.read(|s| (s.flush_seq, s.delivered_flush_seq))) == (1, 1));
         drop(guard);
     }
 
@@ -3796,14 +3803,17 @@ mod tests {
         let batch = store
             .try_deliver(ConnectionId(21))
             .expect("original target receives the active receipt");
-        assert_eq!(batch.len(), 1, "final choice stays out of active receipt");
-        assert!(matches!(batch[0].kind, DecisionKind::OptionSelected { .. }));
-        assert!(
+        assert2::assert!(
+            (batch.len()) == (1),
+            "final choice stays out of active receipt"
+        );
+        assert2::assert!(matches!(batch[0].kind, DecisionKind::OptionSelected { .. }));
+        assert2::assert!(
             store.try_deliver(ConnectionId(22)).is_none(),
             "a later waiter is not added to the active receipt"
         );
-        assert_eq!(store.read(|s| (s.flush_seq, s.delivery_cursor)), (1, 1));
-        assert!(matches!(
+        assert2::assert!((store.read(|s| (s.flush_seq, s.delivery_cursor))) == (1, 1));
+        assert2::assert!(matches!(
             store.peek_undelivered().as_slice(),
             [DecisionEvent {
                 kind: DecisionKind::ChoiceDismissed { .. },
@@ -3823,10 +3833,10 @@ mod tests {
         store.request_flush(None).unwrap();
         let beta = WaitGuard::enter(store.clone(), awaiter(24, Some("beta"))).unwrap();
 
-        assert!(store.try_deliver(ConnectionId(23)).is_some());
+        assert2::assert!(store.try_deliver(ConnectionId(23)).is_some());
 
-        assert_eq!(store.peek_undelivered().len(), 0);
-        assert_eq!(store.snapshot_meta().send_status, SendStatus::Idle);
+        assert2::assert!((store.peek_undelivered().len()) == (0));
+        assert2::assert!((store.snapshot_meta().send_status) == (SendStatus::Idle));
         drop(alpha);
         drop(beta);
     }
@@ -3847,22 +3857,22 @@ mod tests {
         store.request_flush(None).unwrap();
         first.abort();
         let _ = first.await;
-        assert_eq!(store.snapshot_meta().send_status, SendStatus::Reconnecting);
-        assert_eq!(
-            store.reconnecting_targets(),
-            vec![ReconnectTarget {
-                connection_id: ConnectionId(1),
-                client_label: "Claude 1".into(),
-                agent: Some("alpha".into()),
-            }]
+        assert2::assert!((store.snapshot_meta().send_status) == (SendStatus::Reconnecting));
+        assert2::assert!(
+            (store.reconnecting_targets())
+                == (vec![ReconnectTarget {
+                    connection_id: ConnectionId(1),
+                    client_label: "Claude 1".into(),
+                    agent: Some("alpha".into()),
+                }])
         );
 
         let recovered = store
             .await_flush(Duration::from_secs(1), awaiter(2, Some("alpha")))
             .await
             .unwrap();
-        assert!(matches!(recovered, FlushOutcome::Delivered(_)));
-        assert_eq!(store.snapshot_meta().send_status, SendStatus::Sent);
+        assert2::assert!(matches!(recovered, FlushOutcome::Delivered(_)));
+        assert2::assert!((store.snapshot_meta().send_status) == (SendStatus::Sent));
     }
 
     #[tokio::test]
@@ -3886,7 +3896,7 @@ mod tests {
             .await_flush(Duration::from_secs(1), awaiter(11, None))
             .await
             .unwrap();
-        assert!(matches!(recovered, FlushOutcome::Delivered(_)));
+        assert2::assert!(matches!(recovered, FlushOutcome::Delivered(_)));
     }
 
     #[test]
@@ -3907,16 +3917,16 @@ mod tests {
 
         store.remove_queued_change(1).unwrap();
 
-        assert!(store.snapshot_doc().node(&node).is_none());
+        assert2::assert!(store.snapshot_doc().node(&node).is_none());
         let changes = store.queued_changes();
-        assert_eq!(changes.len(), 1);
-        assert!(
+        assert2::assert!((changes.len()) == (1));
+        assert2::assert!(
             changes[0]
                 .blocked_reason
                 .as_deref()
                 .is_some_and(|reason| reason.contains("node"))
         );
-        assert!(
+        assert2::assert!(
             store.peek_undelivered().is_empty(),
             "blocked events do not send"
         );
@@ -3948,9 +3958,9 @@ mod tests {
         });
 
         let queued = store.queued_changes();
-        assert_eq!(queued.len(), 2);
-        assert!(queued[0].interaction_error.is_some());
-        assert!(queued[1].interaction_error.is_none());
+        assert2::assert!((queued.len()) == (2));
+        assert2::assert!(queued[0].interaction_error.is_some());
+        assert2::assert!(queued[1].interaction_error.is_none());
     }
 
     #[tokio::test]
@@ -3969,7 +3979,7 @@ mod tests {
         });
         wait_until(&store, 1).await;
         store.request_flush(None).unwrap();
-        assert!(matches!(
+        assert2::assert!(matches!(
             waiting.await.unwrap().unwrap(),
             FlushOutcome::Delivered(_)
         ));
@@ -3984,17 +3994,14 @@ mod tests {
             .unwrap();
 
         let target = store.remove_queued_change(3).unwrap();
-        assert_eq!(target.node_id, Some(NodeId::from("third")));
+        assert2::assert!((target.node_id) == (Some(NodeId::from("third"))));
         let tail = store.peek_undelivered();
-        assert_eq!(
-            tail.iter().map(|event| event.seq).collect::<Vec<_>>(),
-            vec![2, 3]
-        );
-        assert!(matches!(
+        assert2::assert!((tail.iter().map(|event| event.seq).collect::<Vec<_>>()) == (vec![2, 3]));
+        assert2::assert!(matches!(
             &tail[1].kind,
             DecisionKind::NodeAdded { node } if node.id == NodeId::from("fourth")
         ));
-        assert!(store.read(|state| state.pending_base.is_some()));
+        assert2::assert!(store.read(|state| state.pending_base.is_some()));
     }
 
     #[test]
@@ -4007,19 +4014,16 @@ mod tests {
 
         let target = store.remove_queued_change(1).unwrap();
 
-        assert_eq!(target.node_id, Some(NodeId::from("sync-engine")));
-        assert_eq!(
-            target.choice_id,
-            Some(ChoiceId::from("conflict-resolution"))
-        );
+        assert2::assert!((target.node_id) == (Some(NodeId::from("sync-engine"))));
+        assert2::assert!((target.choice_id) == (Some(ChoiceId::from("conflict-resolution"))));
         let doc = store.snapshot_doc();
         let choice = doc
             .node(&NodeId::from("sync-engine"))
             .unwrap()
             .choice(&ChoiceId::from("conflict-resolution"))
             .unwrap();
-        assert_eq!(choice.status, ChoiceStatus::Open);
-        assert_eq!(store.peek_undelivered().len(), 1);
+        assert2::assert!((choice.status) == (ChoiceStatus::Open));
+        assert2::assert!((store.peek_undelivered().len()) == (1));
     }
 
     #[test]
@@ -4034,17 +4038,17 @@ mod tests {
 
         let change = store.queued_changes().pop().unwrap();
 
-        assert!(
+        assert2::assert!(
             change
                 .interaction_error
                 .as_deref()
                 .is_some_and(|reason| reason.contains("agent graph update"))
         );
-        assert!(matches!(
+        assert2::assert!(matches!(
             store.remove_queued_change(change.event.seq),
             Err(StoreError::MissingQueuedBaseline)
         ));
-        assert_eq!(store.snapshot_doc().title, "Agent title");
+        assert2::assert!((store.snapshot_doc().title) == ("Agent title"));
     }
 
     #[test]
@@ -4064,13 +4068,13 @@ mod tests {
 
         let change = store.queued_changes().pop().unwrap();
 
-        assert!(
+        assert2::assert!(
             change
                 .interaction_error
                 .as_deref()
                 .is_some_and(|reason| reason.contains("saved before queue editing"))
         );
-        assert!(matches!(
+        assert2::assert!(matches!(
             store.remove_queued_change(change.event.seq),
             Err(StoreError::MissingQueuedBaseline)
         ));
@@ -4112,13 +4116,13 @@ mod tests {
             .into_iter()
             .filter(|change| change.blocked_reason.is_some())
             .collect();
-        assert_eq!(blocked.len(), 2);
-        assert_ne!(blocked[0].id, blocked[1].id);
+        assert2::assert!((blocked.len()) == (2));
+        assert2::assert!((blocked[0].id) != (blocked[1].id));
 
         store.remove_blocked_change(&blocked[1].id).unwrap();
         let remaining = store.queued_changes();
-        assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0].id, blocked[0].id);
+        assert2::assert!((remaining.len()) == (1));
+        assert2::assert!((remaining[0].id) == (blocked[0].id));
     }
 
     #[test]
@@ -4138,15 +4142,15 @@ mod tests {
             ..SessionState::default()
         });
         let change = store.queued_changes().remove(0);
-        assert!(change.id.starts_with("blocked:"));
-        assert_eq!(change.interaction_error, None);
+        assert2::assert!(change.id.starts_with("blocked:"));
+        assert2::assert!((change.interaction_error) == (None));
     }
 
     #[test]
     fn agent_update_without_pending_events_keeps_queue_editing_available() {
         let store = demo_store();
         store.apply_propose(demo_doc()).unwrap();
-        assert_eq!(store.read(|state| state.queue_edit_error.clone()), None);
+        assert2::assert!((store.read(|state| state.queue_edit_error.clone())) == (None));
     }
 
     #[test]
@@ -4165,15 +4169,15 @@ mod tests {
             },
         };
         replay_event(&mut doc, &selected).unwrap();
-        assert_eq!(
-            doc.node(&NodeId::from("sync-engine")).unwrap().choices[0].selected,
-            Some("ot".into())
+        assert2::assert!(
+            (doc.node(&NodeId::from("sync-engine")).unwrap().choices[0].selected)
+                == (Some("ot".into()))
         );
         let mut invalid = selected.clone();
         if let DecisionKind::OptionSelected { option_id, .. } = &mut invalid.kind {
             *option_id = "missing".into();
         }
-        assert!(replay_event(&mut doc, &invalid).is_err());
+        assert2::assert!(replay_event(&mut doc, &invalid).is_err());
 
         let annotation = |id: &str, text: &str| Annotation {
             id: id.into(),
@@ -4210,8 +4214,8 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(doc.annotations[0].text, "a");
-        assert_eq!(doc.annotations[1].text, "updated");
+        assert2::assert!((doc.annotations[0].text) == ("a"));
+        assert2::assert!((doc.annotations[1].text) == ("updated"));
         replay_event(
             &mut doc,
             &DecisionEvent {
@@ -4224,14 +4228,14 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(
-            doc.annotations
+        assert2::assert!(
+            (doc.annotations
                 .iter()
                 .map(|a| a.id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["a", "c"]
+                .collect::<Vec<_>>())
+                == (vec!["a", "c"])
         );
-        assert!(
+        assert2::assert!(
             replay_event(
                 &mut doc,
                 &DecisionEvent {
@@ -4267,18 +4271,18 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(
-            graph
+        assert2::assert!(
+            (graph
                 .nodes
                 .iter()
                 .map(|n| n.id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["a", "c"]
+                .collect::<Vec<_>>())
+                == (vec!["a", "c"])
         );
-        assert_eq!(graph.edges.len(), 1);
-        assert_eq!(graph.edges[0].from, NodeId::from("a"));
-        assert_eq!(graph.edges[0].to, NodeId::from("c"));
-        assert_eq!(graph.edges[0].kind, EdgeKind::DependsOn);
+        assert2::assert!((graph.edges.len()) == (1));
+        assert2::assert!((graph.edges[0].from) == (NodeId::from("a")));
+        assert2::assert!((graph.edges[0].to) == (NodeId::from("c")));
+        assert2::assert!((graph.edges[0].kind) == (EdgeKind::DependsOn));
 
         let edge_event = |kind| DecisionEvent {
             seq: 6,
@@ -4286,7 +4290,7 @@ mod tests {
             target_agent: None,
             kind,
         };
-        assert!(
+        assert2::assert!(
             replay_event(
                 &mut graph,
                 &edge_event(DecisionKind::EdgeAdded {
@@ -4306,7 +4310,7 @@ mod tests {
             }),
         )
         .unwrap();
-        assert!(
+        assert2::assert!(
             replay_event(
                 &mut graph,
                 &edge_event(DecisionKind::EdgeAdded {
@@ -4326,8 +4330,8 @@ mod tests {
             }),
         )
         .unwrap();
-        assert_eq!(graph.edges.len(), 1);
-        assert!(
+        assert2::assert!((graph.edges.len()) == (1));
+        assert2::assert!(
             replay_event(
                 &mut graph,
                 &edge_event(DecisionKind::EdgeDeleted {
@@ -4351,17 +4355,17 @@ mod tests {
                 i.to_string(),
             );
         }
-        assert_eq!(state.activity.len(), ACTIVITY_CAP);
-        assert_eq!(state.activity.first().unwrap().text, "5");
-        assert_eq!(state.activity.last().unwrap().text, "204");
+        assert2::assert!((state.activity.len()) == (ACTIVITY_CAP));
+        assert2::assert!((state.activity.first().unwrap().text) == ("5"));
+        assert2::assert!((state.activity.last().unwrap().text) == ("204"));
     }
 
     #[test]
     fn autoflush_requires_an_undelivered_event() {
         let mut state = SessionState::default();
         autoflush(&mut state);
-        assert_eq!(state.flush_seq, 0);
-        assert!(state.activity.is_empty());
+        assert2::assert!((state.flush_seq) == (0));
+        assert2::assert!(state.activity.is_empty());
     }
 
     #[test]
@@ -4387,15 +4391,15 @@ mod tests {
             },
         );
         autoflush(&mut waiting);
-        assert_eq!(waiting.flush_seq, 8);
-        assert_eq!(waiting.send_receipt.as_ref().unwrap().flush_seq, 8);
-        assert!(!waiting.send_receipt.as_ref().unwrap().claimable);
+        assert2::assert!((waiting.flush_seq) == (8));
+        assert2::assert!((waiting.send_receipt.as_ref().unwrap().flush_seq) == (8));
+        assert2::assert!(!waiting.send_receipt.as_ref().unwrap().claimable);
 
         let mut unattended = state();
         autoflush(&mut unattended);
-        assert_eq!(unattended.flush_seq, 8);
-        assert_eq!(unattended.send_receipt.as_ref().unwrap().flush_seq, 8);
-        assert!(unattended.send_receipt.as_ref().unwrap().claimable);
+        assert2::assert!((unattended.flush_seq) == (8));
+        assert2::assert!((unattended.send_receipt.as_ref().unwrap().flush_seq) == (8));
+        assert2::assert!(unattended.send_receipt.as_ref().unwrap().claimable);
     }
 
     #[test]
@@ -4414,14 +4418,13 @@ mod tests {
             .apply_update(vec![GraphOp::RemoveNode { id: "b".into() }])
             .unwrap();
         let doc = store.snapshot_doc();
-        assert_eq!(
-            doc.nodes.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(),
-            vec!["a", "c"]
+        assert2::assert!(
+            (doc.nodes.iter().map(|n| n.id.as_str()).collect::<Vec<_>>()) == (vec!["a", "c"])
         );
-        assert_eq!(doc.edges.len(), 1);
-        assert_eq!(doc.edges[0].from, NodeId::from("a"));
-        assert_eq!(doc.edges[0].to, NodeId::from("c"));
-        assert_eq!(doc.focus, None);
+        assert2::assert!((doc.edges.len()) == (1));
+        assert2::assert!((doc.edges[0].from) == (NodeId::from("a")));
+        assert2::assert!((doc.edges[0].to) == (NodeId::from("c")));
+        assert2::assert!((doc.focus) == (None));
     }
 
     #[test]
@@ -4446,15 +4449,15 @@ mod tests {
             .apply_update(vec![GraphOp::UpsertEdge { edge: replacement }])
             .unwrap();
         let doc = store.snapshot_doc();
-        assert_eq!(
-            doc.edges
+        assert2::assert!(
+            (doc.edges
                 .iter()
                 .filter(|edge| edge.from == NodeId::from("web-ui")
                     && edge.to == NodeId::from("api-gateway"))
-                .count(),
-            1
+                .count())
+                == (1)
         );
-        assert_eq!(doc.edges[0].label.as_deref(), Some("updated"));
+        assert2::assert!((doc.edges[0].label.as_deref()) == (Some("updated")));
 
         store
             .apply_update(vec![GraphOp::RemoveEdge {
@@ -4464,18 +4467,18 @@ mod tests {
             }])
             .unwrap();
         let doc = store.snapshot_doc();
-        assert!(!doc.edges.iter().any(|edge| {
+        assert2::assert!(!doc.edges.iter().any(|edge| {
             edge.from == NodeId::from("redis")
                 && edge.to == NodeId::from("postgres")
                 && edge.kind == EdgeKind::DependsOn
         }));
-        assert!(doc.edges.iter().any(|edge| {
+        assert2::assert!(doc.edges.iter().any(|edge| {
             edge.from == NodeId::from("redis") && edge.to == NodeId::from("web-ui")
         }));
-        assert!(doc.edges.iter().any(|edge| {
+        assert2::assert!(doc.edges.iter().any(|edge| {
             edge.from == NodeId::from("web-ui") && edge.to == NodeId::from("postgres")
         }));
-        assert!(
+        assert2::assert!(
             doc.edges
                 .iter()
                 .any(|edge| edge.from == NodeId::from("web-ui"))
@@ -4499,13 +4502,11 @@ mod tests {
             .unwrap();
         let doc = store.snapshot_doc();
         let node = doc.node(&NodeId::from("sync-engine")).unwrap();
-        assert_eq!(
-            node.choice(&"conflict-resolution".into()).unwrap().status,
-            ChoiceStatus::Decided
+        assert2::assert!(
+            (node.choice(&"conflict-resolution".into()).unwrap().status) == (ChoiceStatus::Decided)
         );
-        assert_eq!(
-            node.choice(&"second-choice".into()).unwrap().status,
-            ChoiceStatus::Open
+        assert2::assert!(
+            (node.choice(&"second-choice".into()).unwrap().status) == (ChoiceStatus::Open)
         );
 
         store
@@ -4514,8 +4515,8 @@ mod tests {
             }])
             .unwrap();
         let doc = store.snapshot_doc();
-        assert!(doc.question(&"history-retention".into()).is_none());
-        assert!(doc.question(&"second-question".into()).is_some());
+        assert2::assert!(doc.question(&"history-retention".into()).is_none());
+        assert2::assert!(doc.question(&"second-question".into()).is_some());
     }
 
     #[tokio::test]
@@ -4540,8 +4541,8 @@ mod tests {
             panic!("expected delivery");
         };
 
-        assert_eq!(delivered.len(), 1);
-        assert!(matches!(delivered[0].kind, DecisionKind::NoteAdded { .. }));
+        assert2::assert!((delivered.len()) == (1));
+        assert2::assert!(matches!(delivered[0].kind, DecisionKind::NoteAdded { .. }));
     }
 
     #[tokio::test]
@@ -4558,7 +4559,7 @@ mod tests {
 
         store.remove_queued_change(1).unwrap();
 
-        assert!(store.read(|s| s.flush_seq == s.delivered_flush_seq));
+        assert2::assert!(store.read(|s| s.flush_seq == s.delivered_flush_seq));
         let waiting = tokio::spawn({
             let store = store.clone();
             async move {
@@ -4572,8 +4573,8 @@ mod tests {
         let FlushOutcome::Delivered(delivered) = waiting.await.unwrap().unwrap() else {
             panic!("expected delivery");
         };
-        assert_eq!(delivered.len(), 1);
-        assert!(matches!(
+        assert2::assert!((delivered.len()) == (1));
+        assert2::assert!(matches!(
             delivered[0].kind,
             DecisionKind::ChoiceDismissed { .. }
         ));
@@ -4585,7 +4586,7 @@ mod tests {
         let guard = WaitGuard::enter(store.clone(), awaiter(103, None)).unwrap();
         store.request_flush(Some("hold for review".into())).unwrap();
 
-        assert!(matches!(
+        assert2::assert!(matches!(
             store.remove_queued_change(1),
             Err(StoreError::QueuedBatchDelivering)
         ));
@@ -4601,13 +4602,13 @@ mod tests {
 
         store.remove_queued_change(1).unwrap();
 
-        assert_eq!(
-            store
+        assert2::assert!(
+            (store
                 .snapshot_doc()
                 .node(&NodeId::from("redis"))
                 .unwrap()
-                .position,
-            Some(position)
+                .position)
+                == (Some(position))
         );
     }
 
@@ -4621,11 +4622,11 @@ mod tests {
             .unwrap()
             .choice(&ChoiceId::from("conflict-resolution"))
             .unwrap();
-        assert_eq!(c.status, ChoiceStatus::Decided);
-        assert_eq!(c.selected, Some(OptionId::from("crdt")));
-        assert_eq!(store.peek_undelivered().len(), 1);
-        assert_eq!(store.snapshot_meta().open_choices, 1);
-        assert!(
+        assert2::assert!((c.status) == (ChoiceStatus::Decided));
+        assert2::assert!((c.selected) == (Some(OptionId::from("crdt"))));
+        assert2::assert!((store.peek_undelivered().len()) == (1));
+        assert2::assert!((store.snapshot_meta().open_choices) == (1));
+        assert2::assert!(
             store
                 .snapshot_meta()
                 .activity
@@ -4641,8 +4642,8 @@ mod tests {
         let store = demo_store();
         store.announce("hello from agent".into());
         let entry = store.snapshot_meta().activity.last().unwrap().clone();
-        assert_eq!(entry.origin, ActivityOrigin::Agent);
-        assert_eq!(entry.text, "hello from agent");
+        assert2::assert!((entry.origin) == (ActivityOrigin::Agent));
+        assert2::assert!((entry.text) == ("hello from agent"));
     }
 
     #[tokio::test]
@@ -4652,8 +4653,8 @@ mod tests {
         let guard = WaitGuard::enter(store.clone(), awaiter(104, None)).unwrap();
         store.request_flush(None).unwrap();
         let first = store.try_deliver(ConnectionId(104)).expect("pending flush");
-        assert_eq!(first.len(), 1);
-        assert!(store.try_deliver(ConnectionId(104)).is_none());
+        assert2::assert!((first.len()) == (1));
+        assert2::assert!(store.try_deliver(ConnectionId(104)).is_none());
         drop(guard);
     }
 
@@ -4680,7 +4681,7 @@ mod tests {
         let FlushOutcome::Delivered(batch) = waiting.await.unwrap().unwrap() else {
             panic!("expected delivery");
         };
-        assert_eq!(batch.len(), 2);
+        assert2::assert!((batch.len()) == (2));
     }
 
     #[tokio::test]
@@ -4691,8 +4692,8 @@ mod tests {
             .request_flush(Some("looks good, proceed".into()))
             .unwrap();
         let batch = store.try_deliver(ConnectionId(106)).expect("flush pending");
-        assert_eq!(batch.len(), 1, "comment rides as an event");
-        assert!(matches!(batch[0].kind, DecisionKind::FlushRequested { .. }));
+        assert2::assert!((batch.len()) == (1), "comment rides as an event");
+        assert2::assert!(matches!(batch[0].kind, DecisionKind::FlushRequested { .. }));
         drop(guard);
     }
 
@@ -4718,22 +4719,25 @@ mod tests {
             }
         });
         tokio::time::sleep(Duration::from_millis(100)).await;
-        assert_eq!(store.snapshot_meta().waiting_agents, 2);
-        assert!(matches!(
+        assert2::assert!((store.snapshot_meta().waiting_agents) == (2));
+        assert2::assert!(matches!(
             store.request_flush(None),
             Err(StoreError::AmbiguousWaitingClients(_))
         ));
 
         let (ra, rb) = tokio::join!(a, b);
         let outcomes = [ra.unwrap().unwrap(), rb.unwrap().unwrap()];
-        assert_eq!(
-            outcomes
+        assert2::assert!(
+            (outcomes
                 .iter()
                 .filter(|o| matches!(o, FlushOutcome::TimedOut { .. }))
-                .count(),
-            2
+                .count())
+                == (2)
         );
-        assert_eq!(store.snapshot_meta().waiting_agents, 0, "guards released");
+        assert2::assert!(
+            (store.snapshot_meta().waiting_agents) == (0),
+            "guards released"
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -4745,7 +4749,7 @@ mod tests {
             .await
             .unwrap();
         match outcome {
-            FlushOutcome::TimedOut { preview } => assert_eq!(preview.len(), 1),
+            FlushOutcome::TimedOut { preview } => assert2::assert!((preview.len()) == (1)),
             other => panic!("expected timeout, got {other:?}"),
         }
         // The decision was NOT consumed: a later flush delivers it.
@@ -4761,7 +4765,7 @@ mod tests {
         store.request_flush(None).unwrap();
         let outcome = waiting.await.unwrap().unwrap();
         match outcome {
-            FlushOutcome::Delivered(batch) => assert_eq!(batch.len(), 1),
+            FlushOutcome::Delivered(batch) => assert2::assert!((batch.len()) == (1)),
             other => panic!("expected delivery, got {other:?}"),
         }
     }
@@ -4792,7 +4796,7 @@ mod tests {
             .expect("await_flush should return immediately")
             .unwrap()
             .unwrap();
-        assert!(matches!(outcome, FlushOutcome::Delivered(b) if b.len() == 1));
+        assert2::assert!(matches!(outcome, FlushOutcome::Delivered(b) if b.len() == 1));
     }
 
     #[tokio::test(start_paused = true)]
@@ -4808,10 +4812,10 @@ mod tests {
         };
         let handle = tokio::spawn(fut);
         tokio::time::sleep(Duration::from_millis(50)).await;
-        assert_eq!(store.snapshot_meta().waiting_agents, 1);
+        assert2::assert!((store.snapshot_meta().waiting_agents) == (1));
         handle.abort(); // simulate the MCP client vanishing mid-await
         let _ = handle.await;
-        assert_eq!(store.snapshot_meta().waiting_agents, 0);
+        assert2::assert!((store.snapshot_meta().waiting_agents) == (0));
     }
 
     #[test]
@@ -4829,13 +4833,16 @@ mod tests {
         store.apply_propose(fresh).unwrap();
         let doc = store.snapshot_doc();
         let redis = doc.node(&NodeId::from("redis")).unwrap();
-        assert_eq!(redis.position, Some(Point { x: 9.0, y: 9.0 }));
-        assert_eq!(redis.notes.len(), 1);
+        assert2::assert!((redis.position) == (Some(Point { x: 9.0, y: 9.0 })));
+        assert2::assert!((redis.notes.len()) == (1));
         let sync = doc.node(&NodeId::from("sync-engine")).unwrap();
         let c = sync.choice(&ChoiceId::from("conflict-resolution")).unwrap();
-        assert_eq!(c.status, ChoiceStatus::Decided, "decision survives propose");
-        assert_eq!(c.selected, Some(OptionId::from("crdt")));
-        assert!(
+        assert2::assert!(
+            (c.status) == (ChoiceStatus::Decided),
+            "decision survives propose"
+        );
+        assert2::assert!((c.selected) == (Some(OptionId::from("crdt"))));
+        assert2::assert!(
             !doc.edges
                 .iter()
                 .any(|edge| edge.key() == removed_agent_edge.key()),
@@ -4849,9 +4856,9 @@ mod tests {
         let mut bad = demo_doc();
         bad.nodes.push(bad.nodes[0].clone()); // duplicate id
         let err = store.apply_propose(bad).unwrap_err();
-        assert!(matches!(err, StoreError::Invalid { .. }));
+        assert2::assert!(matches!(err, StoreError::Invalid { .. }));
         // Store unchanged.
-        assert_eq!(store.snapshot_doc().nodes.len(), demo_doc().nodes.len());
+        assert2::assert!((store.snapshot_doc().nodes.len()) == (demo_doc().nodes.len()));
     }
 
     #[test]
@@ -4866,9 +4873,9 @@ mod tests {
                 id: NodeId::from("nope-not-here"),
             },
         ];
-        assert!(store.apply_update(ops).is_err());
+        assert2::assert!(store.apply_update(ops).is_err());
         let after = store.snapshot_doc();
-        assert_eq!(before.title, after.title, "first op rolled back");
+        assert2::assert!((before.title) == (after.title), "first op rolled back");
     }
 
     #[test]
@@ -4894,7 +4901,7 @@ mod tests {
             .unwrap()
             .choice(&ChoiceId::from("conflict-resolution"))
             .unwrap();
-        assert_eq!(c.status, ChoiceStatus::Decided);
+        assert2::assert!((c.status) == (ChoiceStatus::Decided));
 
         // With reopen: the choice opens again.
         let mut reopened = fresh;
@@ -4911,8 +4918,8 @@ mod tests {
             .unwrap()
             .choice(&ChoiceId::from("conflict-resolution"))
             .unwrap();
-        assert_eq!(c.status, ChoiceStatus::Open);
-        assert_eq!(c.selected, None);
+        assert2::assert!((c.status) == (ChoiceStatus::Open));
+        assert2::assert!((c.selected) == (None));
     }
 
     #[test]
@@ -4922,9 +4929,9 @@ mod tests {
         let rev_before = store.snapshot_doc().revision;
         store.clear_session();
         let s = store.snapshot_state();
-        assert!(s.doc.nodes.is_empty());
-        assert!(s.decision_log.is_empty());
-        assert!(s.doc.revision > rev_before);
+        assert2::assert!(s.doc.nodes.is_empty());
+        assert2::assert!(s.decision_log.is_empty());
+        assert2::assert!(s.doc.revision > rev_before);
     }
 
     #[test]
@@ -4940,16 +4947,16 @@ mod tests {
                 Some("realtime".into()),
             )
             .expect("edit");
-        assert_eq!(
-            store
+        assert2::assert!(
+            (store
                 .snapshot_doc()
                 .node(&NodeId::from("sync-engine"))
                 .unwrap()
                 .lane
-                .as_deref(),
-            Some("realtime")
+                .as_deref())
+                == (Some("realtime"))
         );
-        assert!(matches!(
+        assert2::assert!(matches!(
             store.peek_undelivered().last().unwrap().kind,
             DecisionKind::NodeEdited { lane: Some(_), .. }
         ));
@@ -4960,14 +4967,14 @@ mod tests {
                 lane: Some("client".into()),
             }])
             .expect("set_lane");
-        assert_eq!(
-            store
+        assert2::assert!(
+            (store
                 .snapshot_doc()
                 .node(&NodeId::from("web-ui"))
                 .unwrap()
                 .lane
-                .as_deref(),
-            Some("client")
+                .as_deref())
+                == (Some("client"))
         );
         store
             .apply_update(vec![GraphOp::SetLane {
@@ -4975,13 +4982,13 @@ mod tests {
                 lane: Some("   ".into()),
             }])
             .expect("clear lane");
-        assert_eq!(
-            store
+        assert2::assert!(
+            (store
                 .snapshot_doc()
                 .node(&NodeId::from("web-ui"))
                 .unwrap()
-                .lane,
-            None
+                .lane)
+                == (None)
         );
     }
 
@@ -4994,9 +5001,9 @@ mod tests {
         let err = store
             .select_option(&ws, &dep, &OptionId::from("dedicated"), vec![])
             .unwrap_err();
-        assert!(matches!(err, StoreError::ChoiceLocked { .. }), "{err}");
+        assert2::assert!(matches!(err, StoreError::ChoiceLocked { .. }), "{err}");
         // Dismissing is also blocked while locked.
-        assert!(matches!(
+        assert2::assert!(matches!(
             store.dismiss_choice(&ws, &dep, None).unwrap_err(),
             StoreError::ChoiceLocked { .. }
         ));
@@ -5077,16 +5084,15 @@ mod tests {
             .node(&NodeId::from("n"))
             .cloned()
             .unwrap();
-        assert_eq!(
-            n.choice(&ChoiceId::from("a")).unwrap().status,
-            ChoiceStatus::Open,
+        assert2::assert!(
+            (n.choice(&ChoiceId::from("a")).unwrap().status) == (ChoiceStatus::Open),
             "parent reopened"
         );
-        assert!(
+        assert2::assert!(
             n.choice(&ChoiceId::from("b")).unwrap().needs_review,
             "decided dependent flagged for review"
         );
-        assert!(
+        assert2::assert!(
             !n.choice(&ChoiceId::from("c")).unwrap().needs_review,
             "open dependent stays unflagged"
         );
@@ -5160,17 +5166,14 @@ mod tests {
             .node(&NodeId::from("n"))
             .cloned()
             .unwrap();
-        assert_eq!(
-            n.choice(&ChoiceId::from("a")).unwrap().status,
-            ChoiceStatus::Open
-        );
-        assert!(
+        assert2::assert!((n.choice(&ChoiceId::from("a")).unwrap().status) == (ChoiceStatus::Open));
+        assert2::assert!(
             !n.choice(&ChoiceId::from("b")).unwrap().needs_review,
             "a same-turn re-scope keeps the cleared flag"
         );
 
         let store = Store::with_doc(SessionDoc {
-            nodes: vec![original],
+            nodes: vec![original.clone()],
             ..Default::default()
         });
         let mut incoming = store.snapshot_doc().nodes[0].clone();
@@ -5181,8 +5184,35 @@ mod tests {
             .apply_update(vec![GraphOp::UpsertNode { node: incoming }])
             .expect("upsert reopens and restates choices");
         let n = store.snapshot_doc().nodes[0].clone();
-        assert_eq!(n.choices[0].status, ChoiceStatus::Open);
-        assert!(!n.choices[1].needs_review, "upsert re-scopes its choices");
+        assert2::assert!((n.choices[0].status) == (ChoiceStatus::Open));
+        assert2::assert!(!n.choices[1].needs_review, "upsert re-scopes its choices");
+
+        let store = Store::with_doc(SessionDoc {
+            nodes: vec![original],
+            ..Default::default()
+        });
+        let mut reopened = mk("a", vec![]);
+        reopened.reopen = true;
+        store
+            .apply_update(vec![
+                GraphOp::AddChoice {
+                    node_id: NodeId::from("n"),
+                    choice: reopened,
+                },
+                GraphOp::ResolveChoice {
+                    node_id: NodeId::from("n"),
+                    choice_id: ChoiceId::from("b"),
+                    selected: Some(OptionId::from("x")),
+                    dismiss: false,
+                },
+            ])
+            .expect("reopen + resolve dependent");
+        let n = store.snapshot_doc().nodes[0].clone();
+        assert2::assert!((n.choices[0].status) == (ChoiceStatus::Open));
+        assert2::assert!(
+            !n.choices[1].needs_review,
+            "same-turn resolution re-scopes the dependent"
+        );
     }
 
     #[test]
@@ -5202,8 +5232,8 @@ mod tests {
             }])
             .expect("ask");
         let q = store.snapshot_doc().question(&q1).cloned().unwrap();
-        assert!(q.answer.is_none(), "agent cannot pre-answer a question");
-        assert!(q.answered_at.is_none());
+        assert2::assert!(q.answer.is_none(), "agent cannot pre-answer a question");
+        assert2::assert!(q.answered_at.is_none());
         // The user answers; a re-ask keeps that reply.
         store.answer_question(&q1, "real answer".into()).unwrap();
         store
@@ -5219,8 +5249,8 @@ mod tests {
             }])
             .expect("re-ask");
         let q = store.snapshot_doc().question(&q1).cloned().unwrap();
-        assert_eq!(q.prompt, "reworded?");
-        assert_eq!(q.answer.as_deref(), Some("real answer"));
+        assert2::assert!((q.prompt) == ("reworded?"));
+        assert2::assert!((q.answer.as_deref()) == (Some("real answer")));
     }
 
     #[test]
@@ -5234,9 +5264,8 @@ mod tests {
                 build: Some(BuildStatus::Building),
             }])
             .expect("set_build");
-        assert_eq!(
-            store.snapshot_doc().node(&id).unwrap().build,
-            Some(BuildStatus::Building)
+        assert2::assert!(
+            (store.snapshot_doc().node(&id).unwrap().build) == (Some(BuildStatus::Building))
         );
         // An unrelated upsert (relabel, no build restated) preserves progress.
         let mut relabel = store.snapshot_doc().node(&id).cloned().unwrap();
@@ -5246,8 +5275,11 @@ mod tests {
             .apply_update(vec![GraphOp::UpsertNode { node: relabel }])
             .expect("upsert");
         let n = store.snapshot_doc().node(&id).cloned().unwrap();
-        assert_eq!(n.label, "Sync Engine v2");
-        assert_eq!(n.build, Some(BuildStatus::Building), "progress preserved");
+        assert2::assert!((n.label) == ("Sync Engine v2"));
+        assert2::assert!(
+            (n.build) == (Some(BuildStatus::Building)),
+            "progress preserved"
+        );
         // Clearing works via an explicit null.
         store
             .apply_update(vec![GraphOp::SetBuild {
@@ -5255,15 +5287,15 @@ mod tests {
                 build: None,
             }])
             .expect("clear");
-        assert_eq!(store.snapshot_doc().node(&id).unwrap().build, None);
+        assert2::assert!((store.snapshot_doc().node(&id).unwrap().build) == (None));
     }
 
     #[test]
     fn annotations_add_edit_delete_and_survive_propose() {
         let store = demo_store();
         let id = store.add_annotation(AnnotationKind::Note, 10.0, 20.0, 0.0, 0.0, "hi".into());
-        assert_eq!(store.snapshot_doc().annotations.len(), 1);
-        assert!(matches!(
+        assert2::assert!((store.snapshot_doc().annotations.len()) == (1));
+        assert2::assert!(matches!(
             store.peek_undelivered().last().unwrap().kind,
             DecisionKind::AnnotationAdded { .. }
         ));
@@ -5272,8 +5304,8 @@ mod tests {
             .edit_annotation(&id, 30.0, 40.0, 0.0, 0.0, "updated".into())
             .expect("edit");
         let a = store.snapshot_doc().annotations[0].clone();
-        assert_eq!((a.x, a.y), (30.0, 40.0));
-        assert_eq!(a.text, "updated");
+        assert2::assert!((a.x, a.y) == (30.0, 40.0));
+        assert2::assert!((a.text) == ("updated"));
         // A propose (which carries no annotations) keeps the user's margin layer.
         let mut fresh = demo_doc();
         fresh.annotations.push(Annotation {
@@ -5287,17 +5319,16 @@ mod tests {
             origin: Origin::User,
         });
         store.apply_propose(fresh).expect("propose");
-        assert_eq!(
-            store.snapshot_doc().annotations.len(),
-            2,
+        assert2::assert!(
+            (store.snapshot_doc().annotations.len()) == (2),
             "existing annotation survived beside the incoming one"
         );
         // Delete removes it.
         store.delete_annotation(&id).expect("delete");
         let annotations = store.snapshot_doc().annotations;
-        assert_eq!(annotations.len(), 1);
-        assert_eq!(annotations[0].id, AnnotationId::from("incoming"));
-        assert!(matches!(
+        assert2::assert!((annotations.len()) == (1));
+        assert2::assert!((annotations[0].id) == (AnnotationId::from("incoming")));
+        assert2::assert!(matches!(
             store.delete_annotation(&id).unwrap_err(),
             StoreError::UnknownAnnotation(_)
         ));
@@ -5309,7 +5340,7 @@ mod tests {
         store
             .apply_propose_as(demo_doc(), Some("alpha".into()))
             .expect("propose");
-        assert!(
+        assert2::assert!(
             store
                 .snapshot_doc()
                 .nodes
@@ -5325,12 +5356,11 @@ mod tests {
         store
             .apply_update_as(vec![GraphOp::UpsertNode { node: n }], Some("beta".into()))
             .expect("upsert");
-        assert_eq!(
-            store.snapshot_doc().node(&id).unwrap().agent.as_deref(),
-            Some("beta")
+        assert2::assert!(
+            (store.snapshot_doc().node(&id).unwrap().agent.as_deref()) == (Some("beta"))
         );
         // The feed entries are attributed to their author.
-        assert!(
+        assert2::assert!(
             store
                 .snapshot_meta()
                 .activity
@@ -5391,14 +5421,14 @@ mod tests {
                 Some("beta".into()),
             )
             .unwrap();
-        assert_eq!(
-            store
+        assert2::assert!(
+            (store
                 .snapshot_doc()
                 .node(&NodeId::from("a"))
                 .unwrap()
                 .agent
-                .as_deref(),
-            Some("beta"),
+                .as_deref())
+                == (Some("beta")),
             "node is now owned by beta"
         );
         // alpha still receives the decision it originally owned…
@@ -5409,7 +5439,10 @@ mod tests {
         else {
             panic!("alpha not delivered");
         };
-        assert_eq!(a_batch.len(), 1, "original author still gets the decision");
+        assert2::assert!(
+            (a_batch.len()) == (1),
+            "original author still gets the decision"
+        );
         // …and beta does not.
         let FlushOutcome::Delivered(b_batch) = store
             .await_flush(Duration::from_secs(1), awaiter(2, Some("beta")))
@@ -5418,7 +5451,7 @@ mod tests {
         else {
             panic!("beta not delivered");
         };
-        assert!(
+        assert2::assert!(
             b_batch.is_empty(),
             "new owner does not steal it: {b_batch:?}"
         );
@@ -5466,7 +5499,7 @@ mod tests {
         let FlushOutcome::Delivered(alpha_batch) = alpha.await.unwrap().unwrap() else {
             panic!("alpha not delivered");
         };
-        assert!(
+        assert2::assert!(
             alpha_batch.is_empty(),
             "alpha must not receive gamma's event"
         );
@@ -5478,8 +5511,8 @@ mod tests {
         let FlushOutcome::Delivered(events) = gamma else {
             panic!("gamma did not receive its pending event");
         };
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].target_agent.as_deref(), Some("gamma"));
+        assert2::assert!((events.len()) == (1));
+        assert2::assert!((events[0].target_agent.as_deref()) == (Some("gamma")));
     }
 
     #[tokio::test]
@@ -5560,7 +5593,7 @@ mod tests {
         });
         wait_until(&store, 2).await;
         store.request_flush(None).unwrap();
-        assert_eq!(store.snapshot_meta().send_status, SendStatus::Sending);
+        assert2::assert!((store.snapshot_meta().send_status) == (SendStatus::Sending));
         let (a_outcome, b_outcome) = tokio::join!(alpha, beta);
         let FlushOutcome::Delivered(a_batch) = a_outcome.unwrap().unwrap() else {
             panic!("alpha not delivered");
@@ -5579,19 +5612,19 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
-        assert_eq!(picked_nodes(&a_batch), vec!["a"], "alpha only sees a");
-        assert_eq!(picked_nodes(&b_batch), vec!["b"], "beta only sees b");
+        assert2::assert!((picked_nodes(&a_batch)) == (vec!["a"]), "alpha only sees a");
+        assert2::assert!((picked_nodes(&b_batch)) == (vec!["b"]), "beta only sees b");
         let has_anno = |batch: &[DecisionEvent]| {
             batch
                 .iter()
                 .any(|e| matches!(e.kind, DecisionKind::AnnotationAdded { .. }))
         };
-        assert!(
+        assert2::assert!(
             has_anno(&a_batch) && has_anno(&b_batch),
             "unclaimed reaches everyone"
         );
-        assert_eq!(store.snapshot_meta().send_status, SendStatus::Sent);
-        assert!(store.try_deliver(ConnectionId(1)).is_none());
+        assert2::assert!((store.snapshot_meta().send_status) == (SendStatus::Sent));
+        assert2::assert!(store.try_deliver(ConnectionId(1)).is_none());
     }
 
     #[test]
@@ -5602,10 +5635,10 @@ mod tests {
         let beta = WaitGuard::enter(store.clone(), awaiter(202, Some("beta"))).unwrap();
         store.request_flush(None).unwrap();
 
-        assert!(store.try_deliver(ConnectionId(201)).is_some());
-        assert_eq!(store.snapshot_meta().send_status, SendStatus::Sending);
-        assert!(store.try_deliver(ConnectionId(202)).is_some());
-        assert_eq!(store.snapshot_meta().send_status, SendStatus::Sent);
+        assert2::assert!(store.try_deliver(ConnectionId(201)).is_some());
+        assert2::assert!((store.snapshot_meta().send_status) == (SendStatus::Sending));
+        assert2::assert!(store.try_deliver(ConnectionId(202)).is_some());
+        assert2::assert!((store.snapshot_meta().send_status) == (SendStatus::Sent));
 
         drop(alpha);
         drop(beta);
@@ -5638,17 +5671,17 @@ mod tests {
             .doc
             .question(&crate::model::QuestionId::from("deploy"))
             .unwrap();
-        assert_eq!(q.answer.as_deref(), Some("staging"));
-        assert!(q.answered_at.is_some());
-        assert!(matches!(
+        assert2::assert!((q.answer.as_deref()) == (Some("staging")));
+        assert2::assert!(q.answered_at.is_some());
+        assert2::assert!(matches!(
             s.decision_log.last().unwrap().kind,
             DecisionKind::QuestionAnswered { .. }
         ));
         // Answering does not autoflush — it rides with the next Send.
-        assert_eq!(s.delivery_cursor, 0);
-        assert!(store.snapshot_meta().undo_available);
-        assert!(store.undo());
-        assert!(
+        assert2::assert!((s.delivery_cursor) == (0));
+        assert2::assert!(store.snapshot_meta().undo_available);
+        assert2::assert!(store.undo());
+        assert2::assert!(
             store
                 .snapshot_doc()
                 .question(&crate::model::QuestionId::from("deploy"))
@@ -5664,7 +5697,7 @@ mod tests {
         let err = store
             .answer_question(&crate::model::QuestionId::from("nope"), "x".into())
             .unwrap_err();
-        assert!(matches!(err, StoreError::UnknownQuestion(_)));
+        assert2::assert!(matches!(err, StoreError::UnknownQuestion(_)));
     }
 
     #[test]
@@ -5692,10 +5725,10 @@ mod tests {
             .question(&crate::model::QuestionId::from("deploy"))
             .cloned()
             .unwrap();
-        assert_eq!(q.prompt, "Which environment ships first, really?");
-        assert_eq!(q.node_id, Some(NodeId::from("sync-engine")));
+        assert2::assert!((q.prompt) == ("Which environment ships first, really?"));
+        assert2::assert!((q.node_id) == (Some(NodeId::from("sync-engine"))));
         // The user's answer survived the re-ask.
-        assert_eq!(q.answer.as_deref(), Some("staging"));
+        assert2::assert!((q.answer.as_deref()) == (Some("staging")));
     }
 
     #[test]
@@ -5714,7 +5747,7 @@ mod tests {
             .question(&crate::model::QuestionId::from("deploy"))
             .cloned()
             .unwrap();
-        assert_eq!(q.answer.as_deref(), Some("prod"));
+        assert2::assert!((q.answer.as_deref()) == (Some("prod")));
     }
 
     #[test]
@@ -5741,7 +5774,7 @@ mod tests {
             .question(&crate::model::QuestionId::from("deploy"))
             .cloned()
             .unwrap();
-        assert_eq!(q.answer.as_deref(), Some("staging"));
-        assert!(store.read(|s| s.blocked_changes.is_empty()));
+        assert2::assert!((q.answer.as_deref()) == (Some("staging")));
+        assert2::assert!(store.read(|s| s.blocked_changes.is_empty()));
     }
 }

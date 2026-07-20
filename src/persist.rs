@@ -114,6 +114,7 @@ pub async fn autosave_task(store: Arc<Store>, path: PathBuf) {
 mod tests {
     use super::*;
     use crate::demo::demo_doc;
+    use yare::parameterized;
 
     fn tmp_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("nodestorm-test-{}-{name}", std::process::id()))
@@ -121,9 +122,8 @@ mod tests {
 
     #[test]
     fn default_path_ends_in_session_json() {
-        assert_eq!(
-            default_session_path().unwrap().file_name().unwrap(),
-            "session.json"
+        assert2::assert!(
+            (default_session_path().unwrap().file_name().unwrap()) == ("session.json")
         );
     }
 
@@ -139,7 +139,7 @@ mod tests {
         tokio::time::advance(AUTOSAVE_DEBOUNCE + Duration::from_millis(1)).await;
         tokio::task::yield_now().await;
 
-        assert!(path.exists());
+        assert2::assert!(path.exists());
         task.abort();
         std::fs::remove_file(path).ok();
     }
@@ -154,51 +154,49 @@ mod tests {
         let state = store.snapshot_state();
         save(&path, &state).unwrap();
         let loaded = load(&path).expect("loads");
-        assert_eq!(loaded.doc, state.doc);
-        assert_eq!(loaded.decision_log.len(), state.decision_log.len());
-        assert_eq!(loaded.flush_seq, state.flush_seq);
-        assert_eq!(loaded.waiting_agents, 0, "transient field not persisted");
+        assert2::assert!((loaded.doc) == (state.doc));
+        assert2::assert!((loaded.decision_log.len()) == (state.decision_log.len()));
+        assert2::assert!((loaded.flush_seq) == (state.flush_seq));
+        assert2::assert!(
+            (loaded.waiting_agents) == (0),
+            "transient field not persisted"
+        );
         std::fs::remove_file(&path).ok();
     }
 
     #[test]
     fn missing_file_is_none() {
-        assert!(load(Path::new("/definitely/not/here.json")).is_none());
+        assert2::assert!(load(Path::new("/definitely/not/here.json")).is_none());
     }
 
     #[test]
     fn mermaid_export_path_maps() {
-        assert_eq!(
-            mermaid_export_path(Path::new("/data/session.json")),
-            PathBuf::from("/data/session.mermaid.md")
+        assert2::assert!(
+            (mermaid_export_path(Path::new("/data/session.json")))
+                == (PathBuf::from("/data/session.mermaid.md"))
         );
     }
 
-    #[test]
-    fn export_path_maps_session_json() {
-        assert_eq!(
-            export_path(Path::new("/data/session.json")),
-            PathBuf::from("/data/session.export.md")
-        );
-        // A `--session` override without an extension still gets a sane name.
-        assert_eq!(
-            export_path(Path::new("custom-session")),
-            PathBuf::from("custom-session.export.md")
-        );
+    #[parameterized(
+        session_json = { "/data/session.json", "/data/session.export.md" },
+        extensionless_override = { "custom-session", "custom-session.export.md" },
+    )]
+    fn export_path_maps_session_json(input: &str, expected: &str) {
+        assert2::assert!(export_path(Path::new(input)) == PathBuf::from(expected));
     }
 
     #[test]
     fn save_export_round_trip() {
         let path = tmp_path("record.export.md");
         save_export(&path, "# hello\n").unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "# hello\n");
+        assert2::assert!((std::fs::read_to_string(&path).unwrap()) == ("# hello\n"));
         // Re-export overwrites in place.
         save_export(&path, "# again\n").unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "# again\n");
+        assert2::assert!((std::fs::read_to_string(&path).unwrap()) == ("# again\n"));
         // No temp residue next to the record.
         let mut tmp = path.as_os_str().to_owned();
         tmp.push(".tmp");
-        assert!(!PathBuf::from(tmp).exists());
+        assert2::assert!(!PathBuf::from(tmp).exists());
         std::fs::remove_file(&path).ok();
     }
 
@@ -206,10 +204,10 @@ mod tests {
     fn corrupt_file_is_moved_aside() {
         let path = tmp_path("corrupt.json");
         std::fs::write(&path, b"{ not json").unwrap();
-        assert!(load(&path).is_none());
-        assert!(!path.exists(), "corrupt file moved away");
+        assert2::assert!(load(&path).is_none());
+        assert2::assert!(!path.exists(), "corrupt file moved away");
         let backup = path.with_extension("json.corrupt");
-        assert!(backup.exists());
+        assert2::assert!(backup.exists());
         std::fs::remove_file(backup).ok();
     }
 }

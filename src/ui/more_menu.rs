@@ -273,11 +273,11 @@ mod tests {
     fn markdown_and_export_receipts_reflect_the_store() {
         let store = Store::with_doc(crate::demo::demo_doc());
         let markdown = render_markdown_now(&store);
-        assert!(markdown.contains("# Realtime collaboration for the notes app"));
-        assert!(markdown.contains("```mermaid"));
+        assert2::assert!(markdown.contains("# Realtime collaboration for the notes app"));
+        assert2::assert!(markdown.contains("```mermaid"));
 
         report_export(&store, Ok(std::path::PathBuf::from("decision.md")));
-        assert!(
+        assert2::assert!(
             store
                 .snapshot_meta()
                 .activity
@@ -287,7 +287,7 @@ mod tests {
                 .contains("decision.md")
         );
         report_export(&store, Err(anyhow::anyhow!("disk full")));
-        assert!(
+        assert2::assert!(
             store
                 .snapshot_meta()
                 .activity

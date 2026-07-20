@@ -108,7 +108,7 @@ mod tests {
 
         persist(&cli, &prefs);
 
-        assert_eq!(crate::prefs::load_or_default(&path), prefs);
+        assert2::assert!((crate::prefs::load_or_default(&path)) == (prefs));
         std::fs::remove_file(path).unwrap();
     }
 }
