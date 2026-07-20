@@ -35,6 +35,33 @@ pub fn TerminalDock() -> Element {
     let mut focused = panel.focused;
     let mut confirm_close = panel.confirm_close;
 
+    // Show only the focused host. Visibility is toggled here in JS, on the DOM
+    // nodes Dioxus renders below, instead of via a dynamic `style`/`class` on
+    // those keyed nodes: Dioxus 0.7 mis-reconciles such an attribute when the
+    // list grows by a front-insert (a new tab whose id sorts before an existing
+    // one), leaving *every* host at display:none — a blank dock. The hosts
+    // below therefore carry no dynamic attribute for the diff to mis-apply, and
+    // this effect re-runs on any list/focus change.
+    use_effect(move || {
+        let list = terminals.read();
+        let ids: Vec<String> = list.iter().map(|t| t.id.clone()).collect();
+        if ids.is_empty() {
+            return;
+        }
+        let focused_id = focused
+            .read()
+            .clone()
+            .filter(|id| ids.contains(id))
+            .unwrap_or_else(|| ids[0].clone());
+        let ids_json = serde_json::to_string(&ids).unwrap_or_else(|_| "[]".into());
+        let focus_json = serde_json::to_string(&focused_id).unwrap_or_else(|_| "\"\"".into());
+        document::eval(&format!(
+            "(function(){{var ids={ids_json},f={focus_json};\
+             ids.forEach(function(id){{var h=document.getElementById('term-'+id);\
+             if(h){{h.style.display=(id===f)?'':'none';}}}});}})();"
+        ));
+    });
+
     let list = terminals.read().clone();
     if list.is_empty() {
         return rsx! {};
@@ -102,11 +129,13 @@ pub fn TerminalDock() -> Element {
             }
             div { class: "term-body",
                 for info in list.iter() {
+                    // No dynamic attributes here: the visibility effect above
+                    // toggles display in JS so the keyed diff has nothing to
+                    // mis-apply when the list grows.
                     div {
                         key: "{info.id}",
                         id: "term-{info.id}",
                         class: "term-host",
-                        style: if info.id == focused_id { "" } else { "display: none;" },
                         onmounted: {
                             let js = mount_js(&info.id, cli.port, manager.token());
                             move |_| {
