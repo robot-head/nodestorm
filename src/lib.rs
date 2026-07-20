@@ -13,6 +13,7 @@ pub mod diff;
 pub mod export;
 pub mod icon;
 pub mod layout;
+pub mod logging;
 pub mod model;
 pub mod persist;
 pub mod prefs;
