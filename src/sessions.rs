@@ -41,6 +41,13 @@ pub struct ConnectionInfo {
     pub state: ConnectionState,
 }
 
+fn client_label(client_name: &str, version: &str) -> String {
+    match version.trim() {
+        "" => client_name.to_owned(),
+        version => format!("{client_name} {version}"),
+    }
+}
+
 /// One row of [`Sessions::list`] — what the switcher and `list_sessions`
 /// tool show per session.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -232,21 +239,18 @@ impl Sessions {
     }
 
     pub fn connect_client(&self, id: ConnectionId, client_name: String, version: String) {
+        let info = ConnectionInfo {
+            id,
+            client_name,
+            version,
+            state: ConnectionState::Connected,
+        };
+        let label = client_label(&info.client_name, &info.version);
         self.connections
             .lock()
             .expect("connections mutex poisoned")
-            .insert(
-                id,
-                RegistryEntry {
-                    info: ConnectionInfo {
-                        id,
-                        client_name,
-                        version,
-                        state: ConnectionState::Connected,
-                    },
-                    live: true,
-                },
-            );
+            .insert(id, RegistryEntry { info, live: true });
+        tracing::info!("{label} connected");
         self.bump_connections();
     }
 
@@ -282,22 +286,25 @@ impl Sessions {
         self.set_connection_state(id, ConnectionState::Connected);
     }
 
-    pub fn disconnect_client(&self, id: ConnectionId) {
-        let changed = self
+    pub fn disconnect_client(&self, id: ConnectionId) -> Option<ConnectionInfo> {
+        let disconnected = self
             .connections
             .lock()
             .expect("connections mutex poisoned")
             .get_mut(&id)
-            .is_some_and(|entry| {
+            .and_then(|entry| {
                 if !entry.live {
-                    return false;
+                    return None;
                 }
                 entry.live = false;
-                true
+                Some(entry.info.clone())
             });
-        if changed {
+        if let Some(info) = &disconnected {
+            let label = client_label(&info.client_name, &info.version);
+            tracing::info!("{label} disconnected");
             self.bump_connections();
         }
+        disconnected
     }
 
     pub fn connection(&self, id: ConnectionId) -> Option<ConnectionInfo> {
@@ -712,6 +719,31 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn client_label_omits_an_empty_version() {
+        assert_eq!(
+            client_label("claude-code", "2.1.215"),
+            "claude-code 2.1.215"
+        );
+        assert_eq!(client_label("claude-code", ""), "claude-code");
+        assert_eq!(client_label("claude-code", "   "), "claude-code");
+    }
+
+    #[test]
+    fn disconnect_reports_only_the_first_live_transition() {
+        let root = tmp_root("disconnect-transition");
+        let sessions = Sessions::open(root.join("sessions"), None).unwrap();
+        let id = sessions.next_connection_id();
+        sessions.connect_client(id, "claude-code".into(), "2.1.215".into());
+
+        assert_eq!(
+            sessions.disconnect_client(id).map(|info| info.client_name),
+            Some("claude-code".into())
+        );
+        assert!(sessions.disconnect_client(id).is_none());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
