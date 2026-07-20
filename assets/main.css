@@ -1342,23 +1342,27 @@ fieldset.agent-launch-options {
 .connection-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "client meta" "state state";
   gap: 3px 12px;
   padding: 8px 10px;
 }
 
 .connection-client {
+  grid-area: client;
   overflow-wrap: anywhere;
 }
 
 .connection-meta {
+  grid-area: meta;
   color: var(--text-dim);
   font-size: 11px;
 }
 
 .connection-state {
+  grid-area: state;
   color: var(--badge-decided);
   font-size: 11px;
-  text-align: right;
+  text-align: left;
 }
 
 .connection-state.reconnecting {

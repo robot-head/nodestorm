@@ -298,6 +298,14 @@ mod tests {
         assert2::assert!(APP_SOURCE.contains(r#"aria_label: "Dismiss notification""#));
         assert_block_contains(".connection-pop", "max-height: calc(100vh - 64px)");
         assert_block_contains(".connection-row", "display: grid");
+        assert_block_contains(
+            ".connection-row",
+            "grid-template-areas: \"client meta\" \"state state\"",
+        );
+        assert_block_contains(".connection-client", "grid-area: client");
+        assert_block_contains(".connection-meta", "grid-area: meta");
+        assert_block_contains(".connection-state", "grid-area: state");
+        assert_block_contains(".connection-state", "text-align: left");
         assert_block_contains(".delivery-toast", "position: fixed");
         assert_block_contains(".delivery-toast", "z-index: 30");
         assert_block_contains(".delivery-toast-error", "color: var(--status-removed)");
