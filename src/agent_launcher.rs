@@ -184,6 +184,37 @@ pub fn agent_command(agent: AgentKind, slug: &str, prompt: &str, cwd: &str) -> C
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FieldCheck {
+    Valid,
+    Invalid(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceCheck {
+    pub repository: FieldCheck,
+    pub branch: FieldCheck,
+    pub worktree: Option<FieldCheck>,
+}
+
+impl WorkspaceCheck {
+    pub fn require_valid(&self) -> anyhow::Result<()> {
+        for check in [
+            Some(&self.repository),
+            Some(&self.branch),
+            self.worktree.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let FieldCheck::Invalid(message) = check {
+                anyhow::bail!(message.clone());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalInspection {
     pub dirty: bool,
 }
@@ -217,41 +248,66 @@ fn git(repository: &str, args: &[&str]) -> anyhow::Result<String> {
     checked_output("git", &all)
 }
 
+pub fn check_local_workspace(req: &LaunchRequest) -> WorkspaceCheck {
+    let repository = if req.repository.trim().is_empty() {
+        FieldCheck::Invalid("repository is required".into())
+    } else if git(&req.repository, &["rev-parse", "--is-inside-work-tree"])
+        .is_ok_and(|value| value == "true")
+    {
+        FieldCheck::Valid
+    } else {
+        FieldCheck::Invalid("repository is not a Git checkout".into())
+    };
+    let branch = if req.branch.trim().is_empty()
+        || checked_output("git", &["check-ref-format", "--branch", &req.branch]).is_err()
+    {
+        FieldCheck::Invalid("branch name is invalid".into())
+    } else if repository != FieldCheck::Valid {
+        FieldCheck::Invalid("select a valid Git repository first".into())
+    } else {
+        let reference = format!("refs/heads/{}", req.branch);
+        match std::process::Command::new("git")
+            .args([
+                "-C",
+                &req.repository,
+                "show-ref",
+                "--verify",
+                "--quiet",
+                &reference,
+            ])
+            .status()
+            .ok()
+            .and_then(|status| status.code())
+        {
+            Some(0) => FieldCheck::Invalid(format!("branch `{}` already exists", req.branch)),
+            Some(1) => FieldCheck::Valid,
+            _ => FieldCheck::Invalid(format!("git could not inspect branch `{}`", req.branch)),
+        }
+    };
+    let worktree = match &req.git_mode {
+        GitMode::ExistingCheckout => None,
+        GitMode::NewWorktree { path } if path.trim().is_empty() => {
+            Some(FieldCheck::Invalid("worktree path is required".into()))
+        }
+        GitMode::NewWorktree { path } if Path::new(path).exists() => Some(FieldCheck::Invalid(
+            format!("worktree destination `{path}` already exists"),
+        )),
+        GitMode::NewWorktree { .. } => Some(FieldCheck::Valid),
+    };
+    WorkspaceCheck {
+        repository,
+        branch,
+        worktree,
+    }
+}
+
 pub fn inspect_local(req: &LaunchRequest) -> anyhow::Result<LocalInspection> {
     validate_request(req)?;
     anyhow::ensure!(
         matches!(req.target, LaunchTarget::Local),
         "local inspection requires a local target"
     );
-    git(&req.repository, &["rev-parse", "--show-toplevel"])?;
-    git(
-        &req.repository,
-        &["check-ref-format", "--branch", &req.branch],
-    )?;
-
-    let reference = format!("refs/heads/{}", req.branch);
-    let branch_status = std::process::Command::new("git")
-        .args([
-            "-C",
-            &req.repository,
-            "show-ref",
-            "--verify",
-            "--quiet",
-            &reference,
-        ])
-        .status()?;
-    match branch_status.code() {
-        Some(0) => anyhow::bail!("branch `{}` already exists", req.branch),
-        Some(1) => {}
-        _ => anyhow::bail!("git could not inspect branch `{}`", req.branch),
-    }
-
-    if let GitMode::NewWorktree { path } = &req.git_mode {
-        anyhow::ensure!(
-            !Path::new(path).exists(),
-            "worktree destination `{path}` already exists"
-        );
-    }
+    check_local_workspace(req).require_valid()?;
 
     Ok(LocalInspection {
         dirty: !git(&req.repository, &["status", "--porcelain"])?.is_empty(),
@@ -654,6 +710,77 @@ mod tests {
             },
             mcp_port: 8123,
         }
+    }
+
+    #[test]
+    fn local_workspace_check_reports_each_usable_field() {
+        let repo = TempRepo::new("live-valid");
+        let destination = repo.root.join("available-worktree");
+        let mut req = request(AgentKind::Claude);
+        req.repository = repo.path.to_string_lossy().into_owned();
+        req.branch = "feature/available".into();
+        req.git_mode = GitMode::NewWorktree {
+            path: destination.to_string_lossy().into_owned(),
+        };
+        assert2::assert!(
+            (check_local_workspace(&req))
+                == (WorkspaceCheck {
+                    repository: FieldCheck::Valid,
+                    branch: FieldCheck::Valid,
+                    worktree: Some(FieldCheck::Valid),
+                })
+        );
+    }
+
+    #[test]
+    fn local_workspace_check_reports_collisions_and_dependencies() {
+        let repo = TempRepo::new("live-invalid");
+        let occupied = repo.root.join("occupied");
+        std::fs::create_dir_all(&occupied).unwrap();
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo.path)
+            .args(["branch", "already-there"])
+            .status()
+            .unwrap();
+        let mut req = request(AgentKind::Claude);
+        req.repository = repo.path.to_string_lossy().into_owned();
+        req.branch = "already-there".into();
+        req.git_mode = GitMode::NewWorktree {
+            path: occupied.to_string_lossy().into_owned(),
+        };
+        let checked = check_local_workspace(&req);
+        assert2::assert!(
+            matches!(checked.branch, FieldCheck::Invalid(message) if message.contains("already exists"))
+        );
+        assert2::assert!(
+            matches!(checked.worktree, Some(FieldCheck::Invalid(message)) if message.contains("already exists"))
+        );
+
+        req.repository = repo.root.join("missing").to_string_lossy().into_owned();
+        let checked = check_local_workspace(&req);
+        assert2::assert!(matches!(checked.repository, FieldCheck::Invalid(_)));
+        assert2::assert!(
+            checked.branch == FieldCheck::Invalid("select a valid Git repository first".into())
+        );
+    }
+
+    #[test]
+    fn local_workspace_check_rejects_empty_and_malformed_values() {
+        let mut req = request(AgentKind::Claude);
+        req.repository.clear();
+        req.branch = "bad branch".into();
+        req.git_mode = GitMode::NewWorktree {
+            path: String::new(),
+        };
+        let checked = check_local_workspace(&req);
+        assert2::assert!(
+            checked.repository == FieldCheck::Invalid("repository is required".into())
+        );
+        assert2::assert!(checked.branch == FieldCheck::Invalid("branch name is invalid".into()));
+        assert2::assert!(
+            checked.worktree == Some(FieldCheck::Invalid("worktree path is required".into()))
+        );
     }
 
     #[test]
