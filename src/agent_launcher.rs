@@ -196,6 +196,13 @@ pub struct WorkspaceCheck {
     pub worktree: Option<FieldCheck>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkspaceProbe {
+    Checked(WorkspaceCheck),
+    PasswordOnly,
+    TransportError(String),
+}
+
 impl WorkspaceCheck {
     pub fn require_valid(&self) -> anyhow::Result<()> {
         for check in [
@@ -298,6 +305,166 @@ pub fn check_local_workspace(req: &LaunchRequest) -> WorkspaceCheck {
         repository,
         branch,
         worktree,
+    }
+}
+
+fn probe_line(name: &str, valid: bool, message: &str) -> String {
+    format!(
+        "printf 'NODESTORM_{name}\\t{}\\t{}\\n'",
+        if valid { "valid" } else { "invalid" },
+        message
+    )
+}
+
+fn remote_probe_script(req: &LaunchRequest) -> anyhow::Result<String> {
+    anyhow::ensure!(
+        req.repository.starts_with('/'),
+        "remote repository must be absolute"
+    );
+    let repo = posix_quote(&req.repository);
+    let branch = posix_quote(&req.branch);
+    let reference = posix_quote(&format!("refs/heads/{}", req.branch));
+    let repository_valid = probe_line("REPOSITORY", true, "");
+    let repository_invalid = probe_line("REPOSITORY", false, "repository is not a Git checkout");
+    let branch_invalid = probe_line("BRANCH", false, "branch name is invalid");
+    let branch_needs_repo = probe_line("BRANCH", false, "select a valid Git repository first");
+    let branch_exists = probe_line("BRANCH", false, "branch already exists");
+    let branch_error = probe_line("BRANCH", false, "could not inspect remote branches");
+    let branch_valid = probe_line("BRANCH", true, "");
+    let mut lines = vec![
+        "repo_ok=0".to_owned(),
+        format!(
+            "if git -C {repo} rev-parse --is-inside-work-tree 2>/dev/null | grep -qx true; then repo_ok=1; {repository_valid}; else {repository_invalid}; fi"
+        ),
+        format!(
+            "if ! git check-ref-format --branch {branch} >/dev/null 2>&1; then {branch_invalid}; elif [ \"$repo_ok\" -ne 1 ]; then {branch_needs_repo}; else branch_status=0; git -C {repo} show-ref --verify --quiet {reference} || branch_status=$?; if [ \"$branch_status\" -eq 0 ]; then {branch_exists}; elif [ \"$branch_status\" -eq 1 ]; then {branch_valid}; else {branch_error}; fi; fi"
+        ),
+    ];
+    if let GitMode::NewWorktree { path } = &req.git_mode {
+        anyhow::ensure!(
+            path.starts_with('/'),
+            "remote worktree path must be absolute"
+        );
+        let worktree = posix_quote(path);
+        let exists = probe_line("WORKTREE", false, "worktree destination already exists");
+        let available = probe_line("WORKTREE", true, "");
+        lines.push(format!(
+            "if [ -e {worktree} ]; then {exists}; else {available}; fi"
+        ));
+    }
+    Ok(lines.join("\n"))
+}
+
+pub fn remote_probe_command(req: &LaunchRequest) -> anyhow::Result<CommandSpec> {
+    let LaunchTarget::Ssh { alias } = &req.target else {
+        anyhow::bail!("remote workspace probe requires an SSH target");
+    };
+    anyhow::ensure!(!alias.trim().is_empty(), "SSH host alias is required");
+    let script = remote_probe_script(req)?;
+    Ok(CommandSpec {
+        program: "ssh".into(),
+        args: vec![
+            "-o".into(),
+            "BatchMode=yes".into(),
+            "-o".into(),
+            "ConnectTimeout=5".into(),
+            "-o".into(),
+            "NumberOfPasswordPrompts=0".into(),
+            "-o".into(),
+            "StrictHostKeyChecking=yes".into(),
+            "--".into(),
+            alias.clone(),
+            "sh".into(),
+            "-lc".into(),
+            posix_quote(&script),
+        ],
+        current_dir: None,
+    })
+}
+
+fn parsed_field(value: &str, message: &str) -> anyhow::Result<FieldCheck> {
+    match value {
+        "valid" => Ok(FieldCheck::Valid),
+        "invalid" if !message.is_empty() => Ok(FieldCheck::Invalid(message.into())),
+        _ => anyhow::bail!("remote validation returned an invalid field result"),
+    }
+}
+
+pub fn parse_remote_probe(output: &str, wants_worktree: bool) -> anyhow::Result<WorkspaceCheck> {
+    let mut repository = None;
+    let mut branch = None;
+    let mut worktree = None;
+    for line in output.lines() {
+        let parts = line.splitn(3, '\t').collect::<Vec<_>>();
+        if parts.len() != 3 {
+            continue;
+        }
+        match parts[0] {
+            "NODESTORM_REPOSITORY" => {
+                anyhow::ensure!(repository.is_none(), "duplicate remote repository status");
+                repository = Some(parsed_field(parts[1], parts[2])?);
+            }
+            "NODESTORM_BRANCH" => {
+                anyhow::ensure!(branch.is_none(), "duplicate remote branch status");
+                branch = Some(parsed_field(parts[1], parts[2])?);
+            }
+            "NODESTORM_WORKTREE" if wants_worktree => {
+                anyhow::ensure!(worktree.is_none(), "duplicate remote worktree status");
+                worktree = Some(parsed_field(parts[1], parts[2])?);
+            }
+            _ => {}
+        }
+    }
+    Ok(WorkspaceCheck {
+        repository: repository
+            .ok_or_else(|| anyhow::anyhow!("remote validation omitted repository status"))?,
+        branch: branch.ok_or_else(|| anyhow::anyhow!("remote validation omitted branch status"))?,
+        worktree: if wants_worktree {
+            Some(
+                worktree
+                    .ok_or_else(|| anyhow::anyhow!("remote validation omitted worktree status"))?,
+            )
+        } else {
+            None
+        },
+    })
+}
+
+pub fn password_only_rejection(stderr: &str) -> bool {
+    let stderr = stderr.to_ascii_lowercase();
+    stderr.contains("permission denied")
+        && (stderr.contains("password") || stderr.contains("keyboard-interactive"))
+}
+
+pub fn probe_workspace(req: &LaunchRequest) -> WorkspaceProbe {
+    if matches!(req.target, LaunchTarget::Local) {
+        return WorkspaceProbe::Checked(check_local_workspace(req));
+    }
+    let command = match remote_probe_command(req) {
+        Ok(command) => command,
+        Err(error) => return WorkspaceProbe::TransportError(error.to_string()),
+    };
+    let output = match std::process::Command::new(&command.program)
+        .args(&command.args)
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) => return WorkspaceProbe::TransportError(error.to_string()),
+    };
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        return if password_only_rejection(&stderr) {
+            WorkspaceProbe::PasswordOnly
+        } else {
+            WorkspaceProbe::TransportError(stderr.trim().to_owned())
+        };
+    }
+    match parse_remote_probe(
+        &String::from_utf8_lossy(&output.stdout),
+        matches!(req.git_mode, GitMode::NewWorktree { .. }),
+    ) {
+        Ok(checked) => WorkspaceProbe::Checked(checked),
+        Err(error) => WorkspaceProbe::TransportError(error.to_string()),
     }
 }
 
@@ -781,6 +948,58 @@ mod tests {
         assert2::assert!(
             checked.worktree == Some(FieldCheck::Invalid("worktree path is required".into()))
         );
+    }
+
+    #[test]
+    fn remote_probe_is_one_bounded_noninteractive_ssh_command() {
+        let mut req = request(AgentKind::Claude);
+        req.target = LaunchTarget::Ssh {
+            alias: "build-box".into(),
+        };
+        req.repository = "/srv/api".into();
+        req.git_mode = GitMode::NewWorktree {
+            path: "/srv/api-worktrees/feature/check".into(),
+        };
+        let command = remote_probe_command(&req).unwrap();
+        assert2::assert!(command.program == "ssh");
+        for option in [
+            "BatchMode=yes",
+            "ConnectTimeout=5",
+            "NumberOfPasswordPrompts=0",
+            "StrictHostKeyChecking=yes",
+        ] {
+            assert2::assert!(command.args.iter().any(|arg| arg == option));
+        }
+        let script = command.args.last().unwrap();
+        assert2::assert!(script.contains("NODESTORM_REPOSITORY"));
+        assert2::assert!(script.contains("NODESTORM_BRANCH"));
+        assert2::assert!(script.contains("NODESTORM_WORKTREE"));
+        assert2::assert!(!script.contains("mkdir"));
+        assert2::assert!(!script.contains("worktree add"));
+    }
+
+    #[test]
+    fn remote_probe_parser_preserves_independent_results() {
+        let output = "banner\nNODESTORM_REPOSITORY\tvalid\t\nNODESTORM_BRANCH\tinvalid\tbranch already exists\nNODESTORM_WORKTREE\tvalid\t\n";
+        assert2::assert!(
+            (parse_remote_probe(output, true).unwrap())
+                == (WorkspaceCheck {
+                    repository: FieldCheck::Valid,
+                    branch: FieldCheck::Invalid("branch already exists".into()),
+                    worktree: Some(FieldCheck::Valid),
+                })
+        );
+    }
+
+    #[parameterized(
+        password = { "Permission denied (publickey,password).", true },
+        keyboard = { "Permission denied (publickey,keyboard-interactive).", true },
+        key_only = { "Permission denied (publickey).", false },
+        host_key = { "Host key verification failed.", false },
+        timeout = { "ssh: connect to host build-box port 22: Connection timed out", false },
+    )]
+    fn only_interactive_auth_rejection_enables_fallback(stderr: &str, expected: bool) {
+        assert2::assert!(password_only_rejection(stderr) == expected);
     }
 
     #[test]
