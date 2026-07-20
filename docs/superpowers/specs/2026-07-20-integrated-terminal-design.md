@@ -32,11 +32,14 @@ terminal output.
 
 ## Architecture
 
-Approach: xterm.js in the webview plus a Rust PTY, bridged over a local
-WebSocket — the same architecture VS Code uses. Two rejected alternatives: a
-pure-Rust terminal renderer in Dioxus DOM (enormous rendering/IME/perf lift)
-and pushing PTY bytes through the Dioxus `eval` bridge (no backpressure,
-stutters under TUI redraw load).
+Approach: Ferroterm (a Rust→WASM VT100/xterm terminal emulator,
+<https://datanoisetv.github.io/ferroterm/>) in the webview using its WebGL
+renderer, plus a Rust PTY, bridged over a local WebSocket — the same
+architecture VS Code uses, with Ferroterm in place of xterm.js. Rejected
+alternatives: xterm.js (works, but Ferroterm's WebGL renderer and ~70 KB
+footprint were preferred), a pure-Rust terminal renderer in Dioxus DOM
+(enormous rendering/IME/perf lift), and pushing PTY bytes through the Dioxus
+`eval` bridge (no backpressure, stutters under TUI redraw load).
 
 ### TerminalManager (`src/terminal.rs`)
 
@@ -67,10 +70,14 @@ The embedded axum server (already serving MCP on loopback) gains
 
 ### Terminal panel (`src/ui/terminal_panel.rs`)
 
-Bottom dock rendered above the canvas. One vendored xterm.js instance (plus
-fit addon) per tab, mounted with a one-time eval; each instance opens its own
-WebSocket with the token. xterm.js is pinned and bundled under `assets/`; no
-CDN or network fetch.
+Bottom dock rendered above the canvas. One Ferroterm instance (WebGL
+renderer, Canvas2D fallback) per tab, mounted with a one-time eval; each
+instance opens its own WebSocket with the token. Ferroterm is an ES module
+plus a WASM binary, so it cannot be inlined as a script tag: the pinned npm
+package is vendored under `assets/ferroterm/`, embedded into the binary with
+`include_bytes!`, and served by the embedded loopback server at
+`/terminal/assets/*` with correct MIME types and CORS headers for the
+webview origin. No CDN or external network fetch.
 
 ### Launcher integration
 
@@ -118,7 +125,9 @@ integrated path, the final step calls `TerminalManager::spawn` instead of
   webview. The server continues to bind loopback only.
 - PTY spawning uses executable-plus-argument arrays end to end; existing
   POSIX escaping for SSH is unchanged.
-- xterm.js is vendored and pinned; the webview loads no remote code.
+- Ferroterm is vendored and pinned; the webview loads no remote code. Its
+  JS/WASM assets are served only on the loopback listener; they contain no
+  secrets, so the token gates only the WebSocket.
 - Kill-on-close only; Nodestorm never leaves orphaned agent processes by
   design, and never deletes branches or worktrees.
 
@@ -129,7 +138,8 @@ integrated path, the final step calls `TerminalManager::spawn` instead of
 - Token generation via the existing `uuid` dependency (two v4 UUIDs or
   equivalent 128-bit randomness).
 - `tokio-tungstenite` as a dev-dependency for WebSocket integration tests.
-- Vendored xterm.js and fit addon under `assets/`.
+- The pinned `ferroterm` npm package (ES module + WASM, MIT) vendored under
+  `assets/ferroterm/`.
 
 ## Testing
 

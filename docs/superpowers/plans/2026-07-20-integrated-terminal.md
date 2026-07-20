@@ -2,18 +2,18 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Run launched agent sessions inside Nodestorm in a bottom terminal panel (xterm.js + Rust PTY over a token-gated loopback WebSocket), restorable by clicking the agent's name anywhere in the UI.
+**Goal:** Run launched agent sessions inside Nodestorm in a bottom terminal panel (Ferroterm WebGL + Rust PTY over a token-gated loopback WebSocket), restorable by clicking the agent's name anywhere in the UI.
 
-**Architecture:** A `TerminalManager` in Rust owns PTYs (portable-pty: ConPTY on Windows, openpty elsewhere), scrollback rings, and statuses. The embedded axum server gains a `/terminal/{id}/ws` WebSocket route gated by a per-run random token. The Dioxus UI hosts one vendored xterm.js instance per agent tab in a collapsible bottom dock; topbar chips and existing agent-name attributions focus tabs. The launcher's integrated path calls `TerminalManager::spawn` with the same `CommandSpec` it builds today; the system-terminal path stays.
+**Architecture:** A `TerminalManager` in Rust owns PTYs (portable-pty: ConPTY on Windows, openpty elsewhere), scrollback rings, and statuses. The embedded axum server gains a `/terminal/{id}/ws` WebSocket route gated by a per-run random token, plus `/terminal/assets/*` serving the vendored Ferroterm ES module + WASM from embedded bytes. The Dioxus UI hosts one Ferroterm instance (WebGL renderer, Canvas2D fallback) per agent tab in a collapsible bottom dock; topbar chips and existing agent-name attributions focus tabs. The launcher's integrated path calls `TerminalManager::spawn` with the same `CommandSpec` it builds today; the system-terminal path stays.
 
-**Tech Stack:** Rust 2024 / Dioxus 0.7 desktop (WebView2), axum 0.8 (`ws` feature), portable-pty 0.9, tokio, vendored @xterm/xterm 5.5.0 + @xterm/addon-fit 0.10.0, tokio-tungstenite (dev).
+**Tech Stack:** Rust 2024 / Dioxus 0.7 desktop (WebView2), axum 0.8 (`ws` feature), portable-pty 0.9, tokio, vendored `ferroterm` npm package (ES module + WASM, WebGL renderer — https://datanoisetv.github.io/ferroterm/), tokio-tungstenite (dev).
 
 **Spec:** `docs/superpowers/specs/2026-07-20-integrated-terminal-design.md`
 
 ## Global Constraints
 
 - Rust `edition = "2024"`, `rust-version = "1.97.1"`.
-- The webview loads no remote code and the app makes no network fetches: xterm.js is vendored under `assets/xterm/` and embedded with `include_str!`.
+- The webview loads no remote code and the app makes no external network fetches: Ferroterm is vendored under `assets/ferroterm/`, embedded with `include_bytes!`, and served only from the loopback listener at `/terminal/assets/*` (correct MIME types; `Access-Control-Allow-Origin: *` so the webview origin can import the module and fetch the WASM).
 - The server binds `127.0.0.1` only. The terminal WebSocket requires the per-run token on every upgrade.
 - Process spawning uses executable-plus-argument arrays end to end; never build a shell string.
 - Terminal ids are the launcher agent identity `{agent-id}-{session-slug}` (e.g. `claude-cache-redesign`): lowercase alphanumerics, `-`, `/` from the slug — safe to embed in URLs and JS string literals without escaping.
@@ -25,9 +25,9 @@
 ## File Structure
 
 - Create: `src/terminal.rs` — PTY lifecycle, scrollback, statuses (`TerminalManager`).
-- Create: `src/server/terminal_ws.rs` — WebSocket route, token check, byte pump.
-- Create: `src/ui/terminal_panel.rs` — bottom dock, tabs, xterm mount, close confirm.
-- Create: `assets/xterm/` — vendored `xterm.js`, `xterm.css`, `addon-fit.js`, `mount.js`, `README.md`.
+- Create: `src/server/terminal_ws.rs` — WebSocket route, token check, byte pump; later the Ferroterm asset routes.
+- Create: `src/ui/terminal_panel.rs` — bottom dock, tabs, Ferroterm mount, close confirm.
+- Create: `assets/ferroterm/` — vendored Ferroterm ES module + WASM (exact names from the npm tarball), `mount.js`, `README.md`.
 - Modify: `src/lib.rs`, `src/main.rs`, `src/server/mod.rs`, `src/ui/mod.rs`, `src/ui/app.rs`, `src/ui/agent_launcher.rs`, `src/ui/topbar.rs`, `src/ui/activity.rs`, `src/ui/node_card.rs`, `src/ui/choice_panel.rs`, `assets/main.css`, `Cargo.toml`, `tests/mcp_roundtrip.rs`.
 
 ---
@@ -513,7 +513,7 @@ Create `src/server/terminal_ws.rs`:
 
 ```rust
 //! Token-gated WebSocket bridge between a [`TerminalManager`] PTY and the
-//! xterm.js instance in the webview.
+//! Ferroterm instance in the webview.
 //!
 //! Protocol: server→client Binary frames are raw PTY output (the first frame
 //! replays scrollback); client→server Binary frames are raw input bytes and
@@ -786,18 +786,19 @@ git commit -m "Serve token-gated terminal WebSockets from the embedded server"
 
 ---
 
-### Task 3: Vendored xterm.js and the terminal dock UI
+### Task 3: Vendored Ferroterm and the terminal dock UI
 
 **Files:**
-- Create: `assets/xterm/xterm.js`, `assets/xterm/xterm.css`, `assets/xterm/addon-fit.js`, `assets/xterm/mount.js`, `assets/xterm/README.md`
+- Create: `assets/ferroterm/<esm-entry>.js`, `assets/ferroterm/<wasm-file>.wasm` (exact names from the npm tarball; possibly a `.d.ts` kept for reference), `assets/ferroterm/mount.js`, `assets/ferroterm/README.md`
 - Create: `src/ui/terminal_panel.rs`
+- Modify: `src/server/terminal_ws.rs` (add `/terminal/assets/{file}` static routes)
 - Modify: `src/ui/mod.rs` (module decl, context types, `focus_terminal`, `launch` signature)
-- Modify: `src/ui/app.rs` (asset includes, contexts, terminals signal, dock mount)
+- Modify: `src/ui/app.rs` (contexts, terminals signal, dock mount)
 - Modify: `src/main.rs` (pass `terminals` to `ui::launch`)
 - Modify: `assets/main.css` (dock styles)
 
 **Interfaces:**
-- Consumes: `TerminalManager` (`list`, `subscribe`, `token`, `close`, `status`), `TerminalInfo`, `TerminalStatus`; `cli.port`; wire protocol from Task 2.
+- Consumes: `TerminalManager` (`list`, `subscribe`, `token`, `close`, `status`), `TerminalInfo`, `TerminalStatus`; `cli.port`; wire protocol and `routes()` from Task 2.
 - Produces (used by Tasks 4–6):
   - `ui::launch(sessions, terminals: Arc<TerminalManager>, cli)` — new middle parameter.
   - In `src/ui/mod.rs`:
@@ -808,32 +809,96 @@ git commit -m "Serve token-gated terminal WebSockets from the embedded server"
   - `terminal_panel::TerminalDock` component (no props; reads contexts).
   - DOM contract: each tab body div has `id="term-{terminal-id}"`; `window.__nsTerms[id].dispose()` tears a tab down.
 
-- [ ] **Step 1: Vendor xterm.js (pinned, no CDN at runtime)**
+- [ ] **Step 1: Vendor Ferroterm (pinned, no CDN at runtime)**
 
-> Downloads three files from unpkg.com (npm mirror), MIT-licensed, ~400 KB total. This was flagged at plan handoff; if it was not approved, stop and ask.
+> Downloads the `ferroterm` npm package tarball (MIT, ~65-73 KB gzip; user-directed switch from xterm.js, download approved at dispatch).
 
 ```powershell
-New-Item -ItemType Directory -Force assets/xterm
-curl.exe -L -o assets/xterm/xterm.js https://unpkg.com/@xterm/xterm@5.5.0/lib/xterm.js
-curl.exe -L -o assets/xterm/xterm.css https://unpkg.com/@xterm/xterm@5.5.0/css/xterm.css
-curl.exe -L -o assets/xterm/addon-fit.js https://unpkg.com/@xterm/addon-fit@0.10.0/lib/addon-fit.js
+cd $env:TEMP
+npm pack ferroterm
+tar -xf (Get-ChildItem ferroterm-*.tgz | Select-Object -First 1).Name
 ```
 
-Sanity check: `xterm.js` well over 100 KB and contains `Terminal`; `addon-fit.js` contains `FitAddon`. Create `assets/xterm/README.md`:
+Inspect `package/package.json` (`exports` / `module` / `main` / `files`) and the `package/` tree to identify (a) the ES-module entry `.js` and any chunk files it imports, (b) the `.wasm` binary, (c) the `.d.ts` (`ferroterm.d.ts` per upstream docs). Copy those into `assets/ferroterm/` in the repo, preserving the tarball's file names, and note the exact version from `package.json`. Read the `.d.ts` now — it is the authority for the API used in Step 2 (constructor options `cols, rows, scrollback, fontSize, renderer ('webgl'|'canvas'), autoFit, wasmUrl, theme`; methods `write`, `onData`, `fit`; whether a dispose/destroy method and a resize event exist). If the packaged module hardcodes a relative WASM fetch path instead of honoring a `wasmUrl` option, report DONE_WITH_CONCERNS with what the `.d.ts` actually exposes.
+
+Create `assets/ferroterm/README.md`:
 
 ```markdown
-# Vendored xterm.js
+# Vendored Ferroterm
 
-- `xterm.js`, `xterm.css`: @xterm/xterm 5.5.0 — https://unpkg.com/@xterm/xterm@5.5.0/
-- `addon-fit.js`: @xterm/addon-fit 0.10.0 — https://unpkg.com/@xterm/addon-fit@0.10.0/
-- License: MIT (xterm.js project). Pinned; update by re-downloading a newer
-  pinned version, never by loading from a CDN at runtime.
+- Source: `ferroterm` npm package, version <VERSION> (fill in), MIT.
+  https://datanoisetv.github.io/ferroterm/
+- Files: <list the copied .js/.wasm/.d.ts names> — served at runtime from the
+  embedded loopback server under /terminal/assets/, never from a CDN.
+- Update by re-vendoring a newer pinned version.
 - `mount.js` is ours: the per-tab glue template (see `src/ui/terminal_panel.rs`).
+```
+
+- [ ] **Step 1b: Serve the assets from the embedded server**
+
+In `src/server/terminal_ws.rs`, embed the vendored files and extend `routes()` (substitute the real file names everywhere `<esm-entry>`/`<wasm-file>` appear):
+
+```rust
+const FERROTERM_JS: &[u8] = include_bytes!("../../assets/ferroterm/<esm-entry>.js");
+const FERROTERM_WASM: &[u8] = include_bytes!("../../assets/ferroterm/<wasm-file>.wasm");
+
+async fn terminal_asset(Path(file): Path<String>) -> Response {
+    let (bytes, mime): (&[u8], &str) = match file.as_str() {
+        "<esm-entry>.js" => (FERROTERM_JS, "text/javascript"),
+        "<wasm-file>.wasm" => (FERROTERM_WASM, "application/wasm"),
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, mime),
+            // Module imports and WASM fetches from the webview's custom-scheme
+            // origin are CORS-gated; the assets are public code, no secrets.
+            (axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+```
+
+Add `.route("/terminal/assets/{file}", get(terminal_asset))` to the router in `routes()`. (If the entry imports additional chunk files, add them to the match with `text/javascript`.) Tests in the same file's test module, reusing the `serve_terminal_routes` helper (reqwest is already a dev-dependency):
+
+```rust
+    #[tokio::test]
+    async fn ferroterm_assets_are_served_with_mime_and_cors() {
+        let manager = TerminalManager::new();
+        let base = serve_terminal_routes(manager).await;
+        let http = base.replace("ws://", "http://");
+
+        let js = reqwest::get(format!("{http}/terminal/assets/<esm-entry>.js"))
+            .await
+            .unwrap();
+        assert2::assert!((js.status().as_u16()) == (200));
+        assert2::assert!(
+            (js.headers()["content-type"].to_str().unwrap()) == ("text/javascript")
+        );
+        assert2::assert!(
+            (js.headers()["access-control-allow-origin"].to_str().unwrap()) == ("*")
+        );
+
+        let wasm = reqwest::get(format!("{http}/terminal/assets/<wasm-file>.wasm"))
+            .await
+            .unwrap();
+        assert2::assert!((wasm.status().as_u16()) == (200));
+        assert2::assert!(
+            (wasm.headers()["content-type"].to_str().unwrap()) == ("application/wasm")
+        );
+
+        let missing = reqwest::get(format!("{http}/terminal/assets/evil.js"))
+            .await
+            .unwrap();
+        assert2::assert!((missing.status().as_u16()) == (404));
+    }
 ```
 
 - [ ] **Step 2: Write the mount glue template**
 
-Create `assets/xterm/mount.js`. `__ID__`, `__PORT__`, `__TOKEN__` are replaced by Rust before eval; terminal ids are slug-safe so plain string replacement is sound.
+Create `assets/ferroterm/mount.js`. `__ID__`, `__PORT__`, `__TOKEN__` are replaced by Rust before eval (terminal ids are slug-safe so plain string replacement is sound); the two vendored file names are hardcoded — substitute the real names from Step 1. Adjust the Ferroterm calls to what `ferroterm.d.ts` actually declares (this template assumes `Ferroterm.create`, `write`, `onData`, `fit`, `cols`/`rows`; verify each, and use the real dispose/destroy method if one exists).
 
 ```javascript
 (function () {
@@ -841,61 +906,76 @@ Create `assets/xterm/mount.js`. `__ID__`, `__PORT__`, `__TOKEN__` are replaced b
   const host = document.getElementById("term-" + id);
   if (!host || host.dataset.mounted) { return; }
   host.dataset.mounted = "1";
-  // The UMD bundle exposes the namespace or the class depending on version.
-  const TermCtor = window.Terminal && window.Terminal.Terminal
-    ? window.Terminal.Terminal
-    : window.Terminal;
-  const term = new TermCtor({
-    scrollback: 5000,
-    fontSize: 13,
-    fontFamily: "Consolas, 'Cascadia Mono', monospace",
-  });
-  const fit = new window.FitAddon.FitAddon();
-  term.loadAddon(fit);
-  term.open(host);
-  fit.fit();
-  let ws = null;
-  let closed = false;
-  function sendResize() {
-    if (ws && ws.readyState === 1) {
-      ws.send(JSON.stringify({ resize: { cols: term.cols, rows: term.rows } }));
-    }
-  }
-  function connect() {
-    if (closed || !document.getElementById("term-" + id)) { return; }
-    ws = new WebSocket("ws://127.0.0.1:__PORT__/terminal/" + id + "/ws?token=__TOKEN__");
-    ws.binaryType = "arraybuffer";
-    ws.onopen = function () { term.reset(); sendResize(); };
-    ws.onmessage = function (event) {
-      if (typeof event.data !== "string") { term.write(new Uint8Array(event.data)); }
-    };
-    ws.onclose = function () {
-      if (!closed) {
-        term.write("\r\n\x1b[90m[disconnected - reconnecting]\x1b[0m\r\n");
-        setTimeout(connect, 1000);
+  const base = "http://127.0.0.1:__PORT__/terminal/assets/";
+  import(base + "<esm-entry>.js")
+    .then(async function (mod) {
+      const Ferroterm = mod.Ferroterm || mod.default;
+      const options = {
+        scrollback: 5000,
+        fontSize: 13,
+        autoFit: true,
+        wasmUrl: base + "<wasm-file>.wasm",
+      };
+      let term;
+      try {
+        term = await Ferroterm.create(host, { renderer: "webgl", ...options });
+      } catch (_e) {
+        // WebGL unavailable in this WebView2 session: fall back to Canvas2D.
+        term = await Ferroterm.create(host, { renderer: "canvas", ...options });
       }
-    };
-  }
-  term.onData(function (data) {
-    if (ws && ws.readyState === 1) { ws.send(new TextEncoder().encode(data)); }
-  });
-  term.onResize(sendResize);
-  new ResizeObserver(function () {
-    // Hidden tabs (display:none) must not fit to a 0x0 box.
-    if (host.offsetParent !== null) { fit.fit(); }
-  }).observe(host);
-  connect();
-  window.__nsTerms = window.__nsTerms || {};
-  window.__nsTerms[id] = {
-    dispose: function () {
-      closed = true;
-      try { if (ws) { ws.close(); } } catch (_e) {}
-      term.dispose();
-      delete window.__nsTerms[id];
-    },
-  };
+      let ws = null;
+      let closed = false;
+      function sendResize() {
+        if (ws && ws.readyState === 1) {
+          ws.send(JSON.stringify({ resize: { cols: term.cols, rows: term.rows } }));
+        }
+      }
+      function connect() {
+        if (closed || !document.getElementById("term-" + id)) { return; }
+        ws = new WebSocket("ws://127.0.0.1:__PORT__/terminal/" + id + "/ws?token=__TOKEN__");
+        ws.binaryType = "arraybuffer";
+        ws.onopen = sendResize;
+        ws.onmessage = function (event) {
+          if (typeof event.data !== "string") { term.write(new Uint8Array(event.data)); }
+        };
+        ws.onclose = function () {
+          if (!closed) {
+            term.write(new TextEncoder().encode("\r\n\x1b[90m[disconnected - reconnecting]\x1b[0m\r\n"));
+            setTimeout(connect, 1000);
+          }
+        };
+      }
+      term.onData(function (data) {
+        if (ws && ws.readyState === 1) {
+          ws.send(typeof data === "string" ? new TextEncoder().encode(data) : data);
+        }
+      });
+      new ResizeObserver(function () {
+        // Hidden tabs (display:none) must not fit to a 0x0 box.
+        if (host.offsetParent !== null) {
+          term.fit();
+          sendResize();
+        }
+      }).observe(host);
+      connect();
+      window.__nsTerms = window.__nsTerms || {};
+      window.__nsTerms[id] = {
+        dispose: function () {
+          closed = true;
+          try { if (ws) { ws.close(); } } catch (_e) {}
+          if (typeof term.dispose === "function") { term.dispose(); }
+          else { host.replaceChildren(); }
+          delete window.__nsTerms[id];
+        },
+      };
+    })
+    .catch(function (err) {
+      host.textContent = "terminal failed to load: " + err;
+    });
 })();
 ```
+
+Note: on reconnect the server replays the scrollback ring into the same live terminal; if Ferroterm exposes a reset/clear method in the `.d.ts`, call it in `ws.onopen` before the replay arrives so replayed bytes don't duplicate the visible screen.
 
 - [ ] **Step 3: Write failing unit tests for the UI helpers**
 
@@ -923,16 +1003,24 @@ In `src/ui/mod.rs`, add to the existing `tests` module:
 
     #[test]
     fn mount_template_placeholders_are_all_known() {
-        let js = include_str!("../../assets/xterm/mount.js");
+        let js = include_str!("../../assets/ferroterm/mount.js");
         for placeholder in ["__ID__", "__PORT__", "__TOKEN__"] {
             assert2::assert!(js.contains(placeholder));
         }
-        // No stray template markers beyond the three we substitute.
+        // No stray `__UPPERCASE` template markers beyond the three we
+        // substitute (`__nsTerms` and friends are legitimate identifiers).
         let substituted = js
             .replace("__ID__", "x")
             .replace("__PORT__", "1")
             .replace("__TOKEN__", "t");
-        assert2::assert!(!substituted.contains("__"));
+        let stray = substituted
+            .as_bytes()
+            .windows(3)
+            .any(|w| w[0] == b'_' && w[1] == b'_' && w[2].is_ascii_uppercase());
+        assert2::assert!(!stray);
+        // The vendored file names must be substituted, not left as templates.
+        assert2::assert!(!substituted.contains("<esm-entry>"));
+        assert2::assert!(!substituted.contains("<wasm-file>"));
     }
 ```
 
@@ -991,9 +1079,9 @@ and add `.with_context(terminals)` beside the existing `.with_context(sessions)`
 Create `src/ui/terminal_panel.rs`:
 
 ```rust
-//! Bottom terminal dock: one xterm.js tab per launched agent.
+//! Bottom terminal dock: one Ferroterm tab per launched agent.
 //!
-//! Tab bodies stay mounted (hidden tabs use display:none) so xterm state and
+//! Tab bodies stay mounted (hidden tabs use display:none) so terminal state and
 //! the WebSocket survive tab switches and dock collapse; the fit addon
 //! re-measures when a tab becomes visible again.
 
@@ -1003,7 +1091,7 @@ use dioxus::prelude::*;
 
 use crate::terminal::{TerminalManager, TerminalStatus};
 
-const MOUNT_TEMPLATE: &str = include_str!("../../assets/xterm/mount.js");
+const MOUNT_TEMPLATE: &str = include_str!("../../assets/ferroterm/mount.js");
 
 fn mount_js(id: &str, port: u16, token: &str) -> String {
     MOUNT_TEMPLATE
@@ -1150,14 +1238,7 @@ Adjust closure captures until borrows check (`id` clones per closure); keep the 
 - [ ] **Step 6: Wire the dock into the app**
 
 In `src/ui/app.rs`:
-- After the two `document::Style` lines add:
-
-```rust
-        document::Style { {include_str!("../../assets/xterm/xterm.css")} }
-        document::Script { {include_str!("../../assets/xterm/xterm.js")} }
-        document::Script { {include_str!("../../assets/xterm/addon-fit.js")} }
-```
-
+- No global script/style includes are needed: `mount.js` dynamically imports the Ferroterm module from the loopback server the first time a tab mounts.
 - Provide contexts near the other providers:
 
 ```rust
@@ -1274,8 +1355,8 @@ Append to `assets/main.css` (after the activity feed section; reuse the existing
   position: absolute;
   inset: 0;
   padding: 4px 0 0 6px;
-  /* ponytail: fixed xterm default (dark) theme; themed terminals need a
-     theme-object rebuild on palette switch. */
+  /* ponytail: fixed Ferroterm default (dark) theme; themed terminals need a
+     setTheme call on palette switch. */
   background: #000;
 }
 
@@ -1312,8 +1393,8 @@ Append to `assets/main.css` (after the activity feed section; reuse the existing
 
 - [ ] **Step 8: Run tests and build**
 
-Run: `cargo test --lib ui && cargo build --locked`
-Expected: the Step 3 tests PASS; the app compiles.
+Run: `cargo test --lib ui && cargo test terminal_ws && cargo build --locked`
+Expected: the Step 3 and Step 1b tests PASS; the app compiles.
 
 - [ ] **Step 9: Gate and commit**
 
@@ -1321,8 +1402,8 @@ Run: `cargo fmt --all && cargo clippy --all-targets --locked -- -D warnings && c
 Expected: clean. (Manual visual verification happens at the end of Task 4, when a launch can populate the dock.)
 
 ```powershell
-git add assets/xterm assets/main.css src/ui src/main.rs
-git commit -m "Add the terminal dock UI with vendored xterm.js"
+git add assets/ferroterm assets/main.css src/server/terminal_ws.rs src/ui src/main.rs
+git commit -m "Add the terminal dock UI with vendored Ferroterm"
 ```
 
 ---
