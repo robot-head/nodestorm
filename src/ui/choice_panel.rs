@@ -99,6 +99,8 @@ pub fn ChoicePanel(
     let mut lane_draft = use_signal(|| node.lane.clone().unwrap_or_default());
     let mut edit_open = use_signal(|| false);
     let store = use_store();
+    let terminals = use_context::<super::Terminals>().0;
+    let panel = use_context::<super::TerminalPanel>();
     let mut connect_from = use_context::<super::ConnectFrom>().0;
     let node_id = node.id.clone();
     let connecting = connect_from() == Some(node.id.clone());
@@ -160,10 +162,22 @@ pub fn ChoicePanel(
                     div { class: "panel-meta-row",
                         dt { "Agent" }
                         dd {
-                            span {
-                                class: "node-agent",
-                                style: "color: {super::agent_color(agent)}; border-color: {super::agent_color(agent)};",
-                                "◆ {agent}"
+                            {
+                                let clickable = super::terminal_for(&terminals.read(), agent);
+                                let id = agent.clone();
+                                rsx! {
+                                    span {
+                                        class: if clickable { "node-agent agent-clickable" } else { "node-agent" },
+                                        style: "color: {super::agent_color(agent)}; border-color: {super::agent_color(agent)};",
+                                        title: if clickable { "Focus terminal" } else { "" },
+                                        onclick: move |_| {
+                                            if clickable {
+                                                super::focus_terminal(&panel, &id);
+                                            }
+                                        },
+                                        "◆ {agent}"
+                                    }
+                                }
                             }
                         }
                     }

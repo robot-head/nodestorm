@@ -26,6 +26,7 @@ struct LaunchDraft {
     worktree_path: String,
     branch_edited: bool,
     worktree_edited: bool,
+    integrated: bool,
 }
 
 impl Default for LaunchDraft {
@@ -42,6 +43,7 @@ impl Default for LaunchDraft {
             worktree_path: String::new(),
             branch_edited: false,
             worktree_edited: false,
+            integrated: true,
         }
     }
 }
@@ -107,7 +109,9 @@ impl LaunchDraft {
 }
 
 enum LaunchOutcome {
-    Started,
+    Started {
+        terminal: Option<String>,
+    },
     NeedsDirtyConfirmation,
     Failed {
         message: String,
@@ -117,6 +121,7 @@ enum LaunchOutcome {
         message: String,
         retained: Option<String>,
         command: CommandSpec,
+        terminal: Option<String>,
     },
 }
 
@@ -131,6 +136,7 @@ fn perform_launch(
     request: LaunchRequest,
     sessions: Arc<Sessions>,
     allow_dirty: bool,
+    terminals: Option<Arc<crate::terminal::TerminalManager>>,
 ) -> LaunchOutcome {
     let prepared = match &request.target {
         LaunchTarget::Local => {
@@ -186,12 +192,29 @@ fn perform_launch(
         },
     };
 
-    match open_terminal(&command) {
-        Ok(()) => LaunchOutcome::Started,
-        Err(err) => LaunchOutcome::TerminalFailed {
-            message: err.to_string(),
-            retained,
-            command,
+    match terminals {
+        Some(manager) => {
+            let terminal_id = format!("{}-{slug}", request.agent.id());
+            match manager.spawn(&terminal_id, &command) {
+                Ok(()) => LaunchOutcome::Started {
+                    terminal: Some(terminal_id),
+                },
+                Err(err) => LaunchOutcome::TerminalFailed {
+                    message: err.to_string(),
+                    retained,
+                    command,
+                    terminal: Some(terminal_id),
+                },
+            }
+        }
+        None => match open_terminal(&command) {
+            Ok(()) => LaunchOutcome::Started { terminal: None },
+            Err(err) => LaunchOutcome::TerminalFailed {
+                message: err.to_string(),
+                retained,
+                command,
+                terminal: None,
+            },
         },
     }
 }
@@ -215,7 +238,7 @@ struct LaunchSignals {
     dirty_warning: Signal<bool>,
     error: Signal<Option<String>>,
     retained: Signal<Option<String>>,
-    retry: Signal<Option<(CommandSpec, String)>>,
+    retry: Signal<Option<(CommandSpec, String, Option<String>)>>,
     open: Signal<bool>,
 }
 
@@ -229,10 +252,16 @@ fn remember_repository(prefs: &mut Preferences, cli: &Cli, repo: &str) {
     }
 }
 
+// ponytail: 8 independent inputs (request/sessions config, run-target
+// context, output signals) don't share a natural grouping beyond what
+// LaunchSignals already bundles; allow rather than force an artificial struct.
+#[allow(clippy::too_many_arguments)]
 fn start_attempt(
     request: LaunchRequest,
     sessions: Arc<Sessions>,
     allow_dirty: bool,
+    terminals: Option<Arc<crate::terminal::TerminalManager>>,
+    panel: super::TerminalPanel,
     mut prefs: Signal<Preferences>,
     cli: Cli,
     mut signals: LaunchSignals,
@@ -243,13 +272,17 @@ fn start_attempt(
     signals.retained.set(None);
     signals.retry.set(None);
     spawn(async move {
-        let outcome =
-            tokio::task::spawn_blocking(move || perform_launch(request, sessions, allow_dirty))
-                .await
-                .unwrap_or_else(|err| failed(format!("launcher worker failed: {err}"), None));
+        let outcome = tokio::task::spawn_blocking(move || {
+            perform_launch(request, sessions, allow_dirty, terminals)
+        })
+        .await
+        .unwrap_or_else(|err| failed(format!("launcher worker failed: {err}"), None));
         signals.running.set(false);
         match outcome {
-            LaunchOutcome::Started => {
+            LaunchOutcome::Started { terminal } => {
+                if let Some(id) = terminal {
+                    super::focus_terminal(&panel, &id);
+                }
                 remember_repository(&mut prefs.write(), &cli, &repo);
                 signals.open.set(false);
             }
@@ -265,10 +298,11 @@ fn start_attempt(
                 message,
                 retained: path,
                 command,
+                terminal,
             } => {
                 signals.error.set(Some(message));
                 signals.retained.set(path);
-                signals.retry.set(Some((command, repo)));
+                signals.retry.set(Some((command, repo, terminal)));
             }
         }
     });
@@ -278,6 +312,8 @@ fn start_attempt(
 pub fn AgentLauncher() -> Element {
     let sessions = use_context::<Arc<Sessions>>();
     let cli = use_context::<Cli>();
+    let terminal_manager = use_context::<Arc<crate::terminal::TerminalManager>>();
+    let panel = use_context::<super::TerminalPanel>();
     let mut open = use_context::<super::AgentLauncherOpen>().0;
     let mut prefs = use_context::<super::ThemePref>().0;
     let mut draft = use_signal(LaunchDraft::default);
@@ -287,7 +323,7 @@ pub fn AgentLauncher() -> Element {
     let mut allow_dirty = use_signal(|| false);
     let mut error: Signal<Option<String>> = use_signal(|| None);
     let retained: Signal<Option<String>> = use_signal(|| None);
-    let retry: Signal<Option<(CommandSpec, String)>> = use_signal(|| None);
+    let retry: Signal<Option<(CommandSpec, String, Option<String>)>> = use_signal(|| None);
 
     rsx! {
         div { class: "agent-launch-overlay",
@@ -357,6 +393,27 @@ pub fn AgentLauncher() -> Element {
                                 oninput: move |_| draft.write().set_remote(true),
                             }
                             "SSH"
+                        }
+                    }
+                    fieldset { class: "agent-launch-field agent-launch-options",
+                        legend { "Run in" }
+                        label {
+                            input {
+                                r#type: "radio",
+                                name: "agent-run-in",
+                                checked: draft.read().integrated,
+                                oninput: move |_| draft.write().integrated = true,
+                            }
+                            "Integrated terminal"
+                        }
+                        label {
+                            input {
+                                r#type: "radio",
+                                name: "agent-run-in",
+                                checked: !draft.read().integrated,
+                                oninput: move |_| draft.write().integrated = false,
+                            }
+                            "System terminal"
                         }
                     }
                     if draft.read().remote {
@@ -480,19 +537,30 @@ pub fn AgentLauncher() -> Element {
                             class: "btn btn-primary",
                             disabled: running(),
                             onclick: move |_| {
-                                let (command, repo) = retry.read().clone().expect("retry command");
+                                let (command, repo, terminal) = retry.read().clone().expect("retry command");
                                 let cli = cli.clone();
+                                let manager = terminal_manager.clone();
                                 running.set(true);
                                 error.set(None);
                                 spawn(async move {
-                                    let outcome = tokio::task::spawn_blocking(move || open_terminal(&command)).await;
+                                    let attempt = tokio::task::spawn_blocking({
+                                        let terminal = terminal.clone();
+                                        move || match &terminal {
+                                            Some(id) => manager.spawn(id, &command).map_err(|e| e.to_string()),
+                                            None => open_terminal(&command).map_err(|e| e.to_string()),
+                                        }
+                                    })
+                                    .await;
                                     running.set(false);
-                                    match outcome {
+                                    match attempt {
                                         Ok(Ok(())) => {
+                                            if let Some(id) = &terminal {
+                                                super::focus_terminal(&panel, id);
+                                            }
                                             remember_repository(&mut prefs.write(), &cli, &repo);
                                             open.set(false);
                                         }
-                                        Ok(Err(err)) => error.set(Some(err.to_string())),
+                                        Ok(Err(message)) => error.set(Some(message)),
                                         Err(err) => error.set(Some(format!("launcher worker failed: {err}"))),
                                     }
                                 });
@@ -508,6 +576,8 @@ pub fn AgentLauncher() -> Element {
                                     draft.read().request(cli.port),
                                     sessions.clone(),
                                     allow_dirty(),
+                                    draft.read().integrated.then(|| terminal_manager.clone()),
+                                    panel,
                                     prefs,
                                     cli.clone(),
                                     LaunchSignals {
@@ -617,6 +687,44 @@ mod tests {
     )]
     fn agent_values_cover_every_branch(value: &str, expected: AgentKind) {
         assert2::assert!(agent_from_value(value) == expected);
+    }
+
+    #[test]
+    fn draft_defaults_to_integrated_terminal() {
+        assert2::assert!(LaunchDraft::default().integrated);
+    }
+
+    #[test]
+    fn integrated_launch_spawns_a_terminal_and_reports_its_id() {
+        let sessions =
+            crate::sessions::Sessions::open(tmp_path("integrated-sessions"), None).unwrap();
+        let terminals = crate::terminal::TerminalManager::new();
+        // A repo-free request exercises only the terminal branch: SSH targets
+        // skip local git preparation, and `ssh` exists on dev machines and CI.
+        let request = LaunchRequest {
+            session_name: "Integrated Test".into(),
+            task: "do things".into(),
+            agent: AgentKind::Claude,
+            target: LaunchTarget::Ssh {
+                alias: "nodestorm-test-invalid-host".into(),
+            },
+            repository: "/srv/repo".into(),
+            branch: "nodestorm/integrated-test".into(),
+            git_mode: GitMode::NewWorktree {
+                path: "/srv/repo-worktrees/x".into(),
+            },
+            mcp_port: 4747,
+        };
+
+        let outcome = perform_launch(request, sessions, false, Some(terminals.clone()));
+
+        let LaunchOutcome::Started { terminal: Some(id) } = outcome else {
+            panic!("expected an integrated start");
+        };
+        assert2::assert!((id) == ("claude-integrated-test"));
+        assert2::assert!(terminals.status(&id).is_some());
+        terminals.close(&id);
+        std::fs::remove_dir_all(tmp_path("integrated-sessions")).ok();
     }
 
     #[test]

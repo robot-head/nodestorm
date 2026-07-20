@@ -20,5 +20,6 @@ pub mod prefs;
 pub mod server;
 pub mod sessions;
 pub mod store;
+pub mod terminal;
 pub mod theme;
 pub mod ui;

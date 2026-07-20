@@ -125,8 +125,12 @@ cargo run --example drive        # simulates an agent against a running app
 
 Use **Start agent** in the session menu, or **Start an agentic session** on
 an empty canvas, to launch an installed **Claude Code**, **Codex**,
-**OpenCode**, or **Pi** CLI in a new system-terminal tab. Choose a session
-name, repository, initial task, agent, and where the CLI should run.
+**OpenCode**, or **Pi** CLI. Choose a session name, repository, initial task,
+agent, and where the CLI should run. By default the agent opens in the
+integrated terminal: a bottom dock with one tab per running agent, rendered
+by the vendored Ferroterm WebGL terminal. A **Run in** choice on the launch
+form switches a session to the system terminal instead, if you'd rather it
+open in its own window.
 
 The default creates a branch in a new sibling worktree at
 `<repository-parent>/<repository-name>-worktrees/<branch>` and starts the
@@ -135,7 +139,14 @@ choose **Existing checkout** to create and switch to the branch in the
 repository you selected. Nodestorm asks for confirmation before that option
 carries uncommitted changes onto the new branch. If terminal startup fails
 after Git preparation, the prepared branch/worktree is retained and the
-dialog offers the exact launch command for retry.
+dialog offers a **Retry terminal** button that reuses the run target you
+chose (integrated or system).
+
+Once an agent is running, its topbar chip and its name wherever it's
+attributed (activity feed, node cards, the choice panel) refocus the
+integrated terminal's dock if you've collapsed it. Closing a tab, or
+quitting the app, while an agent is still running asks for confirmation and
+stops the agent.
 
 For a remote launch, choose **SSH** and select an alias from
 `~/.ssh/config`. Remote launching currently targets Linux hosts. Git setup

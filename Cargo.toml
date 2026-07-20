@@ -11,7 +11,7 @@ rust-version = "1.97.1"
 dioxus = { version = "0.7.9", features = ["desktop"] }
 rmcp = { version = "2.2.0", features = ["transport-streamable-http-server"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = { version = "1", features = ["chrono04"] }
@@ -27,6 +27,7 @@ uuid = { version = "1", features = ["v4"] }
 tokio-util = "0.7"
 rfd = "0.17.2"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+portable-pty = "0.9"
 
 [dev-dependencies]
 assert2 = "0.4"
@@ -39,6 +40,8 @@ rmcp = { version = "2.2.0", features = [
     "transport-streamable-http-client-reqwest",
     "reqwest",
 ] }
+tokio-tungstenite = "0.30.0"
+futures-util = "0.3.33"
 
 [lints.rust]
 unsafe_code = "deny"

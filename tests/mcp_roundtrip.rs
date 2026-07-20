@@ -50,8 +50,14 @@ async fn start_server_with_manager(
         let sessions = sessions.clone();
         let manager = manager.clone();
         async move {
-            let _ = nodestorm::server::serve_with_manager(listener, sessions, shutdown_rx, manager)
-                .await;
+            let _ = nodestorm::server::serve_with_manager(
+                listener,
+                sessions,
+                nodestorm::terminal::TerminalManager::new(),
+                shutdown_rx,
+                manager,
+            )
+            .await;
         }
     });
     (port, shutdown_tx, sessions, manager)
