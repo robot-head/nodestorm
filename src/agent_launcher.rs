@@ -418,7 +418,6 @@ pub fn remote_agent_command(req: &LaunchRequest, slug: &str) -> anyhow::Result<C
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalFlavor {
-    WindowsTerminal,
     MacTerminal,
     LinuxXTerminal,
     LinuxGnome,
@@ -442,19 +441,6 @@ fn posix_command(spec: &CommandSpec) -> String {
 
 pub fn terminal_command(flavor: TerminalFlavor, child: &CommandSpec) -> CommandSpec {
     match flavor {
-        TerminalFlavor::WindowsTerminal => {
-            let mut args = vec!["-w".into(), "new".into(), "new-tab".into()];
-            if let Some(dir) = &child.current_dir {
-                args.extend(["-d".into(), dir.clone()]);
-            }
-            args.push(child.program.clone());
-            args.extend(child.args.clone());
-            CommandSpec {
-                program: "wt.exe".into(),
-                args,
-                current_dir: None,
-            }
-        }
         TerminalFlavor::MacTerminal => CommandSpec {
             program: "osascript".into(),
             args: vec![
@@ -491,6 +477,7 @@ fn linux_terminal(program: &str, prefix: &[&str], child: &CommandSpec) -> Comman
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 fn spawn_command(spec: &CommandSpec) -> std::io::Result<()> {
     let mut command = std::process::Command::new(&spec.program);
     command.args(&spec.args);
@@ -500,6 +487,7 @@ fn spawn_command(spec: &CommandSpec) -> std::io::Result<()> {
     command.spawn().map(|_| ())
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn open_linux_terminal_with(
     child: &CommandSpec,
     mut spawn: impl FnMut(&CommandSpec) -> std::io::Result<()>,
@@ -520,14 +508,30 @@ fn open_linux_terminal_with(
     )
 }
 
+// Never route the child through `wt.exe`: Windows Terminal splits its command
+// line on every unescaped `;` — even inside quoted arguments — so the SSH
+// bootstrap script became one tab per fragment. CREATE_NEW_CONSOLE passes the
+// arguments verbatim and still opens the user's default terminal.
+#[cfg(target_os = "windows")]
+fn spawn_windows_console(child: &CommandSpec) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+    let mut command = std::process::Command::new(&child.program);
+    command.args(&child.args).creation_flags(CREATE_NEW_CONSOLE);
+    if let Some(dir) = &child.current_dir {
+        command.current_dir(dir);
+    }
+    command.spawn().map(|_| ())
+}
+
 // Each `#[cfg]` arm needs its own `return` because sibling arms follow it in
 // source; only one compiles per target, so clippy sees the last as redundant.
 #[allow(clippy::needless_return)]
 pub fn open_terminal(child: &CommandSpec) -> anyhow::Result<()> {
     #[cfg(target_os = "windows")]
     {
-        return spawn_command(&terminal_command(TerminalFlavor::WindowsTerminal, child))
-            .map_err(|err| anyhow::anyhow!("could not open Windows Terminal: {err}"));
+        return spawn_windows_console(child)
+            .map_err(|err| anyhow::anyhow!("could not open a console window: {err}"));
     }
     #[cfg(target_os = "macos")]
     {
@@ -962,15 +966,6 @@ mod tests {
             args: vec!["task with spaces".into()],
             current_dir: Some("/work/tree".into()),
         };
-        let windows = terminal_command(TerminalFlavor::WindowsTerminal, &child);
-        assert2::assert!((windows.program) == ("wt.exe"));
-        assert2::assert!((&windows.args[..5]) == (["-w", "new", "new-tab", "-d", "/work/tree"]));
-        assert2::assert!(
-            windows
-                .args
-                .ends_with(&["codex".into(), "task with spaces".into()])
-        );
-
         let linux = terminal_command(TerminalFlavor::LinuxXTerminal, &child);
         assert2::assert!((linux.program) == ("x-terminal-emulator"));
         assert2::assert!((&linux.args[..2]) == (["-e", "codex"]));
