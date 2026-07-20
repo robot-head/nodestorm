@@ -130,6 +130,7 @@ mod tests {
     use yare::parameterized;
 
     const CSS: &str = include_str!("../assets/main.css");
+    const AGENT_LAUNCHER_SOURCE: &str = include_str!("ui/agent_launcher.rs");
     const APP_SOURCE: &str = include_str!("ui/app.rs");
     const TOPBAR_SOURCE: &str = include_str!("ui/topbar.rs");
 
@@ -311,6 +312,25 @@ mod tests {
         assert_block_contains(".delivery-toast-error", "color: var(--status-removed)");
         assert_block_contains(".btn-send.sent", "color: var(--on-badge)");
         assert_block_contains(".btn-send.failed", "color: var(--on-badge)");
+    }
+
+    #[test]
+    fn launcher_validation_states_are_accessible_and_theme_aware() {
+        assert2::assert!(AGENT_LAUNCHER_SOURCE.contains(r#"role: "status""#));
+        assert2::assert!(AGENT_LAUNCHER_SOURCE.contains(r#"aria_label: "{label}""#));
+        assert2::assert!(AGENT_LAUNCHER_SOURCE.contains("requires interactive authentication"));
+        assert2::assert!(AGENT_LAUNCHER_SOURCE.contains("allows_launch(draft.read().worktree)"));
+        assert_block_contains(".agent-field-control", "position: relative");
+        assert_block_contains(".agent-field-status.editing", "color: var(--text-dim)");
+        assert_block_contains(
+            ".agent-field-status.checking",
+            "color: var(--status-modified)",
+        );
+        assert_block_contains(".agent-field-status.valid", "color: var(--badge-decided)");
+        assert_block_contains(
+            ".agent-field-status.invalid",
+            "color: var(--status-removed)",
+        );
     }
 
     #[test]
