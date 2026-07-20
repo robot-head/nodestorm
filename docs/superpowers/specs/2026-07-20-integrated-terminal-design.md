@@ -72,12 +72,13 @@ The embedded axum server (already serving MCP on loopback) gains
 
 Bottom dock rendered above the canvas. One Ferroterm instance (WebGL
 renderer, Canvas2D fallback) per tab, mounted with a one-time eval; each
-instance opens its own WebSocket with the token. Ferroterm is an ES module
-plus a WASM binary, so it cannot be inlined as a script tag: the pinned npm
-package is vendored under `assets/ferroterm/`, embedded into the binary with
-`include_bytes!`, and served by the embedded loopback server at
+instance opens its own WebSocket with the token. Ferroterm is an ES-module
+graph plus a WASM binary, so it cannot be inlined as a script tag: the
+author-deployed build (Ferroterm is not published to npm) is vendored under
+`assets/ferroterm/` with recorded SHA-256 hashes, embedded into the binary
+with `include_bytes!`, and served by the embedded loopback server at
 `/terminal/assets/*` with correct MIME types and CORS headers for the
-webview origin. No CDN or external network fetch.
+webview origin. No CDN or external network fetch at runtime.
 
 ### Launcher integration
 
@@ -138,8 +139,8 @@ integrated path, the final step calls `TerminalManager::spawn` instead of
 - Token generation via the existing `uuid` dependency (two v4 UUIDs or
   equivalent 128-bit randomness).
 - `tokio-tungstenite` as a dev-dependency for WebSocket integration tests.
-- The pinned `ferroterm` npm package (ES module + WASM, MIT) vendored under
-  `assets/ferroterm/`.
+- Ferroterm (ES modules + WASM, MIT) vendored under `assets/ferroterm/` from
+  the author's deployed build, with SHA-256 hashes recorded (not on npm).
 
 ## Testing
 

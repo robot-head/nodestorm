@@ -789,7 +789,7 @@ git commit -m "Serve token-gated terminal WebSockets from the embedded server"
 ### Task 3: Vendored Ferroterm and the terminal dock UI
 
 **Files:**
-- Create: `assets/ferroterm/<esm-entry>.js`, `assets/ferroterm/<wasm-file>.wasm` (exact names from the npm tarball; possibly a `.d.ts` kept for reference), `assets/ferroterm/mount.js`, `assets/ferroterm/README.md`
+- Create: `assets/ferroterm/src/*.js` (the module graph from upstream `web/src/`), `assets/ferroterm/pkg/ferroterm_wasm.js`, `assets/ferroterm/pkg/ferroterm_wasm_bg.wasm`, `assets/ferroterm/ferroterm.d.ts` (reference only), `assets/ferroterm/mount.js`, `assets/ferroterm/README.md`
 - Create: `src/ui/terminal_panel.rs`
 - Modify: `src/server/terminal_ws.rs` (add `/terminal/assets/{file}` static routes)
 - Modify: `src/ui/mod.rs` (module decl, context types, `focus_terminal`, `launch` signature)
@@ -811,42 +811,68 @@ git commit -m "Serve token-gated terminal WebSockets from the embedded server"
 
 - [ ] **Step 1: Vendor Ferroterm (pinned, no CDN at runtime)**
 
-> Downloads the `ferroterm` npm package tarball (MIT, ~65-73 KB gzip; user-directed switch from xterm.js, download approved at dispatch).
+> Ferroterm is not published to npm. Vendor the author-deployed build from the project's GitHub Pages site (user-approved source). ~10 unminified ES modules under `web/src/` plus wasm-bindgen artifacts under `web/pkg/` (`ferroterm_wasm.js` ~26 KB, `ferroterm_wasm_bg.wasm` ~128 KB).
 
-```powershell
-cd $env:TEMP
-npm pack ferroterm
-tar -xf (Get-ChildItem ferroterm-*.tgz | Select-Object -First 1).Name
+Mirror the ES-module graph from `https://datanoisetv.github.io/ferroterm/` starting at `web/src/index.js`: download each file, read its static `import ... from '...'` lines, and download the closure. Known set at plan time (verify by actually parsing the imports — download anything referenced that this list misses):
+
+- `web/src/`: `index.js`, `ferroterm.js`, `element.js`, `model.js`, `renderer-canvas.js`, `renderer-webgl.js`, `keycodes.js`, `palette.js`, `links.js`
+- `web/pkg/`: `ferroterm_wasm.js`, `ferroterm_wasm_bg.wasm`
+
+Store them under `assets/ferroterm/` preserving the relative layout the imports expect (`src/...` importing `../pkg/...` must keep working):
+
+```text
+assets/ferroterm/src/<the src modules>
+assets/ferroterm/pkg/ferroterm_wasm.js
+assets/ferroterm/pkg/ferroterm_wasm_bg.wasm
 ```
 
-Inspect `package/package.json` (`exports` / `module` / `main` / `files`) and the `package/` tree to identify (a) the ES-module entry `.js` and any chunk files it imports, (b) the `.wasm` binary, (c) the `.d.ts` (`ferroterm.d.ts` per upstream docs). Copy those into `assets/ferroterm/` in the repo, preserving the tarball's file names, and note the exact version from `package.json`. Read the `.d.ts` now — it is the authority for the API used in Step 2 (constructor options `cols, rows, scrollback, fontSize, renderer ('webgl'|'canvas'), autoFit, wasmUrl, theme`; methods `write`, `onData`, `fit`; whether a dispose/destroy method and a resize event exist). If the packaged module hardcodes a relative WASM fetch path instead of honoring a `wasmUrl` option, report DONE_WITH_CONCERNS with what the `.d.ts` actually exposes.
+Also fetch `web/ferroterm.d.ts` from the upstream repo (`https://raw.githubusercontent.com/DatanoiseTV/ferroterm/master/web/ferroterm.d.ts`) into `assets/ferroterm/ferroterm.d.ts` — reference only, not served. The `.d.ts` plus the vendored `src/ferroterm.js` source are the authority for the API used in Step 2 (confirmed from source at plan time: `Ferroterm.create(container, options)` honors `options.wasmUrl` via `initWasm`; options include `cols`, `rows`, `scrollback`, `theme`; the class registers `_dataCbs`/`_resizeCbs` — check the `.d.ts` for the exact `onData`/`onResize`/`fit`/dispose surface).
 
 Create `assets/ferroterm/README.md`:
 
 ```markdown
 # Vendored Ferroterm
 
-- Source: `ferroterm` npm package, version <VERSION> (fill in), MIT.
-  https://datanoisetv.github.io/ferroterm/
-- Files: <list the copied .js/.wasm/.d.ts names> — served at runtime from the
-  embedded loopback server under /terminal/assets/, never from a CDN.
-- Update by re-vendoring a newer pinned version.
+- Source: author-deployed build at https://datanoisetv.github.io/ferroterm/
+  (web/src ES modules + web/pkg wasm-bindgen artifacts), retrieved <DATE>.
+  Upstream repo master was <COMMIT-SHA> at retrieval; the wasm build is a
+  Pages deployment artifact and is not committed upstream. MIT.
+- SHA-256 of every vendored file:
+  <one line per file: hash  path>   (Get-FileHash -Algorithm SHA256)
+- Served at runtime from the embedded loopback server under
+  /terminal/assets/, never from a CDN.
+- Update by re-vendoring and refreshing the hashes.
 - `mount.js` is ours: the per-tab glue template (see `src/ui/terminal_panel.rs`).
 ```
 
+Fill `<DATE>`, `<COMMIT-SHA>` (from `https://api.github.com/repos/DatanoiseTV/ferroterm/commits?per_page=1`), and the hash list.
+
 - [ ] **Step 1b: Serve the assets from the embedded server**
 
-In `src/server/terminal_ws.rs`, embed the vendored files and extend `routes()` (substitute the real file names everywhere `<esm-entry>`/`<wasm-file>` appear):
+In `src/server/terminal_ws.rs`, embed every vendored runtime file and extend `routes()`. The paths are two-segment (`src/...`, `pkg/...`), so use a wildcard route. One match arm per vendored file — the served set is exactly the vendored set, nothing else:
 
 ```rust
-const FERROTERM_JS: &[u8] = include_bytes!("../../assets/ferroterm/<esm-entry>.js");
-const FERROTERM_WASM: &[u8] = include_bytes!("../../assets/ferroterm/<wasm-file>.wasm");
+/// Every vendored Ferroterm runtime file, keyed by its path under
+/// /terminal/assets/. The module graph's relative imports (src/ -> ../pkg/)
+/// depend on this layout. `mount.js` and the `.d.ts` are not served.
+fn ferroterm_asset(path: &str) -> Option<(&'static [u8], &'static str)> {
+    const JS: &str = "text/javascript";
+    Some(match path {
+        "src/index.js" => (include_bytes!("../../assets/ferroterm/src/index.js"), JS),
+        "src/ferroterm.js" => (include_bytes!("../../assets/ferroterm/src/ferroterm.js"), JS),
+        // ... one arm per vendored src module ...
+        "pkg/ferroterm_wasm.js" => (include_bytes!("../../assets/ferroterm/pkg/ferroterm_wasm.js"), JS),
+        "pkg/ferroterm_wasm_bg.wasm" => (
+            include_bytes!("../../assets/ferroterm/pkg/ferroterm_wasm_bg.wasm"),
+            "application/wasm",
+        ),
+        _ => return None,
+    })
+}
 
-async fn terminal_asset(Path(file): Path<String>) -> Response {
-    let (bytes, mime): (&[u8], &str) = match file.as_str() {
-        "<esm-entry>.js" => (FERROTERM_JS, "text/javascript"),
-        "<wasm-file>.wasm" => (FERROTERM_WASM, "application/wasm"),
-        _ => return StatusCode::NOT_FOUND.into_response(),
+async fn terminal_asset(Path(path): Path<String>) -> Response {
+    let Some((bytes, mime)) = ferroterm_asset(&path) else {
+        return StatusCode::NOT_FOUND.into_response();
     };
     (
         [
@@ -861,7 +887,7 @@ async fn terminal_asset(Path(file): Path<String>) -> Response {
 }
 ```
 
-Add `.route("/terminal/assets/{file}", get(terminal_asset))` to the router in `routes()`. (If the entry imports additional chunk files, add them to the match with `text/javascript`.) Tests in the same file's test module, reusing the `serve_terminal_routes` helper (reqwest is already a dev-dependency):
+Add `.route("/terminal/assets/{*path}", get(terminal_asset))` to the router in `routes()`. Tests in the same file's test module, reusing the `serve_terminal_routes` helper (reqwest is already a dev-dependency):
 
 ```rust
     #[tokio::test]
@@ -870,7 +896,7 @@ Add `.route("/terminal/assets/{file}", get(terminal_asset))` to the router in `r
         let base = serve_terminal_routes(manager).await;
         let http = base.replace("ws://", "http://");
 
-        let js = reqwest::get(format!("{http}/terminal/assets/<esm-entry>.js"))
+        let js = reqwest::get(format!("{http}/terminal/assets/src/index.js"))
             .await
             .unwrap();
         assert2::assert!((js.status().as_u16()) == (200));
@@ -881,7 +907,7 @@ Add `.route("/terminal/assets/{file}", get(terminal_asset))` to the router in `r
             (js.headers()["access-control-allow-origin"].to_str().unwrap()) == ("*")
         );
 
-        let wasm = reqwest::get(format!("{http}/terminal/assets/<wasm-file>.wasm"))
+        let wasm = reqwest::get(format!("{http}/terminal/assets/pkg/ferroterm_wasm_bg.wasm"))
             .await
             .unwrap();
         assert2::assert!((wasm.status().as_u16()) == (200));
@@ -907,14 +933,14 @@ Create `assets/ferroterm/mount.js`. `__ID__`, `__PORT__`, `__TOKEN__` are replac
   if (!host || host.dataset.mounted) { return; }
   host.dataset.mounted = "1";
   const base = "http://127.0.0.1:__PORT__/terminal/assets/";
-  import(base + "<esm-entry>.js")
+  import(base + "src/index.js")
     .then(async function (mod) {
       const Ferroterm = mod.Ferroterm || mod.default;
       const options = {
         scrollback: 5000,
         fontSize: 13,
         autoFit: true,
-        wasmUrl: base + "<wasm-file>.wasm",
+        wasmUrl: base + "pkg/ferroterm_wasm_bg.wasm",
       };
       let term;
       try {
@@ -1018,9 +1044,9 @@ In `src/ui/mod.rs`, add to the existing `tests` module:
             .windows(3)
             .any(|w| w[0] == b'_' && w[1] == b'_' && w[2].is_ascii_uppercase());
         assert2::assert!(!stray);
-        // The vendored file names must be substituted, not left as templates.
-        assert2::assert!(!substituted.contains("<esm-entry>"));
-        assert2::assert!(!substituted.contains("<wasm-file>"));
+        // The vendored entry + wasm paths must be referenced.
+        assert2::assert!(substituted.contains("src/index.js"));
+        assert2::assert!(substituted.contains("pkg/ferroterm_wasm_bg.wasm"));
     }
 ```
 
