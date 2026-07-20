@@ -359,26 +359,42 @@ mod tests {
     #[test]
     fn big_doc_is_valid_and_deterministic() {
         let d = big_doc(200);
-        assert_eq!(d.nodes.len(), 200);
+        assert2::assert!((d.nodes.len()) == (200));
         let v = d.validate();
-        assert!(v.is_ok(), "errors: {:?}", v.errors);
-        assert_eq!(big_doc(200), big_doc(200));
+        assert2::assert!(v.is_ok(), "errors: {:?}", v.errors);
+        assert2::assert!((big_doc(200)) == (big_doc(200)));
         let layout = crate::layout::compute(&d);
-        assert_eq!(layout.rects.len(), 200);
+        assert2::assert!((layout.rects.len()) == (200));
+    }
+
+    #[test]
+    fn big_doc_connects_adjacent_nodes_and_groups_at_the_boundary() {
+        let d = big_doc(13);
+        assert2::assert!((d.edges.len()) == (13));
+        assert2::assert!(d.edges.iter().any(|edge| {
+            edge.from == NodeId::from("node-0")
+                && edge.to == NodeId::from("node-1")
+                && edge.kind == EdgeKind::DependsOn
+        }));
+        assert2::assert!(d.edges.iter().any(|edge| {
+            edge.from == NodeId::from("node-0")
+                && edge.to == NodeId::from("node-12")
+                && edge.kind == EdgeKind::DataFlow
+        }));
     }
 
     #[test]
     fn demo_doc_is_valid() {
         let v = demo_doc().validate();
-        assert!(v.is_ok(), "errors: {:?}", v.errors);
-        assert!(v.warnings.is_empty(), "warnings: {:?}", v.warnings);
+        assert2::assert!(v.is_ok(), "errors: {:?}", v.errors);
+        assert2::assert!(v.warnings.is_empty(), "warnings: {:?}", v.warnings);
     }
 
     #[test]
     fn demo_doc_has_open_choices_and_a_cycle() {
         let doc = demo_doc();
-        assert_eq!(doc.open_choice_count(), 2);
+        assert2::assert!((doc.open_choice_count()) == (2));
         let layout = crate::layout::compute(&doc);
-        assert_eq!(layout.rects.len(), doc.nodes.len());
+        assert2::assert!((layout.rects.len()) == (doc.nodes.len()));
     }
 }

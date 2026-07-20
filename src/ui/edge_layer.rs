@@ -130,10 +130,11 @@ pub fn EdgeLayer(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use yare::parameterized;
 
     #[test]
     fn short_edge_labels_are_unchanged() {
-        assert_eq!(edge_label_preview("read/write"), "read/write");
+        assert2::assert!((edge_label_preview("read/write")) == ("read/write"));
     }
 
     #[test]
@@ -141,7 +142,28 @@ mod tests {
         let label = format!("{}éé", "a".repeat(31));
         let preview = edge_label_preview(&label);
 
-        assert_eq!(preview.chars().count(), 32);
-        assert_eq!(preview, format!("{}…", "a".repeat(31)));
+        assert2::assert!((preview.chars().count()) == (32));
+        assert2::assert!((preview) == (format!("{}…", "a".repeat(31))));
+    }
+
+    #[parameterized(
+        existing = { ElementStatus::Existing, "existing" },
+        proposed = { ElementStatus::Proposed, "proposed" },
+        modified = { ElementStatus::Modified, "modified" },
+        affected = { ElementStatus::Affected, "affected" },
+        removed = { ElementStatus::Removed, "removed" },
+    )]
+    fn edge_status_classes_are_exact(status: ElementStatus, expected: &str) {
+        assert2::assert!(status_class(status) == expected);
+    }
+
+    #[parameterized(
+        depends_on = { EdgeKind::DependsOn, "depends-on" },
+        data_flow = { EdgeKind::DataFlow, "data-flow" },
+        contains = { EdgeKind::Contains, "contains" },
+        other = { EdgeKind::Other, "other" },
+    )]
+    fn edge_kind_classes_are_exact(kind: EdgeKind, expected: &str) {
+        assert2::assert!(kind_class(kind) == expected);
     }
 }

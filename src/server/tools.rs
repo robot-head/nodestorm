@@ -683,7 +683,7 @@ mod tests {
         store.request_flush(None).expect("create active receipt");
         first.abort();
         let _ = first.await;
-        assert_eq!(store.snapshot_meta().send_status, SendStatus::Reconnecting);
+        assert2::assert!((store.snapshot_meta().send_status) == (SendStatus::Reconnecting));
 
         let request_cancel = CancellationToken::new();
         request_cancel.cancel();
@@ -702,14 +702,292 @@ mod tests {
         )
         .await;
 
-        assert!(
+        assert2::assert!(
             result
                 .expect_err("ready cancellation wins")
                 .to_string()
                 .contains("request cancelled")
         );
-        assert_eq!(store.read(|state| state.delivery_cursor), 0);
-        assert_eq!(store.snapshot_meta().waiting_agents, 0);
-        assert_eq!(store.snapshot_meta().send_status, SendStatus::Reconnecting);
+        assert2::assert!((store.read(|state| state.delivery_cursor)) == (0));
+        assert2::assert!((store.snapshot_meta().waiting_agents) == (0));
+        assert2::assert!((store.snapshot_meta().send_status) == (SendStatus::Reconnecting));
+    }
+
+    use rmcp::ServiceExt;
+    use rmcp::handler::server::wrapper::Parameters;
+    use rmcp::model::CallToolRequestParams;
+
+    struct TestDir(std::path::PathBuf);
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn server() -> (TestDir, NodestormServer) {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "nodestorm-tools-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let sessions = crate::sessions::Sessions::open(dir.join("sessions"), None).unwrap();
+        let transport_connections =
+            Arc::new(super::super::TransportConnections::new(sessions.clone()));
+        let dir = TestDir(dir);
+        (dir, NodestormServer::new(sessions, transport_connections))
+    }
+
+    fn node(id: &str) -> Node {
+        serde_json::from_value(serde_json::json!({"id": id, "label": id})).unwrap()
+    }
+
+    fn result_text(result: &CallToolResult) -> String {
+        serde_json::to_string(result).unwrap()
+    }
+
+    #[test]
+    fn parameter_defaults_and_result_helpers_are_exact() {
+        let params: AwaitDecisionsParams = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert2::assert!((params.timeout_seconds) == (240));
+        assert2::assert!((default_await_secs()) == (240));
+
+        let result = json_result(serde_json::json!({"answer": 42})).unwrap();
+        assert2::assert!(result_text(&result).contains("answer"));
+        assert2::assert!(result_text(&result).contains("42"));
+
+        let error = store_err(StoreError::UnknownNode(NodeId::from("missing")));
+        assert2::assert!(error.message.contains("missing"));
+    }
+
+    #[test]
+    fn lifecycle_guards_restore_connection_state_on_drop() {
+        let (_dir, server) = server();
+        let id = server.connection.id;
+        server
+            .sessions
+            .connect_client(id, "client".into(), "1".into());
+        server
+            .sessions
+            .set_connection_waiting(id, "default".into(), Some("alpha".into()));
+        {
+            let _guard = ConnectionStateGuard {
+                id,
+                sessions: server.sessions.clone(),
+            };
+        }
+        assert2::assert!(
+            (server.sessions.connection(id).unwrap().state)
+                == (crate::sessions::ConnectionState::Connected)
+        );
+
+        let first = ActiveAwaitGuard::enter(server.connection.clone()).unwrap();
+        assert2::assert!(ActiveAwaitGuard::enter(server.connection.clone()).is_err());
+        drop(first);
+        assert2::assert!(ActiveAwaitGuard::enter(server.connection.clone()).is_ok());
+    }
+
+    #[test]
+    fn initialized_connection_lease_disconnects_on_drop() {
+        let (_dir, server) = server();
+        let id = server.connection.id;
+        server
+            .sessions
+            .connect_client(id, "client".into(), "1".into());
+        server.connection.initialized.store(true, Ordering::Release);
+        let sessions = server.sessions.clone();
+        drop(server);
+        assert2::assert!(sessions.connections().is_empty());
+    }
+
+    #[tokio::test]
+    async fn graph_state_list_export_and_clear_tools_have_observable_results() {
+        let (_dir, server) = server();
+        let proposed = server
+            .propose_graph(Parameters(ProposeGraphParams {
+                title: "Original".into(),
+                nodes: vec![node("a")],
+                edges: vec![],
+                focus: Some(NodeId::from("a")),
+                announce: Some("hello".into()),
+                session: None,
+                agent: Some("agent-a".into()),
+            }))
+            .await
+            .unwrap();
+        assert2::assert!(result_text(&proposed).contains("node_count"));
+        assert2::assert!((server.sessions.active_store().snapshot_doc().title) == ("Original"));
+
+        let updated = server
+            .update_graph(Parameters(UpdateGraphParams {
+                ops: vec![GraphOp::SetTitle {
+                    title: "Updated".into(),
+                }],
+                session: None,
+                agent: None,
+            }))
+            .await
+            .unwrap();
+        assert2::assert!(result_text(&updated).contains("revision"));
+        assert2::assert!((server.sessions.active_store().snapshot_doc().title) == ("Updated"));
+
+        let store = server.sessions.active_store();
+        let idle_state = server
+            .get_state(Parameters(SessionOnlyParams { session: None }))
+            .await
+            .unwrap();
+        assert2::assert!(
+            idle_state.content[0]
+                .as_text()
+                .unwrap()
+                .text
+                .contains("\"agent_waiting\":false")
+        );
+        let waiter_store = store.clone();
+        let waiter = tokio::spawn(async move {
+            waiter_store
+                .await_flush(
+                    Duration::from_secs(60),
+                    Awaiter {
+                        connection_id: ConnectionId(900),
+                        client_label: "test client".into(),
+                        agent: None,
+                    },
+                )
+                .await
+        });
+        tokio::task::yield_now().await;
+        assert2::assert!((store.snapshot_meta().waiting_agents) == (1));
+        let state = server
+            .get_state(Parameters(SessionOnlyParams { session: None }))
+            .await
+            .unwrap();
+        let state_text = result_text(&state);
+        assert2::assert!(state_text.contains("Updated"));
+        assert2::assert!(
+            state.content[0]
+                .as_text()
+                .unwrap()
+                .text
+                .contains("\"agent_waiting\":true")
+        );
+        waiter.abort();
+
+        let listed = server
+            .list_sessions(Parameters(EmptyParams {}))
+            .await
+            .unwrap();
+        assert2::assert!(result_text(&listed).contains("default"));
+
+        let exported = server
+            .export_markdown(Parameters(ExportParams {
+                format: ExportFormat::Markdown,
+                session: None,
+            }))
+            .await
+            .unwrap();
+        assert2::assert!(result_text(&exported).contains("Updated"));
+
+        let cleared = server
+            .clear_session(Parameters(SessionOnlyParams { session: None }))
+            .await
+            .unwrap();
+        assert2::assert!(result_text(&cleared).contains("node_count"));
+        assert2::assert!(
+            server
+                .sessions
+                .active_store()
+                .snapshot_doc()
+                .nodes
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn diff_tools_return_content_and_report_bad_records() {
+        let (_dir, server) = server();
+        server.sessions.create("other").unwrap();
+        server
+            .sessions
+            .active_store()
+            .apply_update(vec![GraphOp::SetTitle { title: "A".into() }])
+            .unwrap();
+        server
+            .sessions
+            .get("other")
+            .unwrap()
+            .apply_update(vec![GraphOp::SetTitle { title: "B".into() }])
+            .unwrap();
+
+        let diff = server
+            .diff_sessions(Parameters(DiffParams {
+                a: "default".into(),
+                b: "other".into(),
+            }))
+            .await
+            .unwrap();
+        assert2::assert!(!diff.content.is_empty());
+        assert2::assert!(result_text(&diff).contains("default"));
+        assert2::assert!(
+            server
+                .diff_record(Parameters(DiffRecordParams {
+                    path: "/definitely/missing/nodestorm-record.md".into(),
+                    session: None,
+                }))
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn await_decisions_is_exercised_through_the_tool_router() {
+        let (_dir, server) = server();
+        let store = server.sessions.active_store();
+        let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+        let server_task = tokio::spawn(async move {
+            server
+                .serve(server_transport)
+                .await
+                .unwrap()
+                .waiting()
+                .await
+                .unwrap();
+        });
+        let client = ().serve(client_transport).await.unwrap();
+
+        let call = tokio::spawn(async move {
+            client
+                .call_tool(
+                    CallToolRequestParams::new("await_decisions").with_arguments(
+                        serde_json::json!({"timeout_seconds": 5})
+                            .as_object()
+                            .unwrap()
+                            .clone(),
+                    ),
+                )
+                .await
+        });
+        while store.snapshot_meta().waiting_agents != 1 {
+            tokio::task::yield_now().await;
+        }
+        store.request_flush(None).unwrap();
+        let result = call.await.unwrap().unwrap();
+
+        let text = result_text(&result);
+        assert2::assert!(text.contains("delivered"));
+        assert2::assert!(text.contains("decisions"));
+        server_task.abort();
+    }
+
+    #[test]
+    fn server_info_identifies_nodestorm_and_enables_tools() {
+        let (_dir, server) = server();
+        let info = server.get_info();
+        assert2::assert!((info.server_info.name) == ("nodestorm"));
+        assert2::assert!((info.server_info.version) == (env!("CARGO_PKG_VERSION")));
+        assert2::assert!(info.capabilities.tools.is_some());
+        assert2::assert!(info.instructions.unwrap().contains("await_decisions"));
     }
 }

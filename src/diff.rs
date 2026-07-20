@@ -209,9 +209,9 @@ mod tests {
     fn identical_docs_say_no_differences() {
         let d = demo_doc();
         let md = diff_docs("a", &d, "b", &d);
-        assert!(md.starts_with("# Diff: a → b\n"), "got: {md}");
-        assert!(md.contains("_No differences._"), "in: {md}");
-        assert!(!md.contains("## Components"), "in: {md}");
+        assert2::assert!(md.starts_with("# Diff: a → b\n"), "got: {md}");
+        assert2::assert!(md.contains("_No differences._"), "in: {md}");
+        assert2::assert!(!md.contains("## Components"), "in: {md}");
     }
 
     #[test]
@@ -236,14 +236,14 @@ mod tests {
             n.status = ElementStatus::Modified;
         }
         let md = diff_docs("a", &a, "b", &b);
-        assert!(md.contains("## Components"), "in: {md}");
-        assert!(md.contains("+ added: **Rate Limiter**"), "in: {md}");
-        assert!(md.contains("- removed: **Email Provider**"), "in: {md}");
-        assert!(
+        assert2::assert!(md.contains("## Components"), "in: {md}");
+        assert2::assert!(md.contains("+ added: **Rate Limiter**"), "in: {md}");
+        assert2::assert!(md.contains("- removed: **Email Provider**"), "in: {md}");
+        assert2::assert!(
             md.contains("~ changed: **Redis Cluster** (label: Redis → Redis Cluster, status: affected → modified)"),
             "in: {md}"
         );
-        assert!(!md.contains("_No differences._"), "in: {md}");
+        assert2::assert!(!md.contains("_No differences._"), "in: {md}");
     }
 
     #[test]
@@ -260,12 +260,12 @@ mod tests {
             origin: crate::model::Origin::Agent,
         });
         let md = diff_docs("a", &a, "b", &b);
-        assert!(md.contains("## Edges"), "in: {md}");
-        assert!(
+        assert2::assert!(md.contains("## Edges"), "in: {md}");
+        assert2::assert!(
             md.contains("+ added: Web UI —depends_on→ PostgreSQL"),
             "in: {md}"
         );
-        assert!(
+        assert2::assert!(
             md.contains("- removed: Web UI —data_flow→ API Gateway"),
             "in: {md}"
         );
@@ -281,8 +281,8 @@ mod tests {
             c.status = ChoiceStatus::Decided;
         }
         let md = diff_docs("a", &a, "b", &b);
-        assert!(md.contains("## Decisions"), "in: {md}");
-        assert!(
+        assert2::assert!(md.contains("## Decisions"), "in: {md}");
+        assert2::assert!(
             md.contains("newly decided: “How should concurrent edits be reconciled?” → CRDTs"),
             "in: {md}"
         );
@@ -294,14 +294,14 @@ mod tests {
             c.selected = Some("ot".into());
         }
         let md = diff_docs("a", &a2, "b", &b);
-        assert!(
+        assert2::assert!(
             md.contains("decided differently: “How should concurrent edits be reconciled?” (a: Operational Transform, b: CRDTs)"),
             "in: {md}"
         );
 
         // Reopened: decided in a, open in b.
         let md = diff_docs("a", &b, "b", &a);
-        assert!(
+        assert2::assert!(
             md.contains("reopened: “How should concurrent edits be reconciled?”"),
             "in: {md}"
         );
@@ -311,7 +311,7 @@ mod tests {
         b2.node_mut(&NodeId::from("ws-gateway")).unwrap().choices[0].status =
             ChoiceStatus::Dismissed;
         let md = diff_docs("a", &a, "b", &b2);
-        assert!(
+        assert2::assert!(
             md.contains("newly dismissed: “Where should websocket connections terminate?”"),
             "in: {md}"
         );
@@ -322,19 +322,19 @@ mod tests {
         let record = crate::export::render_markdown(&demo_doc(), &[], chrono::Utc::now());
         // An unchanged session vs its own record: no drift.
         let same = diff_doc_vs_record("decisions.md", &record, "session", &demo_doc()).unwrap();
-        assert!(same.contains("_No differences._"), "{same}");
+        assert2::assert!(same.contains("_No differences._"), "{same}");
         // A changed session drifts against the recorded baseline.
         let mut changed = demo_doc();
         changed.node_mut(&NodeId::from("redis")).unwrap().label = "Redis Cluster".into();
         let drift = diff_doc_vs_record("decisions.md", &record, "session", &changed).unwrap();
-        assert!(
+        assert2::assert!(
             drift.starts_with("# Diff: decisions.md → session"),
             "{drift}"
         );
-        assert!(drift.contains("~ changed: **Redis Cluster**"), "{drift}");
+        assert2::assert!(drift.contains("~ changed: **Redis Cluster**"), "{drift}");
         // A file without a snapshot is a clear error, not a panic.
         let err = diff_doc_vs_record("x.md", "plain markdown", "s", &demo_doc()).unwrap_err();
-        assert!(err.contains("no nodestorm snapshot"), "{err}");
+        assert2::assert!(err.contains("no nodestorm snapshot"), "{err}");
     }
 
     #[test]
@@ -347,9 +347,9 @@ mod tests {
             n.lane = Some("Realtime".into());
         }
         let md = diff_docs("a", &a, "b", &b);
-        assert!(md.contains("## Components"), "{md}");
-        assert!(md.contains("build: planned → built"), "{md}");
-        assert!(md.contains("lane: Services → Realtime"), "{md}");
+        assert2::assert!(md.contains("## Components"), "{md}");
+        assert2::assert!(md.contains("build: planned → built"), "{md}");
+        assert2::assert!(md.contains("lane: Services → Realtime"), "{md}");
     }
 
     #[test]
@@ -359,6 +359,6 @@ mod tests {
         b.nodes.retain(|n| n.id.as_str() != "redis");
         b.edges
             .retain(|e| e.from.as_str() != "redis" && e.to.as_str() != "redis");
-        assert_eq!(diff_docs("a", &a, "b", &b), diff_docs("a", &a, "b", &b));
+        assert2::assert!((diff_docs("a", &a, "b", &b)) == (diff_docs("a", &a, "b", &b)));
     }
 }

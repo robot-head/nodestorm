@@ -561,6 +561,7 @@ fn ChoiceBlock(
 mod tests {
     use super::*;
     use crate::model::{ElementStatus, Origin};
+    use yare::parameterized;
 
     fn test_node(id: &str, label: &str) -> Node {
         Node {
@@ -605,13 +606,15 @@ mod tests {
     fn connection_display_exposes_complete_outgoing_edge() {
         let display = connection_display(&NodeId::from("api"), &test_edge(), &test_doc());
 
-        assert_eq!(display.direction, "Outgoing to");
-        assert_eq!(display.endpoint, "Job Queue");
-        assert_eq!(display.kind, "data flow");
-        assert_eq!(display.status, "modified");
-        assert_eq!(
-            display.label.as_deref(),
-            Some("CompleteSecurityAuditEnvelopeIdentifier")
+        assert2::assert!(
+            display
+                == ConnectionDisplay {
+                    direction: "Outgoing to",
+                    endpoint: "Job Queue".into(),
+                    kind: "data flow",
+                    status: "modified",
+                    label: Some("CompleteSecurityAuditEnvelopeIdentifier".into()),
+                }
         );
     }
 
@@ -619,15 +622,50 @@ mod tests {
     fn connection_display_exposes_incoming_direction() {
         let display = connection_display(&NodeId::from("queue"), &test_edge(), &test_doc());
 
-        assert_eq!(display.direction, "Incoming from");
-        assert_eq!(display.endpoint, "Public API");
+        assert2::assert!((display.direction) == ("Incoming from"));
+        assert2::assert!((display.endpoint) == ("Public API"));
+    }
+
+    #[parameterized(
+        absent = { None, None },
+        empty = { Some(""), None },
+        whitespace = { Some("   "), None },
+        preserves_content = { Some(" Platform "), Some(" Platform ") },
+    )]
+    fn group_metadata_omits_empty_values_without_rewriting_content(
+        input: Option<&str>,
+        expected: Option<&str>,
+    ) {
+        assert2::assert!(visible_group(input) == expected);
+    }
+
+    #[parameterized(
+        service = { "service", NodeKind::Service },
+        module = { "module", NodeKind::Module },
+        component = { "component", NodeKind::Component },
+        data_store = { "data_store", NodeKind::DataStore },
+        queue = { "queue", NodeKind::Queue },
+        ui = { "ui", NodeKind::Ui },
+        external = { "external", NodeKind::External },
+        other = { "other", NodeKind::Other },
+    )]
+    fn node_kind_labels_round_trip_exactly(value: &str, kind: NodeKind) {
+        assert2::assert!(kind_value(kind) == value);
+        assert2::assert!(kind_from_value(value) == kind);
     }
 
     #[test]
-    fn group_metadata_omits_empty_values_without_rewriting_content() {
-        assert_eq!(visible_group(None), None);
-        assert_eq!(visible_group(Some("")), None);
-        assert_eq!(visible_group(Some("   ")), None);
-        assert_eq!(visible_group(Some(" Platform ")), Some(" Platform "));
+    fn unknown_node_kind_defaults_to_component() {
+        assert2::assert!((kind_from_value("unknown")) == (NodeKind::Component));
+    }
+
+    #[parameterized(
+        depends_on = { EdgeKind::DependsOn, "depends on" },
+        data_flow = { EdgeKind::DataFlow, "data flow" },
+        contains = { EdgeKind::Contains, "contains" },
+        other = { EdgeKind::Other, "relates to" },
+    )]
+    fn edge_kind_phrases_are_exact(kind: EdgeKind, expected: &str) {
+        assert2::assert!(edge_kind_phrase(kind) == expected);
     }
 }

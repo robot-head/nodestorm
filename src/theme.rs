@@ -127,6 +127,7 @@ pub fn family(id: &str) -> Option<&'static ThemeFamily> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use yare::parameterized;
 
     const CSS: &str = include_str!("../assets/main.css");
     const APP_SOURCE: &str = include_str!("ui/app.rs");
@@ -172,7 +173,7 @@ mod tests {
 
     fn assert_block_contains(selector: &str, declaration: &str) {
         let block = block_for(selector);
-        assert!(
+        assert2::assert!(
             block.contains(declaration),
             "{selector} must contain `{declaration}`, got: {block}"
         );
@@ -187,14 +188,14 @@ mod tests {
             .split_once("div { class: \"export-menu\"")
             .expect("topbar export menu")
             .0;
-        assert!(brand.contains("topbar-mark"));
-        assert!(brand.contains("polyline"));
-        assert!(brand.contains("BOLT_POINTS"));
-        assert!(brand.contains("NODE_INDICES"));
-        assert!(brand.contains("currentColor"));
-        assert!(!brand.contains("mask"));
-        assert!(!brand.contains("topbar-bolt-cutout"));
-        assert!(!brand.contains("\"ϟ\""));
+        assert2::assert!(brand.contains("topbar-mark"));
+        assert2::assert!(brand.contains("polyline"));
+        assert2::assert!(brand.contains("BOLT_POINTS"));
+        assert2::assert!(brand.contains("NODE_INDICES"));
+        assert2::assert!(brand.contains("currentColor"));
+        assert2::assert!(!brand.contains("mask"));
+        assert2::assert!(!brand.contains("topbar-bolt-cutout"));
+        assert2::assert!(!brand.contains("\"ϟ\""));
     }
 
     #[test]
@@ -206,7 +207,7 @@ mod tests {
                      flex: 1 1 auto;\n\
                    }\n";
 
-        assert_eq!(block_for_in(css, ".sess-name").trim(), "flex: 1 1 auto;");
+        assert2::assert!((block_for_in(css, ".sess-name").trim()) == ("flex: 1 1 auto;"));
     }
 
     #[test]
@@ -246,11 +247,11 @@ mod tests {
         // The label sits over an otherwise non-interactive band; its controls
         // must receive pointer events.
         assert_block_contains(".swimlane-label", "pointer-events: auto");
-        assert!(
+        assert2::assert!(
             !block_for(".add-lane-btn").trim().is_empty(),
             "add-lane control is styled"
         );
-        assert!(
+        assert2::assert!(
             !block_for(".lane-delete").trim().is_empty(),
             "delete control is styled"
         );
@@ -290,11 +291,11 @@ mod tests {
 
     #[test]
     fn claude_connections_send_receipt_and_error_toast_are_accessible() {
-        assert!(TOPBAR_SOURCE.contains(r#"aria_label: "Claude MCP connections""#));
-        assert!(TOPBAR_SOURCE.contains(r#"class: "connection-row""#));
-        assert!(APP_SOURCE.contains(r#"role: "alert""#));
-        assert!(APP_SOURCE.contains(r#"store.dismiss_toast()"#));
-        assert!(APP_SOURCE.contains(r#"aria_label: "Dismiss notification""#));
+        assert2::assert!(TOPBAR_SOURCE.contains(r#"aria_label: "Claude MCP connections""#));
+        assert2::assert!(TOPBAR_SOURCE.contains(r#"class: "connection-row""#));
+        assert2::assert!(APP_SOURCE.contains(r#"role: "alert""#));
+        assert2::assert!(APP_SOURCE.contains(r#"store.dismiss_toast()"#));
+        assert2::assert!(APP_SOURCE.contains(r#"aria_label: "Dismiss notification""#));
         assert_block_contains(".connection-pop", "max-height: calc(100vh - 64px)");
         assert_block_contains(".connection-row", "display: grid");
         assert_block_contains(".delivery-toast", "position: fixed");
@@ -317,7 +318,7 @@ mod tests {
             .find("while changes.changed().await.is_ok()")
             .expect("connection bridge awaits later changes");
 
-        assert!(
+        assert2::assert!(
             resnapshot < await_change,
             "the subscribe/snapshot gap must close before awaiting changes"
         );
@@ -329,13 +330,13 @@ mod tests {
             .find("pub fn use_store()")
             .map(|start| &APP_SOURCE[start..])
             .expect("render-bound store helper");
-        assert!(helper.contains("use_context::<super::ActiveStore>()"));
+        assert2::assert!(helper.contains("use_context::<super::ActiveStore>()"));
 
         let toast = APP_SOURCE
             .find("if let Some(toast)")
             .map(|start| &APP_SOURCE[start..])
             .expect("toast renderer");
-        assert!(toast.contains("let store = active_store.read().clone()"));
+        assert2::assert!(toast.contains("let store = active_store.read().clone()"));
     }
 
     #[test]
@@ -344,8 +345,8 @@ mod tests {
             .find("let (name, store) = sessions")
             .map(|start| &APP_SOURCE[start..])
             .expect("the bridge resolves the active name and store together");
-        assert!(resolve.contains(".resolve_named(None)"));
-        assert!(resolve.contains("session_name.set(name)"));
+        assert2::assert!(resolve.contains(".resolve_named(None)"));
+        assert2::assert!(resolve.contains("session_name.set(name)"));
     }
 
     #[test]
@@ -364,7 +365,7 @@ mod tests {
             .find("meta.set(store.snapshot_meta())")
             .expect("metadata snapshot");
 
-        assert!(subscribe < doc && subscribe < meta);
+        assert2::assert!(subscribe < doc && subscribe < meta);
     }
 
     #[test]
@@ -382,9 +383,9 @@ mod tests {
             .map(|end| &handler_and_rest[..end])
             .expect("end of copy handler");
 
-        assert!(!handler.contains(r#"code { "claude mcp add"#));
-        assert!(handler.contains("let store = active_store.read().clone()"));
-        assert!(!handler.contains("sessions.active_store()"));
+        assert2::assert!(!handler.contains(r#"code { "claude mcp add"#));
+        assert2::assert!(handler.contains("let store = active_store.read().clone()"));
+        assert2::assert!(!handler.contains("sessions.active_store()"));
     }
 
     #[test]
@@ -396,7 +397,7 @@ mod tests {
             .find("} else if queued_changes_open()")
             .expect("App must render the queued changes panel");
 
-        assert!(
+        assert2::assert!(
             queue_panel > empty_state,
             "the queued changes panel must not be gated by the canvas branch"
         );
@@ -430,7 +431,7 @@ mod tests {
             "timeline_open.set(false);",
             "compare_with.set(None);",
         ] {
-            assert!(
+            assert2::assert!(
                 handler.contains(reset),
                 "opening the queue must reset `{reset}` so it owns the right-panel slot"
             );
@@ -449,7 +450,7 @@ mod tests {
             let base_start = CSS
                 .find(base_selector)
                 .unwrap_or_else(|| panic!("missing base {base_selector} rule"));
-            assert!(
+            assert2::assert!(
                 media_start > base_start,
                 "minimum-viewport rule must appear after base {base_selector} rule"
             );
@@ -457,12 +458,12 @@ mod tests {
 
         let topbar = block_for_in(rule, ".topbar");
         for declaration in ["overflow-x: auto;", "scrollbar-width: none;"] {
-            assert!(
+            assert2::assert!(
                 topbar.contains(declaration),
                 "minimum-viewport .topbar must contain `{declaration}`"
             );
         }
-        assert!(
+        assert2::assert!(
             block_for_in(rule, ".topbar::-webkit-scrollbar").contains("display: none;"),
             "minimum-viewport topbar must hide the WebKit scrollbar"
         );
@@ -478,7 +479,7 @@ mod tests {
             "max-width: none;",
             "max-height: calc(100vh - 60px);",
         ] {
-            assert!(
+            assert2::assert!(
                 dropdown.contains(declaration),
                 "minimum-viewport .export-dropdown must contain `{declaration}`"
             );
@@ -486,13 +487,13 @@ mod tests {
 
         let session_row = block_for_in(rule, ".session-row");
         for declaration in ["flex-direction: column;", "align-items: stretch;"] {
-            assert!(
+            assert2::assert!(
                 session_row.contains(declaration),
                 "minimum-viewport .session-row must contain `{declaration}`"
             );
         }
         for selector in [".session-row > .sess-switch", ".session-row > .ctl-btn"] {
-            assert!(
+            assert2::assert!(
                 block_for_in(rule, selector).contains("width: 100%;"),
                 "minimum-viewport {selector} must span the full row"
             );
@@ -524,9 +525,8 @@ mod tests {
         const CLEARANCE_RULE: &str =
             "@media (max-width: 600px) {\n  .panel {\n    padding-bottom: 104px;\n  }\n}";
 
-        assert_eq!(
-            CSS.matches(CLEARANCE_RULE).count(),
-            1,
+        assert2::assert!(
+            (CSS.matches(CLEARANCE_RULE).count()) == (1),
             "stylesheet must contain one exact narrow panel clearance rule"
         );
     }
@@ -542,7 +542,7 @@ mod tests {
         assert_block_contains(".sess-badges", "flex: 0 0 auto");
         assert_block_contains(".session-row > .ctl-btn", "flex: 0 0 auto");
         assert_block_contains(".session-row > .ctl-btn", "width: auto");
-        assert!(
+        assert2::assert!(
             TOPBAR_SOURCE
                 .contains(r#"span { class: "sess-name", title: "{info.name}", "{info.name}" }"#),
             "session name markup must expose the complete name as a native title"
@@ -551,12 +551,12 @@ mod tests {
 
     #[test]
     fn topbar_title_has_a_wrapping_hover_card() {
-        assert!(
+        assert2::assert!(
             TOPBAR_SOURCE.contains(r#"class: "topbar-title""#)
                 && TOPBAR_SOURCE.contains(r#""data-full-title": "{title}""#),
             "topbar title markup must provide its complete text to the hover card"
         );
-        assert!(
+        assert2::assert!(
             TOPBAR_SOURCE.contains(r#"class: "topbar-title-text""#),
             "the clipped title text must be separate from the hover-card host"
         );
@@ -585,13 +585,13 @@ mod tests {
             "Confirm delete",
             "Cancel",
         ] {
-            assert!(TOPBAR_SOURCE.contains(markup), "missing `{markup}`");
+            assert2::assert!(TOPBAR_SOURCE.contains(markup), "missing `{markup}`");
         }
     }
 
     #[test]
     fn active_session_statuses_stay_in_the_session_menu_header() {
-        assert!(
+        assert2::assert!(
             TOPBAR_SOURCE.contains(
                 r#"div { class: "session-doc-heading",
                                 strong { "{title}" }
@@ -600,7 +600,7 @@ mod tests {
             ),
             "session header must retain the active session's open-choice badge"
         );
-        assert!(
+        assert2::assert!(
             TOPBAR_SOURCE.contains(
                 r#"if m.waiting_agents > 0 {
                                         span { class: "pill pill-waiting", "●" }"#
@@ -628,55 +628,57 @@ mod tests {
     fn family_ids_are_unique_and_slug_safe() {
         let mut seen = std::collections::BTreeSet::new();
         for f in FAMILIES {
-            assert!(seen.insert(f.id), "duplicate family id {}", f.id);
-            assert!(
+            assert2::assert!(seen.insert(f.id), "duplicate family id {}", f.id);
+            assert2::assert!(
                 f.id.chars()
                     .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
                 "family id {} is not slug-safe",
                 f.id
             );
-            assert!(!f.name.is_empty());
+            assert2::assert!(!f.name.is_empty());
         }
-        assert!(seen.contains(DEFAULT_FAMILY), "default family missing");
+        assert2::assert!(seen.contains(DEFAULT_FAMILY), "default family missing");
+    }
+
+    #[parameterized(
+        known = { "gruvbox", Some("Gruvbox") },
+        unknown = { "no-such-theme", None },
+    )]
+    fn family_lookup_works(id: &str, expected: Option<&str>) {
+        assert2::assert!(family(id).map(|family| family.name) == expected);
+    }
+
+    #[parameterized(
+        auto = { Mode::Auto, "\"auto\"" },
+        dark = { Mode::Dark, "\"dark\"" },
+        light = { Mode::Light, "\"light\"" },
+    )]
+    fn mode_serde_round_trips_lowercase(mode: Mode, text: &str) {
+        assert2::assert!(serde_json::to_string(&mode).unwrap() == text);
+        assert2::assert!(serde_json::from_str::<Mode>(text).unwrap() == mode);
     }
 
     #[test]
-    fn family_lookup_works() {
-        assert_eq!(family("gruvbox").map(|f| f.name), Some("Gruvbox"));
-        assert!(family("no-such-theme").is_none());
+    fn mode_defaults_to_auto() {
+        assert2::assert!(Mode::default() == Mode::Auto);
     }
 
-    #[test]
-    fn mode_serde_round_trips_lowercase() {
-        for (mode, text) in [
-            (Mode::Auto, "\"auto\""),
-            (Mode::Dark, "\"dark\""),
-            (Mode::Light, "\"light\""),
-        ] {
-            assert_eq!(serde_json::to_string(&mode).unwrap(), text);
-            assert_eq!(serde_json::from_str::<Mode>(text).unwrap(), mode);
-        }
-        assert_eq!(Mode::default(), Mode::Auto);
-    }
-
-    #[test]
-    fn mode_as_str_matches_serde() {
-        for mode in [Mode::Auto, Mode::Dark, Mode::Light] {
-            let serde_form = serde_json::to_string(&mode).unwrap();
-            assert_eq!(format!("\"{}\"", mode.as_str()), serde_form);
-        }
+    #[parameterized(auto = { Mode::Auto }, dark = { Mode::Dark }, light = { Mode::Light })]
+    fn mode_as_str_matches_serde(mode: Mode) {
+        let serde_form = serde_json::to_string(&mode).unwrap();
+        assert2::assert!(format!("\"{}\"", mode.as_str()) == serde_form);
     }
 
     #[test]
     fn root_fallback_defines_every_token() {
         let root = block_for(":root");
         for token in REQUIRED_TOKENS {
-            assert!(
+            assert2::assert!(
                 root.contains(&format!("{token}:")),
                 ":root fallback missing {token}"
             );
         }
-        assert!(
+        assert2::assert!(
             root.contains("--mini-viewport-fill:"),
             ":root missing the derived --mini-viewport-fill"
         );
@@ -687,7 +689,7 @@ mod tests {
         for f in FAMILIES {
             let block = block_for(&format!("[data-theme=\"{}\"]", f.id));
             for token in REQUIRED_TOKENS {
-                assert!(
+                assert2::assert!(
                     block.contains(&format!("{token}:")),
                     "family {} missing {token}",
                     f.id
@@ -699,7 +701,7 @@ mod tests {
                     .nth(1)
                     .and_then(|rest| rest.split(';').next())
                     .unwrap_or_default();
-                assert!(
+                assert2::assert!(
                     decl.contains("light-dark("),
                     "family {} must define {token} via light-dark()",
                     f.id
@@ -732,7 +734,7 @@ mod tests {
         ];
 
         for (id, declaration) in anchors {
-            assert!(
+            assert2::assert!(
                 block_for(&format!("[data-theme=\"{id}\"]")).contains(declaration),
                 "family {id} lost its canonical palette anchor"
             );
@@ -744,7 +746,7 @@ mod tests {
         for (i, _) in CSS.match_indices("[data-theme=\"") {
             let rest = &CSS[i + "[data-theme=\"".len()..];
             let id = rest.split('"').next().unwrap_or_default();
-            assert!(
+            assert2::assert!(
                 family(id).is_some(),
                 "CSS has a [data-theme=\"{id}\"] block with no registered family"
             );
@@ -753,9 +755,9 @@ mod tests {
 
     #[test]
     fn mode_rules_set_color_scheme() {
-        assert!(block_for("[data-mode=\"dark\"]").contains("color-scheme: dark;"));
-        assert!(block_for("[data-mode=\"light\"]").contains("color-scheme: light;"));
-        assert!(block_for("[data-mode=\"auto\"]").contains("color-scheme: light dark;"));
+        assert2::assert!(block_for("[data-mode=\"dark\"]").contains("color-scheme: dark;"));
+        assert2::assert!(block_for("[data-mode=\"light\"]").contains("color-scheme: light;"));
+        assert2::assert!(block_for("[data-mode=\"auto\"]").contains("color-scheme: light dark;"));
     }
 
     #[test]
@@ -764,7 +766,7 @@ mod tests {
             .find("@supports (color: light-dark(")
             .expect("no @supports light-dark() guard in CSS");
         for (i, _) in CSS.match_indices("[data-theme=\"") {
-            assert!(
+            assert2::assert!(
                 i > guard,
                 "a [data-theme] block sits outside the @supports guard"
             );

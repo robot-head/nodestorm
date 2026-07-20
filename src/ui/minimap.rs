@@ -175,13 +175,25 @@ pub fn Minimap(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use yare::parameterized;
+
+    #[parameterized(
+        existing = { ElementStatus::Existing, 0 },
+        proposed = { ElementStatus::Proposed, 1 },
+        modified = { ElementStatus::Modified, 2 },
+        affected = { ElementStatus::Affected, 3 },
+        removed = { ElementStatus::Removed, 4 },
+    )]
+    fn status_priorities_are_exact(status: ElementStatus, expected: u8) {
+        assert2::assert!(status_priority(status) == expected);
+    }
 
     #[test]
     fn small_graphs_render_one_rect_per_node() {
         let doc = crate::demo::demo_doc();
         let layout = crate::layout::compute(&doc);
         let rects = mini_rects(&doc, &layout, layout.bounds);
-        assert_eq!(rects.len(), doc.nodes.len());
+        assert2::assert!((rects.len()) == (doc.nodes.len()));
     }
 
     #[test]
@@ -190,14 +202,110 @@ mod tests {
         let layout = crate::layout::compute(&doc);
         let rects = mini_rects(&doc, &layout, layout.bounds);
         // Far fewer rects than nodes, and never more than the grid.
-        assert!(
+        assert2::assert!(
             rects.len() < doc.nodes.len(),
             "virtualized: {}",
             rects.len()
         );
-        assert!(rects.len() <= GRID_COLS * GRID_ROWS);
+        assert2::assert!(rects.len() <= GRID_COLS * GRID_ROWS);
         // Deterministic.
         let again = mini_rects(&doc, &layout, layout.bounds);
-        assert_eq!(rects.len(), again.len());
+        assert2::assert!((rects.len()) == (again.len()));
+    }
+
+    #[test]
+    fn virtualized_cells_use_exact_geometry_and_highest_status_priority() {
+        let mut doc = crate::demo::big_doc(VIRTUALIZE_ABOVE + 1);
+        for node in &mut doc.nodes {
+            node.status = ElementStatus::Existing;
+        }
+        doc.nodes.last_mut().unwrap().status = ElementStatus::Removed;
+        let mut layout = Layout::default();
+        for node in &doc.nodes {
+            layout.rects.insert(
+                node.id.clone(),
+                Rect {
+                    x: 20.0,
+                    y: 40.0,
+                    w: 10.0,
+                    h: 10.0,
+                },
+            );
+        }
+        let rects = mini_rects(
+            &doc,
+            &layout,
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                w: 640.0,
+                h: 420.0,
+            },
+        );
+        assert2::assert!((rects.len()) == (1));
+        assert2::assert!((rects[0].status) == ("removed"));
+        assert2::assert!(
+            (rects[0].rect)
+                == (Rect {
+                    x: 20.0,
+                    y: 40.0,
+                    w: 10.0,
+                    h: 10.0,
+                })
+        );
+
+        for rect in layout.rects.values_mut() {
+            *rect = Rect {
+                x: 19.0,
+                y: 39.0,
+                w: 4.0,
+                h: 4.0,
+            };
+        }
+        let boundary = mini_rects(
+            &doc,
+            &layout,
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                w: 640.0,
+                h: 420.0,
+            },
+        );
+        assert2::assert!((boundary.len()) == (1));
+        assert2::assert!((boundary[0].rect.x) == (20.0));
+        assert2::assert!((boundary[0].rect.y) == (40.0));
+
+        for rect in layout.rects.values_mut() {
+            rect.x = 1_000.0;
+        }
+        let clamped = mini_rects(
+            &doc,
+            &layout,
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                w: 640.0,
+                h: 420.0,
+            },
+        );
+        assert2::assert!((clamped.len()) == (1));
+        assert2::assert!((clamped[0].rect.x) == (640.0));
+
+        for rect in layout.rects.values_mut() {
+            rect.y = 1_000.0;
+        }
+        let clamped = mini_rects(
+            &doc,
+            &layout,
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                w: 640.0,
+                h: 420.0,
+            },
+        );
+        assert2::assert!((clamped.len()) == (1));
+        assert2::assert!((clamped[0].rect.y) == (430.0));
     }
 }

@@ -1091,7 +1091,8 @@ fn compute_bounds(rects: &HashMap<NodeId, Rect>) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Edge, ElementStatus, Node, NodeKind, Origin};
+    use crate::model::{Edge, ElementStatus, Node, NodeKind, Note, Origin};
+    use yare::parameterized;
 
     fn node(id: &str) -> Node {
         Node {
@@ -1131,10 +1132,107 @@ mod tests {
     }
 
     #[test]
+    fn rect_center_y_is_exact() {
+        let rect = Rect {
+            x: 0.0,
+            y: 10.0,
+            w: 10.0,
+            h: 6.0,
+        };
+        assert2::assert!(rect.center_y() == 13.0);
+    }
+
+    #[parameterized(
+        overlaps = { Rect { x: 9.0, y: 15.0, w: 2.0, h: 2.0 }, true },
+        touches_right = { Rect { x: 10.0, y: 11.0, w: 2.0, h: 2.0 }, false },
+        touches_left = { Rect { x: -2.0, y: 11.0, w: 2.0, h: 2.0 }, false },
+        touches_bottom = { Rect { x: 1.0, y: 16.0, w: 2.0, h: 2.0 }, false },
+        touches_top = { Rect { x: 1.0, y: 8.0, w: 2.0, h: 2.0 }, false },
+    )]
+    fn rect_intersection_excludes_touching_edges(other: Rect, expected: bool) {
+        let rect = Rect {
+            x: 0.0,
+            y: 10.0,
+            w: 10.0,
+            h: 6.0,
+        };
+        assert2::assert!(rect.intersects(&other) == expected);
+    }
+
+    #[parameterized(
+        touches_right = { 30.0, 40.0, 50.0, 30.0 },
+        touches_left = { 30.0, 0.0, 10.0, 30.0 },
+        clears_bottom_margin = { 60.0, 0.0, 20.0, 62.0 },
+    )]
+    fn corridor_ignores_horizontal_touches_and_clears_vertical_margin(
+        candidate: f64,
+        x1: f64,
+        x2: f64,
+        expected: f64,
+    ) {
+        let card = Rect {
+            x: 10.0,
+            y: 20.0,
+            w: 30.0,
+            h: 40.0,
+        };
+        assert2::assert!(clear_corridor_y(candidate, x1, x2, 2.0, [&card].into_iter()) == expected);
+    }
+
+    #[test]
+    fn corridor_merges_only_touching_or_overlapping_intervals() {
+        let overlap_a = Rect {
+            x: 0.0,
+            y: 10.0,
+            w: 10.0,
+            h: 10.0,
+        };
+        let overlap_b = Rect {
+            x: 0.0,
+            y: 15.0,
+            w: 10.0,
+            h: 15.0,
+        };
+        assert2::assert!(
+            (clear_corridor_y(22.0, 0.0, 10.0, 0.0, [&overlap_a, &overlap_b].into_iter()))
+                == (30.0)
+        );
+
+        let touch_a = Rect {
+            y: 0.0,
+            h: 10.0,
+            ..overlap_a
+        };
+        let touch_b = Rect {
+            y: 10.0,
+            h: 10.0,
+            ..overlap_a
+        };
+        assert2::assert!(
+            (clear_corridor_y(10.0, 0.0, 10.0, 0.0, [&touch_a, &touch_b].into_iter())) == (0.0)
+        );
+
+        let gap_b = Rect {
+            y: 20.0,
+            h: 10.0,
+            ..overlap_a
+        };
+        assert2::assert!(
+            (clear_corridor_y(15.0, 0.0, 10.0, 0.0, [&touch_a, &gap_b].into_iter())) == (15.0)
+        );
+        assert2::assert!(
+            (clear_corridor_y(12.0, 0.0, 10.0, 0.0, [&touch_b].into_iter())) == (10.0)
+        );
+        assert2::assert!(
+            (clear_corridor_y(18.0, 0.0, 10.0, 0.0, [&touch_b].into_iter())) == (20.0)
+        );
+    }
+
+    #[test]
     fn empty_doc_is_empty_layout() {
         let l = compute(&SessionDoc::default());
-        assert!(l.rects.is_empty());
-        assert!(l.edges.is_empty());
+        assert2::assert!(l.rects.is_empty());
+        assert2::assert!(l.edges.is_empty());
     }
 
     fn grouped_doc() -> SessionDoc {
@@ -1159,20 +1257,20 @@ mod tests {
         let collapsed: std::collections::BTreeSet<String> =
             std::iter::once("Platform".to_owned()).collect();
         let l = compute_collapsed(&d, &collapsed);
-        assert_eq!(l.clusters.len(), 1, "one cluster rect");
-        assert_eq!(l.clusters[0].group, "Platform");
-        assert_eq!(l.clusters[0].member_count, 3);
+        assert2::assert!((l.clusters.len()) == (1), "one cluster rect");
+        assert2::assert!((l.clusters[0].group) == ("Platform"));
+        assert2::assert!((l.clusters[0].member_count) == (3));
         for id in ["m1", "m2", "m3"] {
-            assert!(
+            assert2::assert!(
                 !l.rects.contains_key(&NodeId::from(id)),
                 "member {id} hidden"
             );
         }
-        assert!(l.rects.contains_key(&NodeId::from("outside")));
-        assert!(l.rects.contains_key(&NodeId::from("other")));
+        assert2::assert!(l.rects.contains_key(&NodeId::from("outside")));
+        assert2::assert!(l.rects.contains_key(&NodeId::from("other")));
         // Cluster rect doesn't overlap visible cards.
         for r in l.rects.values() {
-            assert!(!l.clusters[0].rect.intersects(r), "cluster overlaps a card");
+            assert2::assert!(!l.clusters[0].rect.intersects(r), "cluster overlaps a card");
         }
     }
 
@@ -1188,28 +1286,80 @@ mod tests {
             .iter()
             .filter(|e| e.from.as_str() == "outside")
             .collect();
-        assert_eq!(to_cluster.len(), 1, "bundled: {:?}", l.edges);
-        assert_eq!(to_cluster[0].bundle_count, 3);
-        assert_eq!(to_cluster[0].label.as_deref(), Some("×3"));
+        assert2::assert!((to_cluster.len()) == (1), "bundled: {:?}", l.edges);
+        assert2::assert!((to_cluster[0].bundle_count) == (3));
+        assert2::assert!((to_cluster[0].label.as_deref()) == (Some("×3")));
         // m3→other leaves the cluster as a single count-1 edge.
         let from_cluster: Vec<_> = l
             .edges
             .iter()
             .filter(|e| e.to.as_str() == "other")
             .collect();
-        assert_eq!(from_cluster.len(), 1);
-        assert_eq!(from_cluster[0].bundle_count, 1);
+        assert2::assert!((from_cluster.len()) == (1));
+        assert2::assert!((from_cluster[0].bundle_count) == (1));
+        assert2::assert!((from_cluster[0].label) == (None));
         // Determinism.
         let again = compute_collapsed(&d, &collapsed);
-        assert_eq!(l, again);
+        assert2::assert!((l) == (again));
     }
 
     #[test]
     fn expanded_has_no_clusters_and_unit_bundles() {
         let l = compute_collapsed(&grouped_doc(), &std::collections::BTreeSet::new());
-        assert!(l.clusters.is_empty());
-        assert!(l.edges.iter().all(|e| e.bundle_count == 1));
-        assert_eq!(l, compute(&grouped_doc()), "compute() is the empty set");
+        assert2::assert!(l.clusters.is_empty());
+        assert2::assert!(l.edges.iter().all(|e| e.bundle_count == 1));
+        assert2::assert!(
+            (l) == (compute(&grouped_doc())),
+            "compute() is the empty set"
+        );
+    }
+
+    #[test]
+    fn duplicate_edges_do_not_change_node_placement() {
+        let edges = &[("a", "c"), ("a", "d"), ("b", "c"), ("b", "d")];
+        let base = compute(&doc(&["a", "b", "c", "d"], edges));
+        let mut duplicated = doc(&["a", "b", "c", "d"], edges);
+        duplicated.edges.insert(2, edge("a", "d"));
+        assert2::assert!((compute(&duplicated).rects) == (base.rects));
+    }
+
+    #[parameterized(
+        downward = {
+            vec![vec![3], vec![2], vec![], vec![]],
+            vec![0, 0, 1, 1],
+            vec![vec![0, 1], vec![3, 2]]
+        },
+        upward = {
+            vec![vec![1, 2], vec![], vec![], vec![]],
+            vec![0, 1, 1, 0],
+            vec![vec![0, 3], vec![1, 2]]
+        },
+        both_directions = {
+            vec![vec![4, 5], vec![2, 3], vec![3], vec![], vec![], vec![]],
+            vec![0, 0, 1, 2, 1, 1],
+            vec![vec![1, 0], vec![2, 4, 5], vec![3]]
+        },
+    )]
+    fn barycenter_sweeps_use_neighbor_averages_in_both_directions(
+        adjacency: Vec<Vec<usize>>,
+        ranks: Vec<usize>,
+        expected: Vec<Vec<usize>>,
+    ) {
+        assert2::assert!(barycenter_order(&adjacency, &ranks) == expected);
+    }
+
+    #[test]
+    fn place_centers_rank_with_exact_gaps() {
+        let d = doc(&["a", "b", "c"], &[]);
+        let rects = place(&d, &[0, 0, 0], &[vec![0, 1, 2]], &node_heights(&d));
+        assert2::assert!((rects[&NodeId::from("a")].y) == (-120.0));
+        assert2::assert!((rects[&NodeId::from("b")].y) == (-32.0));
+        assert2::assert!((rects[&NodeId::from("c")].y) == (56.0));
+
+        let d = doc(&["left", "right"], &[]);
+        let rects = place(&d, &[0, 1], &[vec![0], vec![1]], &node_heights(&d));
+        assert2::assert!((rects[&NodeId::from("left")].x) == (0.0));
+        assert2::assert!((rects[&NodeId::from("right")].x) == (380.0));
     }
 
     #[test]
@@ -1237,12 +1387,12 @@ mod tests {
         };
         let long_a = path_of("s1", "t");
         let long_b = path_of("s2", "t");
-        assert!(long_a.contains(" L "), "channel segment: {long_a}");
-        assert!(long_b.contains(" L "), "channel segment: {long_b}");
-        assert_ne!(long_a, long_b, "distinct lanes");
+        assert2::assert!(long_a.contains(" L "), "channel segment: {long_a}");
+        assert2::assert!(long_b.contains(" L "), "channel segment: {long_b}");
+        assert2::assert!((long_a) != (long_b), "distinct lanes");
         for (from, to) in [("s1", "m1"), ("m1", "m2"), ("m2", "t")] {
             let short = path_of(from, to);
-            assert!(
+            assert2::assert!(
                 !short.contains(" L "),
                 "adjacent edges keep the plain curve: {short}"
             );
@@ -1252,7 +1402,7 @@ mod tests {
     /// y of the path's `M x y` start point.
     fn first_move_y(path: &str) -> f64 {
         let mut t = path.split_whitespace();
-        assert_eq!(t.next(), Some("M"), "path starts with M: {path}");
+        assert2::assert!((t.next()) == (Some("M")), "path starts with M: {path}");
         t.next().unwrap();
         t.next().unwrap().parse().unwrap()
     }
@@ -1260,7 +1410,7 @@ mod tests {
     /// y of the horizontal corridor (`L x y`) segment.
     fn corridor_y(path: &str) -> f64 {
         let mut t = path.split_whitespace().skip_while(|s| *s != "L");
-        assert_eq!(t.next(), Some("L"), "path has a corridor: {path}");
+        assert2::assert!((t.next()) == (Some("L")), "path has a corridor: {path}");
         t.next().unwrap();
         t.next().unwrap().parse().unwrap()
     }
@@ -1275,7 +1425,7 @@ mod tests {
         );
         let l = compute(&d);
         let ty = |id: &str| l.rects[&NodeId::from(id)].center_y();
-        assert!(
+        assert2::assert!(
             ty("t1") < ty("t2") && ty("t2") < ty("t3"),
             "stacked targets"
         );
@@ -1288,8 +1438,8 @@ mod tests {
                     .path,
             )
         };
-        assert!(start_y("t1") < start_y("t2"));
-        assert!(start_y("t2") < start_y("t3"));
+        assert2::assert!(start_y("t1") < start_y("t2"));
+        assert2::assert!(start_y("t2") < start_y("t3"));
     }
 
     #[test]
@@ -1309,7 +1459,7 @@ mod tests {
         let cy = corridor_y(&long.path);
         for id in ["b", "c"] {
             let r = l.rects[&NodeId::from(id)];
-            assert!(
+            assert2::assert!(
                 cy <= r.y || cy >= r.y + r.h,
                 "corridor {cy} cuts card {id} {r:?}"
             );
@@ -1327,7 +1477,7 @@ mod tests {
             .unwrap();
         let cy = corridor_y(&back.path);
         let rb = l.rects[&NodeId::from("b")];
-        assert!(
+        assert2::assert!(
             cy <= rb.y || cy >= rb.y + rb.h,
             "backward corridor {cy} cuts intermediate card {rb:?}"
         );
@@ -1351,15 +1501,391 @@ mod tests {
         let without_q = compute(&d);
         let r = with_q.rects[&NodeId::from("a")];
         let band = &with_q.lanes[0].rect;
-        assert!(
+        assert2::assert!(
             r.y + r.h <= band.y + band.h,
             "badged card {r:?} stays inside its band {band:?}"
         );
-        assert_eq!(
-            r.h - without_q.rects[&NodeId::from("a")].h,
-            28.0,
+        assert2::assert!(
+            (r.h - without_q.rects[&NodeId::from("a")].h) == (28.0),
             "open question adds the badge row"
         );
+    }
+
+    #[test]
+    fn edge_ports_spread_symmetrically() {
+        let d = doc(&["a", "b", "c"], &[("a", "b"), ("a", "c")]);
+        let rects = HashMap::from([
+            (
+                "a".into(),
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+            ),
+            (
+                "b".into(),
+                Rect {
+                    x: 300.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+            ),
+            (
+                "c".into(),
+                Rect {
+                    x: 300.0,
+                    y: 100.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+            ),
+        ]);
+        let rank_of: HashMap<&NodeId, usize> = d
+            .nodes
+            .iter()
+            .map(|node| (&node.id, if node.id.as_str() == "a" { 0 } else { 1 }))
+            .collect();
+        let edges = route_edges(&d, &rects, &[], &rank_of);
+        assert2::assert!((edges[0].path) == ("M 100.0 8.0 C 200.0 8.0 200.0 10.0 300.0 10.0"));
+        assert2::assert!((edges[0].label_pos) == (Point { x: 200.0, y: 1.0 }));
+        assert2::assert!((edges[1].path) == ("M 100.0 12.0 C 200.0 12.0 200.0 110.0 300.0 110.0"));
+        assert2::assert!((edges[1].label_pos) == (Point { x: 200.0, y: 53.0 }));
+    }
+
+    #[test]
+    fn backward_edges_flip_sides_without_changing_centers() {
+        let d = doc(&["a", "b"], &[("a", "b")]);
+        let rects = HashMap::from([
+            (
+                "a".into(),
+                Rect {
+                    x: 300.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 100.0,
+                },
+            ),
+            (
+                "b".into(),
+                Rect {
+                    x: 0.0,
+                    y: 100.0,
+                    w: 100.0,
+                    h: 100.0,
+                },
+            ),
+        ]);
+        let rank_of: HashMap<&NodeId, usize> = d
+            .nodes
+            .iter()
+            .map(|node| (&node.id, usize::from(node.id.as_str() == "b") * 2))
+            .collect();
+        let edge = route_edges(&d, &rects, &[], &rank_of).remove(0);
+        assert2::assert!((edge.path) == ("M 300.0 50.0 C 200.0 50.0 200.0 150.0 100.0 150.0"));
+        assert2::assert!((edge.label_pos) == (Point { x: 200.0, y: 92.0 }));
+    }
+
+    #[test]
+    fn routing_skips_one_missing_endpoint() {
+        let d = doc(&["a", "b", "missing"], &[("a", "b"), ("a", "missing")]);
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 100.0,
+            h: 100.0,
+        };
+        let rects = HashMap::from([("a".into(), rect), ("b".into(), rect)]);
+        let rank_of: HashMap<&NodeId, usize> = d.nodes.iter().map(|node| (&node.id, 0)).collect();
+        let edges = route_edges(&d, &rects, &[], &rank_of);
+        assert2::assert!((edges.len()) == (1));
+        assert2::assert!((edges[0].to.as_str()) == ("b"));
+    }
+
+    #[test]
+    fn backward_channel_uses_target_right_edge_exactly() {
+        let d = doc(&["a", "b"], &[("a", "b")]);
+        let rects = HashMap::from([
+            (
+                "a".into(),
+                Rect {
+                    x: 300.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 100.0,
+                },
+            ),
+            (
+                "b".into(),
+                Rect {
+                    x: 0.0,
+                    y: 100.0,
+                    w: 100.0,
+                    h: 100.0,
+                },
+            ),
+        ]);
+
+        let same_rank: HashMap<&NodeId, usize> = d.nodes.iter().map(|node| (&node.id, 0)).collect();
+        assert2::assert!(
+            !route_edges(&d, &rects, &[], &same_rank)[0]
+                .path
+                .contains(" L "),
+            "same-rank backward geometry is not a rank-backward channel"
+        );
+
+        let backward_ranks: HashMap<&NodeId, usize> = d
+            .nodes
+            .iter()
+            .map(|node| (&node.id, usize::from(node.id.as_str() == "a") * 2))
+            .collect();
+        let edge = &route_edges(&d, &rects, &[], &backward_ranks)[0];
+        assert2::assert!(
+            (edge.path)
+                == ("M 300.0 50.0 C 270.0 50.0 270.0 100.0 240.0 100.0 L 160.0 100.0 C 130.0 100.0 130.0 150.0 100.0 150.0")
+        );
+        assert2::assert!((edge.label_pos) == (Point { x: 200.0, y: 92.0 }));
+    }
+
+    #[test]
+    fn channels_require_room_for_both_swings() {
+        let d = doc(&["a", "b"], &[("a", "b")]);
+        let rect = |x| Rect {
+            x,
+            y: 0.0,
+            w: 100.0,
+            h: 100.0,
+        };
+
+        let forward_rects = HashMap::from([("a".into(), rect(0.0)), ("b".into(), rect(219.0))]);
+        let forward_ranks: HashMap<&NodeId, usize> = d
+            .nodes
+            .iter()
+            .map(|node| (&node.id, usize::from(node.id.as_str() == "b") * 2))
+            .collect();
+        assert2::assert!(
+            !route_edges(&d, &forward_rects, &[], &forward_ranks)[0]
+                .path
+                .contains(" L ")
+        );
+
+        let backward_rects = HashMap::from([("a".into(), rect(219.0)), ("b".into(), rect(0.0))]);
+        let backward_ranks: HashMap<&NodeId, usize> = d
+            .nodes
+            .iter()
+            .map(|node| (&node.id, usize::from(node.id.as_str() == "a") * 2))
+            .collect();
+        assert2::assert!(
+            !route_edges(&d, &backward_rects, &[], &backward_ranks)[0]
+                .path
+                .contains(" L ")
+        );
+    }
+
+    #[test]
+    fn bundled_channels_add_lane_spacing_to_card_clearance() {
+        let d = doc(
+            &["s1", "s2", "t1", "t2", "blocker"],
+            &[("s1", "t1"), ("s2", "t2")],
+        );
+        let endpoint = |x| Rect {
+            x,
+            y: 100.0,
+            w: 100.0,
+            h: 20.0,
+        };
+        let rects = HashMap::from([
+            ("s1".into(), endpoint(0.0)),
+            ("s2".into(), endpoint(0.0)),
+            ("t1".into(), endpoint(500.0)),
+            ("t2".into(), endpoint(500.0)),
+            (
+                "blocker".into(),
+                Rect {
+                    x: 250.0,
+                    y: 80.0,
+                    w: 100.0,
+                    h: 60.0,
+                },
+            ),
+        ]);
+        let rank_of: HashMap<&NodeId, usize> = d
+            .nodes
+            .iter()
+            .map(|node| {
+                let rank = if node.id.as_str().starts_with('t') {
+                    2
+                } else if node.id.as_str() == "blocker" {
+                    1
+                } else {
+                    0
+                };
+                (&node.id, rank)
+            })
+            .collect();
+
+        let edges = route_edges(&d, &rects, &[], &rank_of);
+        assert2::assert!((corridor_y(&edges[0].path)) == (50.0));
+        assert2::assert!((corridor_y(&edges[1].path)) == (62.0));
+    }
+
+    #[test]
+    fn incoming_ports_and_forward_direction_use_exact_centers() {
+        let d = doc(&["a", "c", "b"], &[("a", "b"), ("c", "b")]);
+        let rects = HashMap::from([
+            (
+                "a".into(),
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+            ),
+            (
+                "c".into(),
+                Rect {
+                    x: 0.0,
+                    y: 100.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+            ),
+            (
+                "b".into(),
+                Rect {
+                    x: 20.0,
+                    y: 50.0,
+                    w: 200.0,
+                    h: 20.0,
+                },
+            ),
+        ]);
+        let rank_of: HashMap<&NodeId, usize> = d
+            .nodes
+            .iter()
+            .map(|node| (&node.id, usize::from(node.id.as_str() == "b")))
+            .collect();
+        let edges = route_edges(&d, &rects, &[], &rank_of);
+        assert2::assert!((edges[0].path) == ("M 100.0 10.0 C 160.0 10.0 -40.0 58.0 20.0 58.0"));
+        assert2::assert!((edges[1].path) == ("M 100.0 110.0 C 160.0 110.0 -40.0 62.0 20.0 62.0"));
+
+        let equal_centers = HashMap::from([
+            (
+                "a".into(),
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+            ),
+            (
+                "b".into(),
+                Rect {
+                    x: 0.0,
+                    y: 50.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+            ),
+        ]);
+        let one = doc(&["a", "b"], &[("a", "b")]);
+        let ranks: HashMap<&NodeId, usize> = one.nodes.iter().map(|node| (&node.id, 0)).collect();
+        assert2::assert!(
+            route_edges(&one, &equal_centers, &[], &ranks)[0]
+                .path
+                .starts_with("M 100.0")
+        );
+        let mut left_center = equal_centers;
+        left_center.get_mut(&NodeId::from("b")).unwrap().x = -25.0;
+        assert2::assert!(
+            route_edges(&one, &left_center, &[], &ranks)[0]
+                .path
+                .starts_with("M 0.0")
+        );
+        let mut wide_left = left_center;
+        *wide_left.get_mut(&NodeId::from("b")).unwrap() = Rect {
+            x: -80.0,
+            y: 50.0,
+            w: 200.0,
+            h: 20.0,
+        };
+        assert2::assert!(
+            route_edges(&one, &wide_left, &[], &ranks)[0]
+                .path
+                .starts_with("M 0.0")
+        );
+    }
+
+    #[test]
+    fn long_edge_channels_center_on_the_group_mean() {
+        let d = doc(&["a", "b", "c", "d"], &[("a", "b"), ("c", "d")]);
+        let rects = HashMap::from([
+            (
+                "a".into(),
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 100.0,
+                },
+            ),
+            (
+                "b".into(),
+                Rect {
+                    x: 600.0,
+                    y: 100.0,
+                    w: 100.0,
+                    h: 100.0,
+                },
+            ),
+            (
+                "c".into(),
+                Rect {
+                    x: 0.0,
+                    y: 200.0,
+                    w: 100.0,
+                    h: 100.0,
+                },
+            ),
+            (
+                "d".into(),
+                Rect {
+                    x: 600.0,
+                    y: 300.0,
+                    w: 100.0,
+                    h: 100.0,
+                },
+            ),
+        ]);
+        let rank_of: HashMap<&NodeId, usize> = d
+            .nodes
+            .iter()
+            .map(|node| {
+                (
+                    &node.id,
+                    if matches!(node.id.as_str(), "a" | "c") {
+                        0
+                    } else {
+                        2
+                    },
+                )
+            })
+            .collect();
+        let edges = route_edges(&d, &rects, &[], &rank_of);
+        assert2::assert!(
+            (edges[0].path)
+                == ("M 100.0 50.0 C 130.0 50.0 130.0 194.0 160.0 194.0 L 540.0 194.0 C 570.0 194.0 570.0 150.0 600.0 150.0")
+        );
+        assert2::assert!((edges[0].label_pos) == (Point { x: 350.0, y: 186.0 }));
+        assert2::assert!(
+            (edges[1].path)
+                == ("M 100.0 250.0 C 130.0 250.0 130.0 206.0 160.0 206.0 L 540.0 206.0 C 570.0 206.0 570.0 350.0 600.0 350.0")
+        );
+        assert2::assert!((edges[1].label_pos) == (Point { x: 350.0, y: 198.0 }));
     }
 
     #[test]
@@ -1374,7 +1900,7 @@ mod tests {
                 ("s2", "t"),
             ],
         );
-        assert_eq!(compute(&d), compute(&d));
+        assert2::assert!((compute(&d)) == (compute(&d)));
     }
 
     #[test]
@@ -1388,15 +1914,15 @@ mod tests {
         let tx = -l.bounds.x * scale + (1280.0 - l.bounds.w * scale) / 2.0;
         let ty = -l.bounds.y * scale + (780.0 - l.bounds.h * scale) / 2.0;
         let all = visible_set(&l, tx, ty, scale, 1280.0, 780.0);
-        assert_eq!(all.nodes.len(), 200);
-        assert_eq!(all.edges.len(), l.edges.len());
+        assert2::assert!((all.nodes.len()) == (200));
+        assert2::assert!((all.edges.len()) == (l.edges.len()));
         // A tight corner view sees strictly fewer.
         let corner = visible_set(&l, 0.0, 0.0, 1.0, 1280.0, 780.0);
-        assert!(corner.nodes.len() < 200, "culled: {}", corner.nodes.len());
+        assert2::assert!(corner.nodes.len() < 200, "culled: {}", corner.nodes.len());
         // Every visible edge touches at least one visible-ish rect.
         for &i in &corner.edges {
             let e = &l.edges[i];
-            assert!(
+            assert2::assert!(
                 corner.nodes.contains(&e.from)
                     || corner.nodes.contains(&e.to)
                     || e.from.as_str().starts_with("group:")
@@ -1404,6 +1930,70 @@ mod tests {
                 "edge {i} has no visible endpoint"
             );
         }
+    }
+
+    #[test]
+    fn visible_set_applies_pan_zoom_and_one_viewport_margin() {
+        let mut layout = Layout::default();
+        for (id, x, y) in [
+            ("center", 0.0, 0.0),
+            ("left-inner", -59.0, 0.0),
+            ("right-inner", 89.0, 0.0),
+            ("top-inner", 0.0, -4.0),
+            ("bottom-inner", 0.0, 69.0),
+            ("left-outer", -61.0, 0.0),
+            ("right-outer", 90.0, 0.0),
+            ("top-outer", 0.0, -6.0),
+            ("bottom-outer", 0.0, 70.0),
+        ] {
+            layout.rects.insert(
+                NodeId::from(id),
+                Rect {
+                    x,
+                    y,
+                    w: 1.0,
+                    h: 1.0,
+                },
+            );
+        }
+        layout.edges = vec![
+            EdgePath {
+                from: "center".into(),
+                to: "right-outer".into(),
+                kind: EdgeKind::DependsOn,
+                status: ElementStatus::Proposed,
+                label: None,
+                path: String::new(),
+                label_pos: Point { x: 0.0, y: 0.0 },
+                bundle_count: 1,
+            },
+            EdgePath {
+                from: "right-outer".into(),
+                to: "center".into(),
+                kind: EdgeKind::DependsOn,
+                status: ElementStatus::Proposed,
+                label: None,
+                path: String::new(),
+                label_pos: Point { x: 0.0, y: 0.0 },
+                bundle_count: 1,
+            },
+        ];
+
+        let visible = visible_set(&layout, 20.0, -40.0, 2.0, 100.0, 50.0);
+        assert2::assert!(
+            (visible.nodes)
+                == ([
+                    "bottom-inner",
+                    "center",
+                    "left-inner",
+                    "right-inner",
+                    "top-inner",
+                ]
+                .into_iter()
+                .map(NodeId::from)
+                .collect())
+        );
+        assert2::assert!((visible.edges) == (vec![0, 1]));
     }
 
     #[test]
@@ -1416,30 +2006,30 @@ mod tests {
             d.node_mut(&NodeId::from(id)).unwrap().lane = Some("backend".into());
         }
         let layout = compute(&d);
-        assert_eq!(layout.lanes.len(), 2);
-        assert_eq!(layout.lanes[0].label, "frontend");
-        assert_eq!(layout.lanes[1].label, "backend");
+        assert2::assert!((layout.lanes.len()) == (2));
+        assert2::assert!((layout.lanes[0].label) == ("frontend"));
+        assert2::assert!((layout.lanes[1].label) == ("backend"));
         // Every card sits inside its lane band.
         for (label, ids) in [("frontend", ["a", "b"]), ("backend", ["c", "d"])] {
             let band = layout.lanes.iter().find(|l| l.label == label).unwrap().rect;
             for id in ids {
                 let r = layout.rects[&NodeId::from(id)];
-                assert!(
+                assert2::assert!(
                     r.y >= band.y + 36.0,
                     "{id} overlaps the {label} title strip"
                 );
-                assert!(
+                assert2::assert!(
                     r.y >= band.y && r.y + r.h <= band.y + band.h,
                     "{id} escapes {label}"
                 );
             }
         }
         // Bands stack: frontend sits entirely above backend.
-        assert!(layout.lanes[0].rect.y + layout.lanes[0].rect.h <= layout.lanes[1].rect.y);
+        assert2::assert!(layout.lanes[0].rect.y + layout.lanes[0].rect.h <= layout.lanes[1].rect.y);
         // Ranking still applies inside a lane (a → b is left → right).
-        assert!(layout.rects[&NodeId::from("a")].x < layout.rects[&NodeId::from("b")].x);
+        assert2::assert!(layout.rects[&NodeId::from("a")].x < layout.rects[&NodeId::from("b")].x);
         // No lanes → no bands (default packing unchanged).
-        assert!(compute(&doc(&["x", "y"], &[("x", "y")])).lanes.is_empty());
+        assert2::assert!(compute(&doc(&["x", "y"], &[("x", "y")])).lanes.is_empty());
     }
 
     #[test]
@@ -1457,7 +2047,7 @@ mod tests {
         );
         let a = compute(&d);
         let b = compute(&d);
-        assert_eq!(a, b);
+        assert2::assert!((a) == (b));
     }
 
     #[test]
@@ -1470,7 +2060,7 @@ mod tests {
         for e in &d.edges {
             let fx = l.rects[&e.from].x;
             let tx = l.rects[&e.to].x;
-            assert!(
+            assert2::assert!(
                 fx < tx,
                 "{} ({fx}) should be left of {} ({tx})",
                 e.from,
@@ -1489,7 +2079,7 @@ mod tests {
         let rects: Vec<&Rect> = l.rects.values().collect();
         for (i, r1) in rects.iter().enumerate() {
             for r2 in &rects[i + 1..] {
-                assert!(!r1.intersects(r2), "{r1:?} overlaps {r2:?}");
+                assert2::assert!(!r1.intersects(r2), "{r1:?} overlaps {r2:?}");
             }
         }
     }
@@ -1498,8 +2088,8 @@ mod tests {
     fn cycles_terminate_and_layout_all_nodes() {
         let d = doc(&["a", "b", "c"], &[("a", "b"), ("b", "c"), ("c", "a")]);
         let l = compute(&d);
-        assert_eq!(l.rects.len(), 3);
-        assert_eq!(l.edges.len(), 3, "back-edge still renders");
+        assert2::assert!((l.rects.len()) == (3));
+        assert2::assert!((l.edges.len()) == (3), "back-edge still renders");
     }
 
     #[test]
@@ -1511,7 +2101,7 @@ mod tests {
         });
         let l = compute(&d);
         let r = &l.rects[&NodeId::from("b")];
-        assert_eq!((r.x, r.y), (777.0, -333.0));
+        assert2::assert!((r.x, r.y) == (777.0, -333.0));
     }
 
     #[test]
@@ -1522,15 +2112,12 @@ mod tests {
         d.nodes.push(node("c"));
         d.edges.push(edge("a", "c"));
         let after = compute(&d);
-        assert_eq!(
-            before.rects[&NodeId::from("a")],
-            after.rects[&NodeId::from("a")]
-        );
+        assert2::assert!((before.rects[&NodeId::from("a")]) == (after.rects[&NodeId::from("a")]));
     }
 
     #[test]
     fn auto_nodes_are_nudged_off_pinned_cards() {
-        let mut d = doc(&["a", "b"], &[]);
+        let mut d = doc(&["a", "b", "c"], &[]);
         // Pin `a` exactly where rank-0 packing would put `b`'s column start.
         let h_b = estimate_height(&d.nodes[1], 0);
         d.nodes[0].position = Some(Point {
@@ -1540,7 +2127,191 @@ mod tests {
         let l = compute(&d);
         let ra = &l.rects[&NodeId::from("a")];
         let rb = &l.rects[&NodeId::from("b")];
-        assert!(!ra.intersects(rb), "pinned {ra:?} vs auto {rb:?}");
+        assert2::assert!(!ra.intersects(rb), "pinned {ra:?} vs auto {rb:?}");
+        assert2::assert!((rb.y) == (56.0));
+        assert2::assert!((l.rects[&NodeId::from("c")].y) == (144.0));
+    }
+
+    #[test]
+    fn union_rect_spans_both_inputs() {
+        assert2::assert!(
+            (union_rect(
+                Rect {
+                    x: 2.0,
+                    y: 3.0,
+                    w: 5.0,
+                    h: 7.0,
+                },
+                Rect {
+                    x: -4.0,
+                    y: 8.0,
+                    w: 3.0,
+                    h: 6.0,
+                },
+            )) == (Rect {
+                x: -4.0,
+                y: 3.0,
+                w: 11.0,
+                h: 11.0,
+            })
+        );
+        assert2::assert!(
+            (union_rect(
+                Rect {
+                    x: 2.0,
+                    y: 3.0,
+                    w: 5.0,
+                    h: 20.0,
+                },
+                Rect {
+                    x: 10.0,
+                    y: 8.0,
+                    w: 3.0,
+                    h: 6.0,
+                },
+            )) == (Rect {
+                x: 2.0,
+                y: 3.0,
+                w: 11.0,
+                h: 20.0,
+            })
+        );
+    }
+
+    #[test]
+    fn bounds_span_all_rects_with_exact_padding() {
+        let rects = HashMap::from([
+            (
+                "a".into(),
+                Rect {
+                    x: 2.0,
+                    y: 3.0,
+                    w: 5.0,
+                    h: 7.0,
+                },
+            ),
+            (
+                "b".into(),
+                Rect {
+                    x: -4.0,
+                    y: 8.0,
+                    w: 3.0,
+                    h: 6.0,
+                },
+            ),
+        ]);
+        assert2::assert!(
+            (compute_bounds(&rects))
+                == (Rect {
+                    x: -52.0,
+                    y: -45.0,
+                    w: 107.0,
+                    h: 107.0
+                })
+        );
+    }
+
+    #[test]
+    fn laned_place_uses_one_gap_between_cards() {
+        let mut d = doc(&["a", "b"], &[]);
+        for node in &mut d.nodes {
+            node.lane = Some("lane".into());
+        }
+        let (rects, lanes) = place_laned(&d, &[0, 0], &[vec![0, 1]], &[], &node_heights(&d));
+        assert2::assert!((rects[&NodeId::from("a")].y) == (36.0));
+        assert2::assert!((rects[&NodeId::from("b")].y) == (124.0));
+        assert2::assert!((lanes[0].rect.h) == (208.0));
+    }
+
+    #[test]
+    fn laned_place_stacks_bands_and_spaces_ranks_exactly() {
+        let mut d = doc(&["a", "b", "c"], &[]);
+        d.nodes[0].lane = Some("one".into());
+        d.nodes[1].lane = Some("one".into());
+        d.nodes[2].lane = Some("two".into());
+
+        let (rects, lanes) = place_laned(
+            &d,
+            &[0, 1, 0],
+            &[vec![0, 2], vec![1]],
+            &[],
+            &node_heights(&d),
+        );
+        assert2::assert!((rects[&NodeId::from("a")].x, rects[&NodeId::from("a")].y) == (0.0, 36.0));
+        assert2::assert!(
+            (rects[&NodeId::from("b")].x, rects[&NodeId::from("b")].y) == (380.0, 36.0)
+        );
+        assert2::assert!(
+            (rects[&NodeId::from("c")].x, rects[&NodeId::from("c")].y) == (0.0, 174.0)
+        );
+        assert2::assert!(
+            (lanes[0].rect)
+                == (Rect {
+                    x: -30.0,
+                    y: 0.0,
+                    w: 700.0,
+                    h: 120.0
+                })
+        );
+        assert2::assert!(
+            (lanes[1].rect)
+                == (Rect {
+                    x: -30.0,
+                    y: 138.0,
+                    w: 700.0,
+                    h: 120.0
+                })
+        );
+    }
+
+    #[test]
+    fn laned_place_grows_around_pinned_cards_exactly() {
+        let mut d = doc(&["left", "inside", "right"], &[]);
+        d.nodes[0].lane = Some("left-lane".into());
+        d.nodes[0].position = Some(Point {
+            x: -100.0,
+            y: 200.0,
+        });
+        d.nodes[1].lane = Some("left-lane".into());
+        d.nodes[1].position = Some(Point { x: 0.0, y: 50.0 });
+        d.nodes[2].lane = Some("right-lane".into());
+        d.nodes[2].position = Some(Point { x: 500.0, y: 0.0 });
+
+        let (rects, lanes) = place_laned(
+            &d,
+            &[0, 0, 0],
+            &[vec![0, 1, 2]],
+            &["left-lane".into(), "right-lane".into()],
+            &node_heights(&d),
+        );
+
+        assert2::assert!(
+            (lanes[0].rect)
+                == (Rect {
+                    x: -120.0,
+                    y: 0.0,
+                    w: 410.0,
+                    h: 284.0,
+                })
+        );
+        assert2::assert!(
+            (rects[&NodeId::from("right")])
+                == (Rect {
+                    x: 500.0,
+                    y: 338.0,
+                    w: 260.0,
+                    h: 64.0,
+                })
+        );
+        assert2::assert!(
+            (lanes[1].rect)
+                == (Rect {
+                    x: -30.0,
+                    y: 302.0,
+                    w: 810.0,
+                    h: 120.0,
+                })
+        );
     }
 
     #[test]
@@ -1549,17 +2320,46 @@ mod tests {
         let mut rich = node("x");
         rich.description =
             "A long description that certainly wraps across multiple lines of card text".into();
-        assert!(estimate_height(&rich, 0) > estimate_height(&plain, 0));
+        assert2::assert!(estimate_height(&rich, 0) > estimate_height(&plain, 0));
     }
 
     #[test]
     fn open_question_badge_adds_height() {
         let n = node("x");
-        assert_eq!(
-            estimate_height(&n, 1) - estimate_height(&n, 0),
-            28.0,
+        assert2::assert!(
+            (estimate_height(&n, 1) - estimate_height(&n, 0)) == (28.0),
             "unanswered question badge row"
         );
+    }
+
+    #[test]
+    fn height_accounts_for_wrapping_and_each_badge_source() {
+        let plain = node("plain");
+        assert2::assert!((estimate_height(&plain, 0)) == (64.0));
+
+        let mut wrapped_label = plain.clone();
+        wrapped_label.label = "x".repeat(23);
+        assert2::assert!((estimate_height(&wrapped_label, 0)) == (64.0));
+
+        let mut wrapped_description = plain.clone();
+        wrapped_description.description = "x".repeat(37);
+        assert2::assert!((estimate_height(&wrapped_description, 0)) == (104.0));
+
+        let mut open_choice = plain.clone();
+        open_choice.choices = crate::demo::demo_doc().nodes[4].choices.clone();
+        assert2::assert!((estimate_height(&open_choice, 0)) == (92.0));
+
+        let mut closed_choice = open_choice.clone();
+        closed_choice.choices[0].status = crate::model::ChoiceStatus::Dismissed;
+        assert2::assert!((estimate_height(&closed_choice, 0)) == (92.0));
+
+        let mut noted = plain;
+        noted.notes.push(Note {
+            id: "note".into(),
+            text: "note".into(),
+            created_at: chrono::Utc::now(),
+        });
+        assert2::assert!((estimate_height(&noted, 0)) == (92.0));
     }
 
     #[test]
@@ -1569,19 +2369,24 @@ mod tests {
         let mut ten_lines = node("ten-lines");
         ten_lines.label = "x".repeat(220);
 
-        assert_eq!(
-            estimate_height(&three_lines, 0),
-            estimate_height(&ten_lines, 0)
-        );
+        assert2::assert!((estimate_height(&three_lines, 0)) == (estimate_height(&ten_lines, 0)));
     }
 
-    #[test]
-    fn wrap_lines_counts_greedily() {
-        assert_eq!(wrap_lines("short", 211.0, 1.0), 1);
-        // Two ~37px words never fit a 40px line together.
-        assert_eq!(wrap_lines("goose goose", 40.0, 1.0), 2);
-        // A single over-long word wraps mid-word (overflow-wrap: anywhere).
-        assert_eq!(wrap_lines("supercalifragilistic", 80.0, 1.0), 2);
+    #[parameterized(
+        short_label = { "short", 211.0, 1.0, 1 },
+        separate_words = { "goose goose", 40.0, 1.0, 2 },
+        long_word = { "supercalifragilistic", 80.0, 1.0, 2 },
+        scaled_word = { "WW", 20.0, 0.5, 1 },
+        scaled_space = { "i i", 7.0, 0.5, 1 },
+        exact_fit = { "i i", 13.0, 1.0, 1 },
+        one_pixel_over = { "i i", 12.0, 1.0, 2 },
+        accumulated_width = { "i i i", 13.0, 1.0, 2 },
+        overflow_remainder = { "i i i", 12.0, 1.0, 3 },
+        exact_word_budget = { "W", 13.0, 1.0, 1 },
+        repeated_long_word_wrap = { "WWWW", 13.0, 1.0, 4 },
+    )]
+    fn wrap_lines_counts_greedily(text: &str, budget: f64, scale: f64, expected: usize) {
+        assert2::assert!(wrap_lines(text, budget, scale) == expected);
     }
 
     #[test]
@@ -1593,9 +2398,22 @@ mod tests {
         wide.label = "W".repeat(22);
         let mut narrow = node("narrow");
         narrow.label = "i".repeat(22);
-        assert!(estimate_height(&wide, 0) > estimate_height(&narrow, 0));
-        assert_eq!(wrap_lines(&"W".repeat(22), 211.0, 1.0), 2);
-        assert_eq!(wrap_lines(&"i".repeat(22), 211.0, 1.0), 1);
+        assert2::assert!(estimate_height(&wide, 0) > estimate_height(&narrow, 0));
+        assert2::assert!((wrap_lines(&"W".repeat(22), 211.0, 1.0)) == (2));
+        assert2::assert!((wrap_lines(&"i".repeat(22), 211.0, 1.0)) == (1));
+    }
+
+    #[parameterized(
+        narrow = { 'i', 4.5 },
+        narrow_letter = { 'f', 5.5 },
+        wide_lowercase = { 'm', 11.5 },
+        widest = { 'W', 13.0 },
+        uppercase = { 'A', 9.5 },
+        digit = { '7', 9.5 },
+        ordinary = { 'x', 7.5 },
+    )]
+    fn glyph_width_classes_are_exact(glyph: char, expected: f64) {
+        assert2::assert!(char_w(glyph) == expected);
     }
 
     #[test]
@@ -1610,9 +2428,9 @@ mod tests {
         );
         let labels: Vec<&str> = layout.lanes.iter().map(|l| l.label.as_str()).collect();
         // Declared order wins; the empty "review" lane still renders a band.
-        assert_eq!(labels, vec!["review", "build"]);
+        assert2::assert!((labels) == (vec!["review", "build"]));
         let review = layout.lanes.iter().find(|l| l.label == "review").unwrap();
-        assert!(
+        assert2::assert!(
             review.rect.h > 0.0,
             "empty declared lane has a visible band"
         );
@@ -1628,9 +2446,8 @@ mod tests {
             &["build".to_owned()], // declared but unreferenced
         );
         let labels: Vec<&str> = layout.lanes.iter().map(|l| l.label.as_str()).collect();
-        assert_eq!(
-            labels,
-            vec!["build", "adhoc"],
+        assert2::assert!(
+            (labels) == (vec!["build", "adhoc"]),
             "declared before referenced-only"
         );
     }
@@ -1649,17 +2466,40 @@ mod tests {
         );
         let band = layout.lanes.iter().find(|l| l.label == "build").unwrap();
         let rb = layout.rects[&NodeId::from("b")];
-        assert!(
+        assert2::assert!(
             band.rect.y <= rb.y && band.rect.y + band.rect.h >= rb.y + rb.h,
             "grown band {:?} must enclose pinned card {:?}",
             band.rect,
             rb
         );
         // Growth is downward only: the band's top edge stays put.
-        assert!(
+        assert2::assert!(
             band.rect.y.abs() < 1e-6,
             "band top does not chase pinned cards"
         );
+    }
+
+    #[test]
+    fn pinned_card_only_grows_its_own_lane() {
+        let mut d = doc(&["a", "b"], &[]);
+        d.node_mut(&NodeId::from("a")).unwrap().lane = Some("build".into());
+        d.node_mut(&NodeId::from("b")).unwrap().lane = Some("review".into());
+        d.node_mut(&NodeId::from("b")).unwrap().position = Some(Point {
+            x: 4_000.0,
+            y: 4_000.0,
+        });
+        let layout = compute_view(
+            &d,
+            &std::collections::BTreeSet::new(),
+            &["build".to_owned(), "review".to_owned()],
+        );
+        let build = layout
+            .lanes
+            .iter()
+            .find(|lane| lane.label == "build")
+            .unwrap();
+        assert2::assert!(build.rect.x + build.rect.w < 1_000.0);
+        assert2::assert!(build.rect.y + build.rect.h < 1_000.0);
     }
 
     #[test]
@@ -1676,13 +2516,20 @@ mod tests {
         let review = layout.lanes.iter().find(|l| l.label == "review").unwrap();
         let cx = build.rect.x + build.rect.w / 2.0;
         let cy = build.rect.y + build.rect.h / 2.0;
-        assert_eq!(lane_at(&layout.lanes, cx, cy).as_deref(), Some("build"));
+        assert2::assert!((lane_at(&layout.lanes, cx, cy).as_deref()) == (Some("build")));
+        assert2::assert!(
+            (lane_at(&layout.lanes, build.rect.x, build.rect.y).as_deref()) == (Some("build"))
+        );
+        assert2::assert!((lane_at(&layout.lanes, build.rect.x + build.rect.w, cy)) == (None));
+        assert2::assert!((lane_at(&layout.lanes, cx, build.rect.y + build.rect.h)) == (None));
         // The separation gap between two bands belongs to no lane.
         let gap_y = (build.rect.y + build.rect.h + review.rect.y) / 2.0;
-        assert_eq!(lane_at(&layout.lanes, cx, gap_y), None, "gap = no lane");
-        assert_eq!(
-            lane_at(&layout.lanes, cx, build.rect.y - 5000.0),
-            None,
+        assert2::assert!(
+            (lane_at(&layout.lanes, cx, gap_y)) == (None),
+            "gap = no lane"
+        );
+        assert2::assert!(
+            (lane_at(&layout.lanes, cx, build.rect.y - 5000.0)) == (None),
             "far away = no lane"
         );
     }
@@ -1706,14 +2553,14 @@ mod tests {
         );
         let band = layout.lanes.iter().find(|l| l.label == "build").unwrap();
         let rb = layout.rects[&NodeId::from("b")];
-        assert!(
+        assert2::assert!(
             band.rect.y + band.rect.h >= rb.y + rb.h,
             "band {:?} encloses pinned card {rb:?}",
             band.rect
         );
-        assert_eq!(
-            lane_at(&layout.lanes, rb.x + rb.w / 2.0, rb.y + rb.h / 2.0).as_deref(),
-            Some("build"),
+        assert2::assert!(
+            (lane_at(&layout.lanes, rb.x + rb.w / 2.0, rb.y + rb.h / 2.0).as_deref())
+                == (Some("build")),
             "a drop deep inside the grown band stays in the lane"
         );
     }
@@ -1733,14 +2580,14 @@ mod tests {
         );
         let a = layout.lanes.iter().find(|l| l.label == "a").unwrap();
         let b = layout.lanes.iter().find(|l| l.label == "b").unwrap();
-        assert!(
+        assert2::assert!(
             b.rect.y >= a.rect.y + a.rect.h + LANE_SEP - 1e-6,
             "band b {:?} sits at least LANE_SEP below grown band a {:?}",
             b.rect,
             a.rect
         );
         let rn = layout.rects[&NodeId::from("n")];
-        assert!(
+        assert2::assert!(
             rn.y >= b.rect.y,
             "b's auto-placed card {rn:?} moved down with its band {:?}",
             b.rect
@@ -1764,14 +2611,14 @@ mod tests {
         );
         let b = layout.lanes.iter().find(|l| l.label == "b").unwrap();
         let rm = layout.rects[&NodeId::from("m")];
-        assert!(
+        assert2::assert!(
             rm.y >= b.rect.y && rm.y + rm.h <= b.rect.y + b.rect.h,
             "member {rm:?} sits inside its band {:?}",
             b.rect
         );
-        assert_eq!(
-            lane_at(&layout.lanes, rm.x + rm.w / 2.0, rm.y + rm.h / 2.0).as_deref(),
-            Some("b"),
+        assert2::assert!(
+            (lane_at(&layout.lanes, rm.x + rm.w / 2.0, rm.y + rm.h / 2.0).as_deref())
+                == (Some("b")),
             "the member's center resolves to its own lane"
         );
     }
@@ -1785,7 +2632,7 @@ mod tests {
             &["review".to_owned()],
         );
         let review = layout.lanes.iter().find(|l| l.label == "review").unwrap();
-        assert!(
+        assert2::assert!(
             review.rect.h >= LANE_MIN_H,
             "empty band {:?} is at least LANE_MIN_H tall",
             review.rect

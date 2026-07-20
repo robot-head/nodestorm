@@ -941,7 +941,108 @@ pub fn Canvas(
 
 #[cfg(test)]
 mod tests {
-    use super::group_outline_rects;
+    use super::{edge_kind_label, group_outline_rects};
+    use crate::model::EdgeKind;
+    use yare::parameterized;
+
+    #[parameterized(
+        depends_on = { EdgeKind::DependsOn, "depends" },
+        data_flow = { EdgeKind::DataFlow, "data" },
+        contains = { EdgeKind::Contains, "contains" },
+        other = { EdgeKind::Other, "other" },
+    )]
+    fn edge_kind_labels_are_exact(kind: EdgeKind, expected: &str) {
+        assert2::assert!(edge_kind_label(kind) == expected);
+    }
+
+    #[test]
+    fn group_outline_uses_exact_union_and_padding() {
+        use crate::layout::{Layout, Rect};
+        use crate::model::{Node, NodeId, SessionDoc};
+
+        let mut first: Node = serde_json::from_value(serde_json::json!({
+            "id": "first", "label": "First", "group": "g"
+        }))
+        .unwrap();
+        let second: Node = serde_json::from_value(serde_json::json!({
+            "id": "second", "label": "Second", "group": "g"
+        }))
+        .unwrap();
+        let wide: Node = serde_json::from_value(serde_json::json!({
+            "id": "wide", "label": "Wide", "group": "h"
+        }))
+        .unwrap();
+        let inset: Node = serde_json::from_value(serde_json::json!({
+            "id": "inset", "label": "Inset", "group": "h"
+        }))
+        .unwrap();
+        first.position = None;
+        let doc = SessionDoc {
+            nodes: vec![first, second, wide, inset],
+            ..SessionDoc::default()
+        };
+        let mut layout = Layout::default();
+        layout.rects.insert(
+            NodeId::from("first"),
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                w: 100.0,
+                h: 50.0,
+            },
+        );
+        layout.rects.insert(
+            NodeId::from("second"),
+            Rect {
+                x: 200.0,
+                y: 40.0,
+                w: 40.0,
+                h: 100.0,
+            },
+        );
+        layout.rects.insert(
+            NodeId::from("wide"),
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                w: 300.0,
+                h: 200.0,
+            },
+        );
+        layout.rects.insert(
+            NodeId::from("inset"),
+            Rect {
+                x: 0.0,
+                y: 30.0,
+                w: 10.0,
+                h: 10.0,
+            },
+        );
+
+        assert2::assert!(
+            (group_outline_rects(&doc, &layout))
+                == (vec![
+                    (
+                        "g".to_owned(),
+                        Rect {
+                            x: -8.0,
+                            y: 2.0,
+                            w: 266.0,
+                            h: 156.0,
+                        }
+                    ),
+                    (
+                        "h".to_owned(),
+                        Rect {
+                            x: -18.0,
+                            y: 2.0,
+                            w: 346.0,
+                            h: 236.0,
+                        }
+                    )
+                ])
+        );
+    }
 
     #[test]
     fn group_outlines_bound_each_expanded_group() {
@@ -949,7 +1050,7 @@ mod tests {
         let doc = crate::demo::big_doc(24);
         let layout = crate::layout::compute(&doc);
         let outlines = group_outline_rects(&doc, &layout);
-        assert_eq!(outlines.len(), 2, "one outline per expanded group");
+        assert2::assert!((outlines.len()) == (2), "one outline per expanded group");
         for (group, rect) in &outlines {
             // Every member card sits inside its group's outline.
             for node in doc
@@ -958,7 +1059,7 @@ mod tests {
                 .filter(|n| n.group.as_deref() == Some(group.as_str()))
             {
                 let m = layout.rects[&node.id];
-                assert!(
+                assert2::assert!(
                     rect.x <= m.x
                         && rect.y <= m.y
                         && rect.x + rect.w >= m.x + m.w

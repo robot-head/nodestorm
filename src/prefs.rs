@@ -115,13 +115,17 @@ mod tests {
 
     #[test]
     fn defaults_are_nodestorm_auto() {
-        let prefs = Preferences::default();
-        assert_eq!(prefs.version, Preferences::VERSION);
-        assert_eq!(prefs.theme, theme::DEFAULT_FAMILY);
-        assert_eq!(prefs.mode, Mode::Auto);
-        assert_eq!(
-            default_prefs_path().unwrap().file_name().unwrap(),
-            "preferences.json"
+        assert2::assert!(
+            Preferences::default()
+                == Preferences {
+                    version: Preferences::VERSION,
+                    theme: theme::DEFAULT_FAMILY.into(),
+                    mode: Mode::Auto,
+                    recent_repositories: Vec::new(),
+                }
+        );
+        assert2::assert!(
+            (default_prefs_path().unwrap().file_name().unwrap()) == ("preferences.json")
         );
     }
 
@@ -135,19 +139,18 @@ mod tests {
             recent_repositories: vec!["/work/api".into()],
         };
         save(&path, &prefs).unwrap();
-        assert_eq!(load_or_default(&path), prefs);
+        assert2::assert!((load_or_default(&path)) == (prefs));
         // No temp residue.
         let mut tmp = path.as_os_str().to_owned();
         tmp.push(".tmp");
-        assert!(!PathBuf::from(tmp).exists());
+        assert2::assert!(!PathBuf::from(tmp).exists());
         std::fs::remove_file(&path).ok();
     }
 
     #[test]
     fn missing_file_is_default() {
-        assert_eq!(
-            load_or_default(Path::new("/definitely/not/here.json")),
-            Preferences::default()
+        assert2::assert!(
+            (load_or_default(Path::new("/definitely/not/here.json"))) == (Preferences::default())
         );
     }
 
@@ -155,10 +158,10 @@ mod tests {
     fn corrupt_file_is_default_and_moved_aside() {
         let path = tmp_path("prefs-corrupt.json");
         std::fs::write(&path, b"{ not json").unwrap();
-        assert_eq!(load_or_default(&path), Preferences::default());
-        assert!(!path.exists(), "corrupt file moved away");
+        assert2::assert!((load_or_default(&path)) == (Preferences::default()));
+        assert2::assert!(!path.exists(), "corrupt file moved away");
         let backup = path.with_extension("json.corrupt");
-        assert!(backup.exists());
+        assert2::assert!(backup.exists());
         std::fs::remove_file(backup).ok();
     }
 
@@ -171,9 +174,16 @@ mod tests {
         )
         .unwrap();
         let prefs = load_or_default(&path);
-        assert_eq!(prefs.theme, theme::DEFAULT_FAMILY);
-        assert_eq!(prefs.mode, Mode::Light);
-        assert!(path.exists(), "a parseable file is not moved aside");
+        assert2::assert!(
+            prefs
+                == Preferences {
+                    version: Preferences::VERSION,
+                    theme: theme::DEFAULT_FAMILY.into(),
+                    mode: Mode::Light,
+                    recent_repositories: Vec::new(),
+                }
+        );
+        assert2::assert!(path.exists(), "a parseable file is not moved aside");
         std::fs::remove_file(&path).ok();
     }
 
@@ -190,39 +200,36 @@ mod tests {
         };
         save(&path, &prefs).unwrap();
         let raw = std::fs::read_to_string(&path).unwrap();
-        assert!(raw.contains("\"theme\": \"gruvbox\""), "raw: {raw}");
-        assert!(raw.contains("\"mode\": \"light\""), "raw: {raw}");
+        assert2::assert!(raw.contains("\"theme\": \"gruvbox\""), "raw: {raw}");
+        assert2::assert!(raw.contains("\"mode\": \"light\""), "raw: {raw}");
         std::fs::remove_file(&path).ok();
     }
 
     #[test]
     fn record_repository_moves_to_front_dedups_and_caps() {
         let mut prefs = Preferences::default();
-        assert!(prefs.record_repository("/work/api"));
-        assert!(prefs.record_repository("/work/web"));
+        assert2::assert!(prefs.record_repository("/work/api"));
+        assert2::assert!(prefs.record_repository("/work/web"));
         // Re-recording an existing repo moves it to the front without dupes.
-        assert!(prefs.record_repository("/work/api"));
-        assert_eq!(prefs.recent_repositories, ["/work/api", "/work/web"]);
+        assert2::assert!(prefs.record_repository("/work/api"));
+        assert2::assert!((prefs.recent_repositories) == (["/work/api", "/work/web"]));
         // Already-front and blank inputs are no-ops.
-        assert!(!prefs.record_repository("/work/api"));
-        assert!(!prefs.record_repository("   "));
+        assert2::assert!(!prefs.record_repository("/work/api"));
+        assert2::assert!(!prefs.record_repository("   "));
         // Trims and caps at MAX_RECENT_REPOS, dropping the oldest.
         for n in 0..Preferences::MAX_RECENT_REPOS {
-            assert!(prefs.record_repository(&format!("  /repo/{n}  ")));
+            assert2::assert!(prefs.record_repository(&format!("  /repo/{n}  ")));
         }
-        assert_eq!(
-            prefs.recent_repositories.len(),
-            Preferences::MAX_RECENT_REPOS
-        );
-        assert_eq!(prefs.recent_repositories[0], "/repo/7");
-        assert!(!prefs.recent_repositories.iter().any(|r| r == "/work/web"));
+        assert2::assert!((prefs.recent_repositories.len()) == (Preferences::MAX_RECENT_REPOS));
+        assert2::assert!((prefs.recent_repositories[0]) == ("/repo/7"));
+        assert2::assert!(!prefs.recent_repositories.iter().any(|r| r == "/work/web"));
     }
 
     #[test]
     fn missing_fields_get_defaults() {
         let path = tmp_path("prefs-sparse.json");
         std::fs::write(&path, br"{}").unwrap();
-        assert_eq!(load_or_default(&path), Preferences::default());
+        assert2::assert!((load_or_default(&path)) == (Preferences::default()));
         std::fs::remove_file(&path).ok();
     }
 }

@@ -854,6 +854,7 @@ mod tests {
     use crate::model::{
         Edge, EdgeKind, ElementStatus, Node, NodeId, NodeKind, Origin, QuestionId, SessionDoc,
     };
+    use yare::parameterized;
 
     fn tnode(id: &str, label: &str) -> Node {
         Node {
@@ -901,7 +902,7 @@ mod tests {
     fn mermaid_demo_has_all_nodes_and_edges() {
         let doc = demo_doc();
         let m = render_mermaid(&doc);
-        assert!(m.starts_with("flowchart LR\n"), "got: {m}");
+        assert2::assert!(m.starts_with("flowchart LR\n"), "got: {m}");
         for class_def in [
             "    classDef existing stroke:#566076,color:#566076",
             "    classDef proposed stroke:#6c9ef8,color:#6c9ef8",
@@ -909,7 +910,7 @@ mod tests {
             "    classDef affected stroke:#b48af8,color:#b48af8",
             "    classDef removed stroke:#f06a6a,color:#f06a6a,stroke-dasharray:4 3",
         ] {
-            assert!(m.contains(class_def), "missing {class_def:?} in: {m}");
+            assert2::assert!(m.contains(class_def), "missing {class_def:?} in: {m}");
         }
         // One line per node, shape per kind, status class attached.
         for node_line in [
@@ -922,27 +923,27 @@ mod tests {
             r#"redis[("Redis")]:::affected"#,
             r#"notes-service{{"Notes Service"}}:::modified"#,
         ] {
-            assert!(m.contains(node_line), "missing {node_line:?} in: {m}");
+            assert2::assert!(m.contains(node_line), "missing {node_line:?} in: {m}");
         }
         // Arrow per edge kind.
-        assert!(m.contains("    web-ui ==> api-gateway"), "data_flow: {m}");
-        assert!(
+        assert2::assert!(m.contains("    web-ui ==> api-gateway"), "data_flow: {m}");
+        assert2::assert!(
             m.contains("    api-gateway --> auth-service"),
             "depends_on: {m}"
         );
-        assert!(m.contains("    auth-service -.-> redis"), "contains: {m}");
+        assert2::assert!(m.contains("    auth-service -.-> redis"), "contains: {m}");
         // Every edge is emitted.
         let arrows = m
             .lines()
             .filter(|l| l.contains("-->") || l.contains("==>") || l.contains("-.->"))
             .count();
-        assert_eq!(arrows, doc.edges.len(), "in: {m}");
+        assert2::assert!((arrows) == (doc.edges.len()), "in: {m}");
     }
 
     #[test]
     fn mermaid_is_deterministic() {
         let doc = demo_doc();
-        assert_eq!(render_mermaid(&doc), render_mermaid(&doc));
+        assert2::assert!((render_mermaid(&doc)) == (render_mermaid(&doc)));
     }
 
     #[test]
@@ -954,6 +955,7 @@ mod tests {
                 tnode("näme", "C"),
                 tnode("has?space", "D"), // collides with "has space" after sanitizing
                 tnode("2fa", "E"),
+                tnode("has!space", "F"), // third collision exercises suffix increments
             ],
             vec![tedge(
                 "has space",
@@ -963,15 +965,19 @@ mod tests {
             )],
         );
         let m = render_mermaid(&doc);
-        assert!(m.contains(r#"has_space["A"]"#), "in: {m}");
-        assert!(m.contains(r#"n_end["B"]"#), "keyword prefixed, in: {m}");
-        assert!(m.contains(r#"n_me["C"]"#), "unicode replaced, in: {m}");
-        assert!(
+        assert2::assert!(m.contains(r#"has_space["A"]"#), "in: {m}");
+        assert2::assert!(m.contains(r#"n_end["B"]"#), "keyword prefixed, in: {m}");
+        assert2::assert!(m.contains(r#"n_me["C"]"#), "unicode replaced, in: {m}");
+        assert2::assert!(
             m.contains(r#"has_space_2["D"]"#),
             "collision suffixed, in: {m}"
         );
-        assert!(m.contains(r#"n_2fa["E"]"#), "digit start prefixed, in: {m}");
-        assert!(
+        assert2::assert!(
+            m.contains(r#"has_space_3["F"]"#),
+            "third collision, in: {m}"
+        );
+        assert2::assert!(m.contains(r#"n_2fa["E"]"#), "digit start prefixed, in: {m}");
+        assert2::assert!(
             m.contains("    has_space --> n_end"),
             "edge uses map, in: {m}"
         );
@@ -986,9 +992,9 @@ mod tests {
             vec![edge],
         );
         let m = render_mermaid(&doc);
-        assert!(m.contains(r#"a["say #quot;hi#quot;"]"#), "in: {m}");
-        assert!(m.contains(r#"a -->|"read#124;write"| b"#), "in: {m}");
-        assert!(
+        assert2::assert!(m.contains(r#"a["say #quot;hi#quot;"]"#), "in: {m}");
+        assert2::assert!(m.contains(r#"a -->|"read#124;write"| b"#), "in: {m}");
+        assert2::assert!(
             !m.contains(r#"say "hi""#),
             "raw quote must not survive: {m}"
         );
@@ -1007,17 +1013,17 @@ mod tests {
 
         let sg0 = m.find(r#"subgraph sg_0["Platform"]"#).expect("sg_0");
         let sg1 = m.find(r#"subgraph sg_1["Edge"]"#).expect("sg_1");
-        assert!(sg0 < sg1, "first-appearance order, in: {m}");
+        assert2::assert!(sg0 < sg1, "first-appearance order, in: {m}");
         let sg0_end = m[sg0..]
             .find("\n    end\n")
             .map(|i| sg0 + i)
             .expect("sg_0 end");
         for member in [r#"a["A"]"#, r#"c["C"]"#] {
             let pos = m.find(member).expect(member);
-            assert!(sg0 < pos && pos < sg0_end, "{member} inside sg_0, in: {m}");
+            assert2::assert!(sg0 < pos && pos < sg0_end, "{member} inside sg_0, in: {m}");
         }
         let b_pos = m.find(r#"b["B"]"#).expect("b");
-        assert!(
+        assert2::assert!(
             !(sg0 < b_pos && b_pos < sg0_end),
             "ungrouped b outside sg_0, in: {m}"
         );
@@ -1034,12 +1040,12 @@ mod tests {
             ],
         );
         let m = render_mermaid(&doc);
-        assert!(m.contains("    linkStyle 1 stroke:#6c9ef8"), "in: {m}");
-        assert!(
+        assert2::assert!(m.contains("    linkStyle 1 stroke:#6c9ef8"), "in: {m}");
+        assert2::assert!(
             m.contains("    linkStyle 2 stroke:#f06a6a,stroke-dasharray:4 3"),
             "in: {m}"
         );
-        assert!(!m.contains("linkStyle 0"), "existing edges unstyled: {m}");
+        assert2::assert!(!m.contains("linkStyle 0"), "existing edges unstyled: {m}");
 
         let plain = tdoc(
             vec![tnode("a", "A"), tnode("b", "B")],
@@ -1050,7 +1056,7 @@ mod tests {
                 ElementStatus::Existing,
             )],
         );
-        assert!(
+        assert2::assert!(
             !render_mermaid(&plain).contains("linkStyle"),
             "all-existing doc needs no linkStyle"
         );
@@ -1059,10 +1065,10 @@ mod tests {
     #[test]
     fn mermaid_empty_doc() {
         let m = render_mermaid(&SessionDoc::default());
-        assert!(m.starts_with("flowchart LR\n"), "got: {m}");
-        assert!(m.contains("classDef existing"), "in: {m}");
-        assert!(!m.contains("subgraph"), "in: {m}");
-        assert!(!m.contains("-->"), "in: {m}");
+        assert2::assert!(m.starts_with("flowchart LR\n"), "got: {m}");
+        assert2::assert!(m.contains("classDef existing"), "in: {m}");
+        assert2::assert!(!m.contains("subgraph"), "in: {m}");
+        assert2::assert!(!m.contains("-->"), "in: {m}");
     }
 
     // ---------- markdown ----------
@@ -1141,84 +1147,120 @@ mod tests {
     }
 
     #[test]
+    fn decision_log_lookup_matches_both_node_and_choice() {
+        let selections = vec![
+            selected_event(1, "target-node", "target-choice", "target", &[]),
+            selected_event(2, "target-node", "other-choice", "wrong-choice", &[]),
+            selected_event(3, "other-node", "target-choice", "wrong-node", &[]),
+        ];
+        let (event, option, _) = last_selection(
+            &selections,
+            &NodeId::from("target-node"),
+            &"target-choice".into(),
+        )
+        .unwrap();
+        assert2::assert!((event.seq) == (1));
+        assert2::assert!((option.as_str()) == ("target"));
+
+        let dismissals = vec![
+            dismissed_event(1, "target-node", "target-choice", Some("target")),
+            dismissed_event(2, "target-node", "other-choice", Some("wrong choice")),
+            dismissed_event(3, "other-node", "target-choice", Some("wrong node")),
+        ];
+        let (event, reason) = last_dismissal(
+            &dismissals,
+            &NodeId::from("target-node"),
+            &"target-choice".into(),
+        )
+        .unwrap();
+        assert2::assert!((event.seq) == (1));
+        assert2::assert!((reason) == (Some("target")));
+    }
+
+    #[test]
+    fn public_kind_name_matches_markdown_name() {
+        assert2::assert!((kind_name_pub(NodeKind::Service)) == ("service"));
+    }
+
+    #[test]
     fn markdown_demo_full_record() {
         let (doc, log) = decided_demo();
         let md = render_markdown(&doc, &log, ts());
-        assert!(
+        assert2::assert!(
             md.starts_with("# Realtime collaboration for the notes app\n"),
             "got: {md}"
         );
         // No session revision in the preamble: every store mutation bumps it
         // (including recording the export itself), so embedding it would make
         // back-to-back exports of an unchanged graph differ.
-        assert!(
+        assert2::assert!(
             md.contains("_Decision record exported from a nodestorm brainstorm on 2026-07-17._"),
             "preamble, in: {md}"
         );
-        assert!(!md.contains("session revision"), "in: {md}");
-        assert!(
+        assert2::assert!(!md.contains("session revision"), "in: {md}");
+        assert2::assert!(
             md.contains("**11 components · 1 decided · 1 dismissed · 0 open**"),
             "counts, in: {md}"
         );
-        assert!(md.contains("## Architecture"), "in: {md}");
-        assert!(md.contains("```mermaid\nflowchart LR\n"), "fence, in: {md}");
-        assert!(md.contains("### Components"), "in: {md}");
-        assert!(
+        assert2::assert!(md.contains("## Architecture"), "in: {md}");
+        assert2::assert!(md.contains("```mermaid\nflowchart LR\n"), "fence, in: {md}");
+        assert2::assert!(md.contains("### Components"), "in: {md}");
+        assert2::assert!(
             md.contains(
                 "- **PostgreSQL** (data_store, existing) — Primary storage for notes and users"
             ),
             "component line, in: {md}"
         );
-        assert!(md.contains("## Decisions"), "in: {md}");
-        assert!(
+        assert2::assert!(md.contains("## Decisions"), "in: {md}");
+        assert2::assert!(
             md.contains("### How should concurrent edits be reconciled? — Sync Engine"),
             "in: {md}"
         );
-        assert!(
+        assert2::assert!(
             md.contains("Realtime collaboration means two clients editing one note at once"),
             "rationale, in: {md}"
         );
-        assert!(
+        assert2::assert!(
             md.contains("**Decision: CRDTs ★ agent-recommended** — Conflict-free replicated data types (e.g. Yjs-style) merge automatically."),
             "in: {md}"
         );
-        assert!(
+        assert2::assert!(
             md.contains("- Pros: No central sequencing required; Offline edits merge cleanly"),
             "in: {md}"
         );
-        assert!(
+        assert2::assert!(
             md.contains(
                 "- Cons (accepted): Document format changes (stored as CRDT state); Larger payloads"
             ),
             "in: {md}"
         );
-        assert!(md.contains("Also considered:"), "in: {md}");
-        assert!(
+        assert2::assert!(md.contains("Also considered:"), "in: {md}");
+        assert2::assert!(
             md.contains("- **Operational Transform** — Central server transforms and sequences concurrent operations."),
             "in: {md}"
         );
-        assert!(
+        assert2::assert!(
             md.contains("_Decided 2026-07-17, after first exploring Operational Transform._"),
             "trail (final pick filtered out), in: {md}"
         );
-        assert!(md.contains("## Dismissed decisions"), "in: {md}");
-        assert!(
+        assert2::assert!(md.contains("## Dismissed decisions"), "in: {md}");
+        assert2::assert!(
             md.contains("- **Where should websocket connections terminate?** (WebSocket Gateway) — reason: out of scope for v1, dismissed 2026-07-17"),
             "in: {md}"
         );
-        assert!(md.contains("## Questions answered"), "in: {md}");
-        assert!(
+        assert2::assert!(md.contains("## Questions answered"), "in: {md}");
+        assert2::assert!(
             md.contains("**How long should full edit history be retained once notes go realtime?** (PostgreSQL) — 90 days of full history, then squash to daily snapshots"),
             "in: {md}"
         );
-        assert!(!md.contains("## Open questions"), "none open, in: {md}");
+        assert2::assert!(!md.contains("## Open questions"), "none open, in: {md}");
     }
 
     #[test]
     fn markdown_open_choice_shows_dependency_lock() {
         // demo: ws-deployment is locked behind conflict-resolution.
         let md = render_markdown(&demo_doc(), &[], ts());
-        assert!(
+        assert2::assert!(
             md.contains("locked, waiting on: How should concurrent edits be reconciled?"),
             "{md}"
         );
@@ -1247,7 +1289,7 @@ mod tests {
             reopen: false,
         }];
         let md = render_markdown(&tdoc(vec![node], vec![]), &[], ts());
-        assert!(md.contains("Flagged for review"), "{md}");
+        assert2::assert!(md.contains("Flagged for review"), "{md}");
     }
 
     #[test]
@@ -1258,16 +1300,16 @@ mod tests {
         cache.build = Some(BuildStatus::Building);
         let doc = tdoc(vec![api, cache, tnode("web", "Web")], vec![]);
         let md = render_markdown(&doc, &[], ts());
-        assert!(md.contains("## Implementation status"), "{md}");
-        assert!(md.contains("**1/2 shipped**"), "{md}");
-        assert!(md.contains("- [x] **API** — verified"), "{md}");
-        assert!(md.contains("- [ ] **Cache** — building"), "{md}");
+        assert2::assert!(md.contains("## Implementation status"), "{md}");
+        assert2::assert!(md.contains("**1/2 shipped**"), "{md}");
+        assert2::assert!(md.contains("- [x] **API** — verified"), "{md}");
+        assert2::assert!(md.contains("- [ ] **Cache** — building"), "{md}");
         // The component inventory gains the build column, untracked nodes omit it.
-        assert!(
+        assert2::assert!(
             md.contains("- **API** (component, existing, verified)"),
             "{md}"
         );
-        assert!(md.contains("- **Web** (component, existing)"), "{md}");
+        assert2::assert!(md.contains("- **Web** (component, existing)"), "{md}");
     }
 
     #[test]
@@ -1292,17 +1334,17 @@ mod tests {
             },
         ];
         let md = render_markdown(&doc, &[], ts());
-        assert!(md.contains("## Questions answered"), "{md}");
-        assert!(
+        assert2::assert!(md.contains("## Questions answered"), "{md}");
+        assert2::assert!(
             md.contains("**Which environment ships first?** (API) — staging"),
             "{md}"
         );
-        assert!(md.contains("## Open questions"), "{md}");
-        assert!(
+        assert2::assert!(md.contains("## Open questions"), "{md}");
+        assert2::assert!(
             md.contains("**What's the latency budget?** — awaiting answer"),
             "{md}"
         );
-        assert!(md.contains("why: shapes the cache"), "{md}");
+        assert2::assert!(md.contains("why: shapes the cache"), "{md}");
     }
 
     #[test]
@@ -1332,17 +1374,17 @@ mod tests {
             },
         ];
         let md = render_markdown(&doc, &[], ts());
-        assert!(md.contains("## Annotations"), "{md}");
-        assert!(md.contains("- note: revisit auth"), "{md}");
-        assert!(md.contains("- region at (0, 0)"), "{md}");
+        assert2::assert!(md.contains("## Annotations"), "{md}");
+        assert2::assert!(md.contains("- note: revisit auth"), "{md}");
+        assert2::assert!(md.contains("- region at (0, 0)"), "{md}");
     }
 
     #[test]
     fn empty_record_still_carries_a_diffable_snapshot() {
         let md = render_markdown(&SessionDoc::default(), &[], ts());
-        assert!(md.contains("_Empty session"), "{md}");
+        assert2::assert!(md.contains("_Empty session"), "{md}");
         let parsed = parse_record(&md).expect("even an empty record is diff-able");
-        assert!(parsed.nodes.is_empty());
+        assert2::assert!(parsed.nodes.is_empty());
     }
 
     #[test]
@@ -1367,8 +1409,8 @@ mod tests {
         }];
         let md = render_markdown(&doc, &[], ts());
         let parsed = parse_record(&md).expect("snapshot round-trips despite -->");
-        assert_eq!(parsed.nodes[0].notes[0].text, "watch out --> here");
-        assert_eq!(parsed.annotations[0].text, "also --> this");
+        assert2::assert!((parsed.nodes[0].notes[0].text) == ("watch out --> here"));
+        assert2::assert!((parsed.annotations[0].text) == ("also --> this"));
     }
 
     #[test]
@@ -1376,59 +1418,62 @@ mod tests {
         let doc = demo_doc();
         let md = render_markdown(&doc, &[], ts());
         // Embedded as an HTML comment (invisible when rendered), not a heading.
-        assert!(md.contains("<!-- nodestorm-record v1"), "{md}");
+        assert2::assert!(md.contains("<!-- nodestorm-record v1"), "{md}");
         let parsed = parse_record(&md).expect("snapshot present");
-        assert_eq!(parsed.nodes.len(), doc.nodes.len());
-        assert_eq!(parsed.title, doc.title);
-        assert_eq!(parsed.revision, 0, "revision normalized");
-        assert!(
+        assert2::assert!((parsed.nodes.len()) == (doc.nodes.len()));
+        assert2::assert!((parsed.title) == (doc.title));
+        assert2::assert!((parsed.revision) == (0), "revision normalized");
+        assert2::assert!(
             parsed.nodes.iter().all(|n| n.position.is_none()),
             "positions stripped"
         );
         // Deterministic: re-render is byte-identical.
-        assert_eq!(md, render_markdown(&doc, &[], ts()));
+        assert2::assert!((md) == (render_markdown(&doc, &[], ts())));
         // Nothing to parse in unrelated text.
-        assert!(parse_record("just some markdown, no snapshot").is_none());
+        assert2::assert!(parse_record("just some markdown, no snapshot").is_none());
     }
 
     #[test]
     fn markdown_is_deterministic() {
         let (doc, log) = decided_demo();
-        assert_eq!(
-            render_markdown(&doc, &log, ts()),
-            render_markdown(&doc, &log, ts())
+        assert2::assert!(
+            (render_markdown(&doc, &log, ts())) == (render_markdown(&doc, &log, ts()))
         );
     }
 
     #[test]
     fn markdown_empty_doc() {
         let md = render_markdown(&SessionDoc::default(), &[], ts());
-        assert!(md.starts_with("# Untitled brainstorm\n"), "got: {md}");
-        assert!(
+        assert2::assert!(md.starts_with("# Untitled brainstorm\n"), "got: {md}");
+        assert2::assert!(
             md.contains("_Empty session — nothing on the canvas yet._"),
             "in: {md}"
         );
-        assert!(!md.contains("## Architecture"), "in: {md}");
-        assert!(!md.contains("components ·"), "no counts line, in: {md}");
-        assert!(!md.contains("## Decisions"), "in: {md}");
-        assert!(!md.contains("## Open questions"), "in: {md}");
+        assert2::assert!(!md.contains("## Architecture"), "in: {md}");
+        assert2::assert!(!md.contains("components ·"), "no counts line, in: {md}");
+        assert2::assert!(!md.contains("## Decisions"), "in: {md}");
+        assert2::assert!(!md.contains("## Questions answered"), "in: {md}");
+        assert2::assert!(!md.contains("## Open questions"), "in: {md}");
     }
 
     #[test]
     fn markdown_open_only() {
-        let md = render_markdown(&demo_doc(), &[], ts());
-        assert!(md.contains("## Open questions"), "in: {md}");
-        assert!(
+        let mut doc = demo_doc();
+        doc.questions.clear();
+        let md = render_markdown(&doc, &[], ts());
+        assert2::assert!(md.contains("## Open questions"), "in: {md}");
+        assert2::assert!(
             md.contains("- **How should concurrent edits be reconciled?** (Sync Engine) — options: CRDTs ★ / Operational Transform / Last-write-wins"),
             "in: {md}"
         );
-        assert!(
+        assert2::assert!(
             md.contains("- **Where should websocket connections terminate?** (WebSocket Gateway) — options: Dedicated gateway service ★ / Inside the API gateway"),
             "in: {md}"
         );
-        assert!(!md.contains("## Decisions"), "in: {md}");
-        assert!(!md.contains("## Dismissed decisions"), "in: {md}");
-        assert!(
+        assert2::assert!(!md.contains("## Decisions"), "in: {md}");
+        assert2::assert!(!md.contains("## Dismissed decisions"), "in: {md}");
+        assert2::assert!(!md.contains("## Questions answered"), "in: {md}");
+        assert2::assert!(
             md.contains("**11 components · 0 decided · 0 dismissed · 2 open**"),
             "in: {md}"
         );
@@ -1439,16 +1484,16 @@ mod tests {
         let mut doc = demo_doc();
         doc.nodes[5].choices[0].status = ChoiceStatus::Dismissed;
         let md = render_markdown(&doc, &[], ts());
-        assert!(md.contains("## Dismissed decisions"), "in: {md}");
+        assert2::assert!(md.contains("## Dismissed decisions"), "in: {md}");
         // No log event → no reason, no date.
-        assert!(
+        assert2::assert!(
             md.contains(
                 "- **Where should websocket connections terminate?** (WebSocket Gateway)\n"
             ),
             "bare bullet, in: {md}"
         );
-        assert!(!md.contains("reason:"), "in: {md}");
-        assert!(!md.contains("## Decisions"), "in: {md}");
+        assert2::assert!(!md.contains("reason:"), "in: {md}");
+        assert2::assert!(!md.contains("## Decisions"), "in: {md}");
     }
 
     #[test]
@@ -1458,22 +1503,57 @@ mod tests {
         doc.nodes[4].choices[0].selected = Some("crdt".into());
         doc.nodes[4].choices[0].status = ChoiceStatus::Decided;
         let md = render_markdown(&doc, &[], ts());
-        assert!(md.contains("**Decision: CRDTs"), "in: {md}");
-        assert!(
+        assert2::assert!(md.contains("**Decision: CRDTs"), "in: {md}");
+        assert2::assert!(
             !md.contains("_Decided"),
             "no event → no date line, in: {md}"
         );
-        assert!(!md.contains("after first exploring"), "in: {md}");
+        assert2::assert!(!md.contains("after first exploring"), "in: {md}");
 
         // Decided with no recorded option (reachable via GraphOp::ResolveChoice).
         let mut doc = demo_doc();
         doc.nodes[4].choices[0].selected = None;
         doc.nodes[4].choices[0].status = ChoiceStatus::Decided;
         let md = render_markdown(&doc, &[], ts());
-        assert!(
+        assert2::assert!(
             md.contains("**Decision: closed without a recorded option**"),
             "in: {md}"
         );
+    }
+
+    #[parameterized(
+        pros_only = {
+            vec!["pro".into()],
+            vec![],
+            "- Pros: pro\n\nAlso considered:",
+            "(pros: pro; cons: )"
+        },
+        cons_only = {
+            vec![],
+            vec!["con".into()],
+            "- Cons (accepted): con\n\nAlso considered:",
+            "(pros: ; cons: con)"
+        },
+    )]
+    fn markdown_decision_formats_one_sided_pros_and_cons(
+        pros: Vec<String>,
+        cons: Vec<String>,
+        selected: &str,
+        alternative: &str,
+    ) {
+        let mut doc = demo_doc();
+        let choice = &mut doc.nodes[4].choices[0];
+        choice.selected = Some("crdt".into());
+        choice.status = ChoiceStatus::Decided;
+        choice.options.truncate(2);
+        choice.options[0].pros = pros;
+        choice.options[0].cons = cons;
+        choice.options[1].pros = choice.options[0].pros.clone();
+        choice.options[1].cons = choice.options[0].cons.clone();
+
+        let md = render_markdown(&doc, &[], ts());
+        assert2::assert!(md.contains(selected), "in: {md}");
+        assert2::assert!(md.contains(alternative), "in: {md}");
     }
 
     #[test]
@@ -1485,7 +1565,7 @@ mod tests {
             created_at: ts(),
         });
         let md = render_markdown(&doc, &[], ts());
-        assert!(
+        assert2::assert!(
             md.contains("  - note (2026-07-17): Must keep working offline"),
             "in: {md}"
         );
@@ -1537,20 +1617,20 @@ mod tests {
         .enumerate()
         {
             let pos = tail.find(line);
-            assert!(pos.is_some(), "line {i} missing: {line}\nin: {tail}");
+            assert2::assert!(pos.is_some(), "line {i} missing: {line}\nin: {tail}");
         }
         // Chronological (seq) order within the section.
         let picked = tail.find("picked").unwrap();
         let dismissed = tail.find("dismissed").unwrap();
         let comment = tail.find("comment:").unwrap();
         let added = tail.find("added component").unwrap();
-        assert!(picked < dismissed && dismissed < comment && comment < added);
+        assert2::assert!(picked < dismissed && dismissed < comment && comment < added);
     }
 
     #[test]
     fn markdown_no_log_no_session_log_section() {
         let md = render_markdown(&demo_doc(), &[], ts());
-        assert!(!md.contains("## Session log"), "in: {md}");
+        assert2::assert!(!md.contains("## Session log"), "in: {md}");
     }
 
     #[test]
@@ -1559,12 +1639,12 @@ mod tests {
         a.group = Some("Platform".into());
         let b = tnode("b", "Beta");
         let md = render_markdown(&tdoc(vec![a, b], vec![]), &[], ts());
-        assert!(md.contains("#### Platform"), "in: {md}");
-        assert!(md.contains("#### Ungrouped"), "in: {md}");
+        assert2::assert!(md.contains("#### Platform"), "in: {md}");
+        assert2::assert!(md.contains("#### Ungrouped"), "in: {md}");
         let plat = md.find("#### Platform").unwrap();
         let ungrouped = md.find("#### Ungrouped").unwrap();
         let alpha = md.find("- **Alpha**").unwrap();
-        assert!(
+        assert2::assert!(
             plat < alpha && alpha < ungrouped,
             "alpha under Platform: {md}"
         );

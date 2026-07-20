@@ -79,3 +79,36 @@ pub fn ThemeRows(on_pick: EventHandler<()>) -> Element {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn persist_writes_the_selected_preferences() {
+        let path =
+            std::env::temp_dir().join(format!("nodestorm-theme-prefs-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let cli = Cli {
+            port: 4747,
+            session: None,
+            sessions_dir: None,
+            prefs: Some(path.clone()),
+            demo: false,
+            demo_big: None,
+            headless: true,
+            window_size: None,
+        };
+        let prefs = Preferences {
+            version: Preferences::VERSION,
+            theme: "solarized".into(),
+            mode: Mode::Dark,
+            recent_repositories: vec![],
+        };
+
+        persist(&cli, &prefs);
+
+        assert2::assert!((crate::prefs::load_or_default(&path)) == (prefs));
+        std::fs::remove_file(path).unwrap();
+    }
+}

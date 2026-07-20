@@ -718,11 +718,11 @@ mod tests {
     fn open_creates_default_when_empty() {
         let root = tmp_root("empty");
         let sessions = Sessions::open(root.join("sessions"), None).unwrap();
-        assert_eq!(sessions.active_name(), "default");
+        assert2::assert!((sessions.active_name()) == ("default"));
         let list = sessions.list();
-        assert_eq!(list.len(), 1);
-        assert!(list[0].active);
-        assert_eq!(list[0].name, "default");
+        assert2::assert!((list.len()) == (1));
+        assert2::assert!(list[0].active);
+        assert2::assert!((list[0].name) == ("default"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -731,19 +731,21 @@ mod tests {
         let root = tmp_root("migrate");
         let store = crate::store::Store::with_doc(demo_doc());
         crate::persist::save(&root.join("session.json"), &store.snapshot_state()).unwrap();
+        std::fs::create_dir(root.join("sessions")).unwrap();
+        std::fs::write(root.join("sessions").join("README.txt"), "not a session").unwrap();
 
         let sessions = Sessions::open(root.join("sessions"), None).unwrap();
-        assert_eq!(sessions.active_name(), "default");
+        assert2::assert!((sessions.active_name()) == ("default"));
         let doc = sessions.active_store().snapshot_doc();
-        assert!(
+        assert2::assert!(
             doc.node(&NodeId::from("sync-engine")).is_some(),
             "legacy content migrated into default"
         );
-        assert!(
+        assert2::assert!(
             !root.join("session.json").exists(),
             "legacy file moved, not copied"
         );
-        assert!(root.join("sessions").join("default.json").exists());
+        assert2::assert!(root.join("sessions").join("default.json").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -752,10 +754,11 @@ mod tests {
         let root = tmp_root("pin");
         let pinned = root.join("nodestorm-verify-session-4799.json");
         let sessions = Sessions::open(root.join("sessions"), Some(pinned.clone())).unwrap();
-        assert_eq!(sessions.active_name(), "nodestorm-verify-session-4799");
+        assert2::assert!((sessions.active_name()) == ("nodestorm-verify-session-4799"));
+        assert2::assert!((sessions.active_path()) == (pinned));
         // Saving lands in the pinned file, not the sessions dir.
         sessions.save_all();
-        assert!(pinned.exists());
+        assert2::assert!(pinned.exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -763,10 +766,11 @@ mod tests {
     fn create_slugs_and_dedups() {
         let root = tmp_root("create");
         let sessions = Sessions::open(root.join("sessions"), None).unwrap();
-        assert_eq!(sessions.create("My Thing").unwrap(), "my-thing");
-        assert_eq!(sessions.create("My Thing").unwrap(), "my-thing-2");
-        assert!(root.join("sessions").join("my-thing.json").exists());
-        assert_eq!(sessions.list().len(), 3);
+        assert2::assert!((sessions.create("My Thing").unwrap()) == ("my-thing"));
+        assert2::assert!((sessions.create("My Thing").unwrap()) == ("my-thing-2"));
+        assert2::assert!((sessions.create("My Thing").unwrap()) == ("my-thing-3"));
+        assert2::assert!(root.join("sessions").join("my-thing.json").exists());
+        assert2::assert!((sessions.list().len()) == (4));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -778,12 +782,12 @@ mod tests {
         let mut generation = sessions.subscribe_generation();
         let before = *generation.borrow_and_update();
         sessions.switch("alpha").unwrap();
-        assert_eq!(sessions.active_name(), "alpha");
-        assert!(
+        assert2::assert!((sessions.active_name()) == ("alpha"));
+        assert2::assert!(
             *generation.borrow_and_update() > before,
             "generation bumped"
         );
-        assert!(sessions.switch("ghost").is_err());
+        assert2::assert!(sessions.switch("ghost").is_err());
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -793,13 +797,13 @@ mod tests {
         let sessions = Sessions::open(root.join("sessions"), None).unwrap();
         sessions.create("alpha").unwrap();
         let active = sessions.resolve(None).unwrap();
-        assert!(Arc::ptr_eq(&active, &sessions.active_store()));
+        assert2::assert!(Arc::ptr_eq(&active, &sessions.active_store()));
         // Lookups slugify, so display names find their slug.
-        assert!(sessions.resolve(Some("Alpha")).is_ok());
+        assert2::assert!(sessions.resolve(Some("Alpha")).is_ok());
         let err = sessions.resolve(Some("ghost")).unwrap_err();
-        assert!(err.contains("unknown session"), "{err}");
-        assert!(err.contains("available"), "{err}");
-        assert!(err.contains("alpha"), "{err}");
+        assert2::assert!(err.contains("unknown session"), "{err}");
+        assert2::assert!(err.contains("available"), "{err}");
+        assert2::assert!(err.contains("alpha"), "{err}");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -812,18 +816,18 @@ mod tests {
 
         // Archiving the ACTIVE session switches to a survivor first.
         sessions.archive("alpha").unwrap();
-        assert_eq!(sessions.active_name(), "default");
-        assert!(
+        assert2::assert!((sessions.active_name()) == ("default"));
+        assert2::assert!(
             root.join("sessions")
                 .join("archive")
                 .join("alpha.json")
                 .exists(),
             "archived file moved into archive/"
         );
-        assert!(sessions.get("alpha").is_none());
+        assert2::assert!(sessions.get("alpha").is_none());
 
         // The last remaining session cannot be archived.
-        assert!(sessions.archive("default").is_err());
+        assert2::assert!(sessions.archive("default").is_err());
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -838,17 +842,17 @@ mod tests {
         let before = *generation.borrow_and_update();
 
         let slug = sessions.rename("alpha", "Big Plan").unwrap();
-        assert_eq!(slug, "big-plan");
-        assert_eq!(sessions.active_name(), "big-plan", "active follows");
-        assert!(sessions.get("alpha").is_none());
+        assert2::assert!((slug) == ("big-plan"));
+        assert2::assert!((sessions.active_name()) == ("big-plan"), "active follows");
+        assert2::assert!(sessions.get("alpha").is_none());
         let store_after = sessions.get("big-plan").unwrap();
-        assert!(
+        assert2::assert!(
             Arc::ptr_eq(&store_before, &store_after),
             "same store, new name — in-flight awaits keep working"
         );
-        assert!(root.join("sessions").join("big-plan.json").exists());
-        assert!(!root.join("sessions").join("alpha.json").exists());
-        assert!(*generation.borrow_and_update() > before);
+        assert2::assert!(root.join("sessions").join("big-plan.json").exists());
+        assert2::assert!(!root.join("sessions").join("alpha.json").exists());
+        assert2::assert!(*generation.borrow_and_update() > before);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -857,9 +861,10 @@ mod tests {
         let root = tmp_root("rename-dedup");
         let sessions = Sessions::open(root.join("sessions"), None).unwrap();
         sessions.create("alpha").unwrap();
+        sessions.create("alpha").unwrap();
         sessions.create("beta").unwrap();
         let slug = sessions.rename("beta", "alpha").unwrap();
-        assert_eq!(slug, "alpha-2", "collides with live alpha");
+        assert2::assert!((slug) == ("alpha-3"), "collides with both live alpha names");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -884,34 +889,33 @@ mod tests {
 
         let mut changes = sessions.subscribe_connections();
         let before = *changes.borrow_and_update();
-        assert_eq!(sessions.rename("alpha", "Big Plan").unwrap(), "big-plan");
+        assert2::assert!((sessions.rename("alpha", "Big Plan").unwrap()) == ("big-plan"));
 
-        assert!(changes.has_changed().unwrap());
-        assert_eq!(*changes.borrow_and_update(), before + 1);
-        assert!(matches!(
+        assert2::assert!(changes.has_changed().unwrap());
+        assert2::assert!((*changes.borrow_and_update()) == (before + 1));
+        assert2::assert!(matches!(
             sessions.connection(waiting).unwrap().state,
             ConnectionState::Waiting { session, agent }
                 if session == "big-plan" && agent.as_deref() == Some("one")
         ));
-        assert!(matches!(
+        assert2::assert!(matches!(
             sessions.connection(receiving).unwrap().state,
             ConnectionState::Receiving { session, agent }
                 if session == "big-plan" && agent.as_deref() == Some("two")
         ));
-        assert!(matches!(
+        assert2::assert!(matches!(
             sessions.connection(other).unwrap().state,
             ConnectionState::Waiting { session, agent }
                 if session == "beta" && agent.as_deref() == Some("three")
         ));
-        assert_eq!(
-            sessions.connection(connected).unwrap().state,
-            ConnectionState::Connected
+        assert2::assert!(
+            (sessions.connection(connected).unwrap().state) == (ConnectionState::Connected)
         );
 
         let before_noop = *changes.borrow_and_update();
-        assert_eq!(sessions.rename("big-plan", "Big Plan").unwrap(), "big-plan");
-        assert!(!changes.has_changed().unwrap());
-        assert_eq!(*changes.borrow_and_update(), before_noop);
+        assert2::assert!((sessions.rename("big-plan", "Big Plan").unwrap()) == ("big-plan"));
+        assert2::assert!(!changes.has_changed().unwrap());
+        assert2::assert!((*changes.borrow_and_update()) == (before_noop));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -923,20 +927,23 @@ mod tests {
         sessions.switch("alpha").unwrap();
 
         sessions.delete("alpha").unwrap();
-        assert_eq!(sessions.active_name(), "default", "active switched first");
-        assert!(sessions.get("alpha").is_none());
-        assert!(
+        assert2::assert!(
+            (sessions.active_name()) == ("default"),
+            "active switched first"
+        );
+        assert2::assert!(sessions.get("alpha").is_none());
+        assert2::assert!(
             !root.join("sessions").join("alpha.json").exists(),
             "file deleted, not archived"
         );
-        assert!(
+        assert2::assert!(
             !root
                 .join("sessions")
                 .join("archive")
                 .join("alpha.json")
                 .exists()
         );
-        assert!(sessions.delete("default").is_err(), "never the last");
+        assert2::assert!(sessions.delete("default").is_err(), "never the last");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -951,13 +958,13 @@ mod tests {
             .apply_propose(demo_doc())
             .unwrap();
         sessions.archive("alpha").unwrap();
-        assert_eq!(sessions.list_archived(), vec!["alpha".to_owned()]);
+        assert2::assert!((sessions.list_archived()) == (vec!["alpha".to_owned()]));
 
         let slug = sessions.unarchive("alpha").unwrap();
-        assert_eq!(slug, "alpha");
-        assert!(sessions.list_archived().is_empty());
+        assert2::assert!((slug) == ("alpha"));
+        assert2::assert!(sessions.list_archived().is_empty());
         let doc = sessions.get("alpha").unwrap().snapshot_doc();
-        assert!(
+        assert2::assert!(
             doc.node(&NodeId::from("sync-engine")).is_some(),
             "content survived the round trip"
         );
@@ -965,8 +972,9 @@ mod tests {
         // Unarchiving over a live name collision dedups.
         sessions.archive("alpha").unwrap();
         sessions.create("alpha").unwrap();
+        sessions.create("alpha").unwrap();
         let slug = sessions.unarchive("alpha").unwrap();
-        assert_eq!(slug, "alpha-2");
+        assert2::assert!((slug) == ("alpha-3"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -985,10 +993,16 @@ mod tests {
             .into_iter()
             .find(|i| i.name == "demo")
             .unwrap();
-        assert_eq!(info.node_count, 11);
-        assert_eq!(info.open_choices, 2);
-        assert!(!info.active);
-        assert!(!info.agent_waiting);
+        assert2::assert!(
+            info == SessionInfo {
+                name: "demo".into(),
+                active: false,
+                node_count: 11,
+                open_choices: 2,
+                agent_waiting: false,
+                undelivered: 0,
+            }
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1003,19 +1017,22 @@ mod tests {
         sessions.connect_client(id, "claude-code".into(), "1.2.3".into());
         sessions.set_connection_waiting(id, "default".into(), Some("alpha".into()));
 
-        assert!(*changes.borrow_and_update() > before);
-        assert_eq!(
-            sessions.connections(),
-            vec![ConnectionInfo {
-                id,
-                client_name: "claude-code".into(),
-                version: "1.2.3".into(),
-                state: ConnectionState::Waiting {
-                    session: "default".into(),
-                    agent: Some("alpha".into()),
-                },
-            }]
+        assert2::assert!(*changes.borrow_and_update() > before);
+        assert2::assert!(
+            (sessions.connections())
+                == (vec![ConnectionInfo {
+                    id,
+                    client_name: "claude-code".into(),
+                    version: "1.2.3".into(),
+                    state: ConnectionState::Waiting {
+                        session: "default".into(),
+                        agent: Some("alpha".into()),
+                    },
+                }])
         );
+
+        sessions.set_connection_connected(id);
+        assert2::assert!((sessions.connection(id).unwrap().state) == (ConnectionState::Connected));
     }
 
     #[test]
@@ -1029,8 +1046,8 @@ mod tests {
 
         sessions.disconnect_client(id);
 
-        assert!(sessions.connections().is_empty());
-        assert_eq!(*generation.borrow_and_update(), before);
+        assert2::assert!(sessions.connections().is_empty());
+        assert2::assert!((*generation.borrow_and_update()) == (before));
     }
 
     #[tokio::test]
@@ -1065,7 +1082,7 @@ mod tests {
         let _ = waiting.await;
         sessions.disconnect_client(id);
 
-        assert!(matches!(
+        assert2::assert!(matches!(
             sessions.connections()[0].state,
             ConnectionState::Reconnecting { ref session, ref agent }
                 if session == "default" && agent.as_deref() == Some("alpha")
@@ -1105,7 +1122,8 @@ mod tests {
         store.request_flush(None).unwrap();
         sessions.disconnect_client(first_id);
         changes.borrow_and_update();
-        assert!(sessions.connections().is_empty());
+        assert2::assert!(sessions.connections().is_empty());
+        let before_orphan = *changes.borrow_and_update();
 
         first.abort();
         let _ = first.await;
@@ -1113,7 +1131,8 @@ mod tests {
             .await
             .expect("orphan creation publishes a connection change")
             .unwrap();
-        assert!(matches!(
+        assert2::assert!((*changes.borrow_and_update()) == (before_orphan + 1));
+        assert2::assert!(matches!(
             sessions.connections().as_slice(),
             [ConnectionInfo {
                 id,
@@ -1147,16 +1166,16 @@ mod tests {
             .await
             .expect("reconnect rebind publishes a connection change")
             .unwrap();
-        assert_eq!(
-            sessions.connections(),
-            vec![ConnectionInfo {
-                id: second_id,
-                client_name: "claude-code".into(),
-                version: "2".into(),
-                state: ConnectionState::Connected,
-            }]
+        assert2::assert!(
+            (sessions.connections())
+                == (vec![ConnectionInfo {
+                    id: second_id,
+                    client_name: "claude-code".into(),
+                    version: "2".into(),
+                    state: ConnectionState::Connected,
+                }])
         );
-        assert!(matches!(
+        assert2::assert!(matches!(
             recovered.await.unwrap().unwrap(),
             crate::store::FlushOutcome::Delivered(_)
         ));
@@ -1205,7 +1224,7 @@ mod tests {
             .await
             .expect("an unarchived store publishes orphan projection changes")
             .unwrap();
-        assert!(matches!(
+        assert2::assert!(matches!(
             sessions.connections().as_slice(),
             [ConnectionInfo {
                 state: ConnectionState::Reconnecting { session, .. },
@@ -1242,7 +1261,7 @@ mod tests {
         sessions.disconnect_client(id);
         waiting.abort();
         let _ = waiting.await;
-        assert!(matches!(
+        assert2::assert!(matches!(
             sessions.connections().as_slice(),
             [ConnectionInfo {
                 state: ConnectionState::Reconnecting {
@@ -1263,12 +1282,12 @@ mod tests {
         let mut changes = sessions.subscribe_connections();
         changes.borrow_and_update();
 
-        assert_eq!(sessions.rename("plan", "roadmap").unwrap(), "roadmap");
+        assert2::assert!((sessions.rename("plan", "roadmap").unwrap()) == ("roadmap"));
         tokio::time::timeout(Duration::from_secs(1), changes.changed())
             .await
             .expect("rename publishes reconnect projection change")
             .unwrap();
-        assert!(matches!(
+        assert2::assert!(matches!(
             sessions.connections().as_slice(),
             [ConnectionInfo {
                 state: ConnectionState::Reconnecting { session, .. },
@@ -1277,19 +1296,19 @@ mod tests {
         ));
 
         changes.borrow_and_update();
-        assert_eq!(sessions.rename("roadmap", "roadmap").unwrap(), "roadmap");
-        assert!(!changes.has_changed().unwrap(), "no-op rename stays quiet");
+        assert2::assert!((sessions.rename("roadmap", "roadmap").unwrap()) == ("roadmap"));
+        assert2::assert!(!changes.has_changed().unwrap(), "no-op rename stays quiet");
 
         sessions.archive("roadmap").unwrap();
         tokio::time::timeout(Duration::from_secs(1), changes.changed())
             .await
             .expect("archive publishes reconnect projection change")
             .unwrap();
-        assert!(sessions.connections().is_empty());
+        assert2::assert!(sessions.connections().is_empty());
 
         changes.borrow_and_update();
         sessions.unarchive("roadmap").unwrap();
-        assert!(
+        assert2::assert!(
             !changes.has_changed().unwrap(),
             "unarchive has no transient reconnect projection to publish"
         );
@@ -1311,7 +1330,7 @@ mod tests {
             .await
             .expect("delete publishes reconnect projection change")
             .unwrap();
-        assert!(sessions.connections().is_empty());
+        assert2::assert!(sessions.connections().is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1321,5 +1340,70 @@ mod tests {
         let store = Store::new(SessionState::default());
         let _first = Sessions::single(store.clone(), tmp_root("store-owner-1"));
         let _second = Sessions::single(store, tmp_root("store-owner-2"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn list_reports_waiting_and_only_undelivered_events() {
+        let root = tmp_root("list-live");
+        let sessions = Sessions::open(root.join("sessions"), None).unwrap();
+        let store = sessions.active_store();
+        store
+            .add_user_node("first".into(), crate::model::NodeKind::Component, None)
+            .unwrap();
+        let first_store = store.clone();
+        let first_waiter = tokio::spawn(async move {
+            first_store
+                .await_flush(
+                    std::time::Duration::from_secs(60),
+                    Awaiter {
+                        connection_id: crate::store::ConnectionId(901),
+                        client_label: "first test client".into(),
+                        agent: None,
+                    },
+                )
+                .await
+        });
+        while store.snapshot_meta().waiting_agents != 1 {
+            tokio::task::yield_now().await;
+        }
+        store.request_flush(None).unwrap();
+        assert2::assert!(matches!(
+            first_waiter.await.unwrap().unwrap(),
+            crate::store::FlushOutcome::Delivered(_),
+        ));
+        store
+            .add_user_node("second".into(), crate::model::NodeKind::Component, None)
+            .unwrap();
+        let wait_store = store.clone();
+        let waiter = tokio::spawn(async move {
+            wait_store
+                .await_flush(
+                    std::time::Duration::from_secs(60),
+                    Awaiter {
+                        connection_id: crate::store::ConnectionId(902),
+                        client_label: "second test client".into(),
+                        agent: None,
+                    },
+                )
+                .await
+        });
+        while store.snapshot_meta().waiting_agents != 1 {
+            tokio::task::yield_now().await;
+        }
+
+        let info = sessions.list().remove(0);
+        assert2::assert!(info.agent_waiting);
+        assert2::assert!((info.undelivered) == (1));
+        waiter.abort();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn spawn_autosaves_remembers_the_runtime() {
+        let root = tmp_root("autosave-runtime");
+        let sessions = Sessions::open(root.join("sessions"), None).unwrap();
+        sessions.spawn_autosaves(&tokio::runtime::Handle::current());
+        assert2::assert!(sessions.runtime.lock().unwrap().is_some());
+        let _ = std::fs::remove_dir_all(root);
     }
 }

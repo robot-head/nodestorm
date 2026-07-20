@@ -110,42 +110,59 @@ fn parse_window_size(s: &str) -> Result<(f64, f64), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use yare::parameterized;
+
+    #[test]
+    fn mcp_url_uses_configured_port() {
+        let cli = Cli::parse_from(["nodestorm", "--port", "1234"]);
+        assert2::assert!((cli.mcp_url()) == ("http://127.0.0.1:1234/mcp"));
+    }
 
     #[test]
     fn session_path_prefers_override() {
         let cli = Cli::parse_from(["nodestorm", "--session", "some/dir/mine.json"]);
-        assert_eq!(
-            cli.session_path().unwrap(),
-            PathBuf::from("some/dir/mine.json")
-        );
+        assert2::assert!((cli.session_path().unwrap()) == (PathBuf::from("some/dir/mine.json")));
         let cli = Cli::parse_from(["nodestorm"]);
-        assert_eq!(
-            cli.session_path().unwrap(),
-            crate::persist::default_session_path().unwrap()
+        assert2::assert!(
+            (cli.session_path().unwrap()) == (crate::persist::default_session_path().unwrap())
         );
     }
 
     #[test]
     fn prefs_path_prefers_override() {
         let cli = Cli::parse_from(["nodestorm", "--prefs", "some/dir/my-prefs.json"]);
-        assert_eq!(
-            cli.prefs_path().unwrap(),
-            PathBuf::from("some/dir/my-prefs.json")
-        );
+        assert2::assert!((cli.prefs_path().unwrap()) == (PathBuf::from("some/dir/my-prefs.json")));
         let cli = Cli::parse_from(["nodestorm"]);
-        assert_eq!(
-            cli.prefs_path().unwrap(),
-            crate::prefs::default_prefs_path().unwrap()
+        assert2::assert!(
+            (cli.prefs_path().unwrap()) == (crate::prefs::default_prefs_path().unwrap())
         );
     }
 
     #[test]
-    fn window_size_parses_and_validates() {
+    fn sessions_dir_prefers_override() {
+        let cli = Cli::parse_from(["nodestorm", "--sessions-dir", "some/sessions"]);
+        assert2::assert!((cli.sessions_dir().unwrap()) == (PathBuf::from("some/sessions")));
+
+        let cli = Cli::parse_from(["nodestorm"]);
+        let legacy = crate::persist::default_session_path().unwrap();
+        assert2::assert!(
+            (cli.sessions_dir().unwrap()) == (legacy.parent().unwrap().join("sessions"))
+        );
+    }
+
+    #[test]
+    fn window_size_parses_and_defaults() {
         let cli = Cli::parse_from(["nodestorm", "--window-size", "760x840"]);
-        assert_eq!(cli.window_size, Some((760.0, 840.0)));
-        assert_eq!(Cli::parse_from(["nodestorm"]).window_size, None);
-        assert!(Cli::try_parse_from(["nodestorm", "--window-size", "760"]).is_err());
-        assert!(Cli::try_parse_from(["nodestorm", "--window-size", "10x840"]).is_err());
-        assert!(Cli::try_parse_from(["nodestorm", "--window-size", "axb"]).is_err());
+        assert2::assert!((cli.window_size) == (Some((760.0, 840.0))));
+        assert2::assert!((Cli::parse_from(["nodestorm"]).window_size) == (None));
+    }
+
+    #[parameterized(
+        missing_height = { "760" },
+        below_minimum = { "10x840" },
+        non_numeric = { "axb" },
+    )]
+    fn window_size_rejects_invalid_values(value: &str) {
+        assert2::assert!(Cli::try_parse_from(["nodestorm", "--window-size", value]).is_err());
     }
 }

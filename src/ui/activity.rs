@@ -67,8 +67,8 @@ mod tests {
 
     #[test]
     fn expanded_feed_includes_every_retained_entry() {
-        assert_eq!(entry_count(200, true), 200);
-        assert_eq!(entry_count(200, false), 1);
-        assert_eq!(entry_count(0, false), 0);
+        assert2::assert!((entry_count(200, true)) == (200));
+        assert2::assert!((entry_count(200, false)) == (1));
+        assert2::assert!((entry_count(0, false)) == (0));
     }
 }

@@ -500,6 +500,26 @@ fn spawn_command(spec: &CommandSpec) -> std::io::Result<()> {
     command.spawn().map(|_| ())
 }
 
+fn open_linux_terminal_with(
+    child: &CommandSpec,
+    mut spawn: impl FnMut(&CommandSpec) -> std::io::Result<()>,
+) -> anyhow::Result<()> {
+    for flavor in [
+        TerminalFlavor::LinuxXTerminal,
+        TerminalFlavor::LinuxGnome,
+        TerminalFlavor::LinuxKonsole,
+    ] {
+        match spawn(&terminal_command(flavor, child)) {
+            Ok(()) => return Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err.into()),
+        }
+    }
+    anyhow::bail!(
+        "no supported terminal found; install x-terminal-emulator, gnome-terminal, or konsole"
+    )
+}
+
 // Each `#[cfg]` arm needs its own `return` because sibling arms follow it in
 // source; only one compiles per target, so clippy sees the last as redundant.
 #[allow(clippy::needless_return)]
@@ -516,20 +536,7 @@ pub fn open_terminal(child: &CommandSpec) -> anyhow::Result<()> {
     }
     #[cfg(target_os = "linux")]
     {
-        for flavor in [
-            TerminalFlavor::LinuxXTerminal,
-            TerminalFlavor::LinuxGnome,
-            TerminalFlavor::LinuxKonsole,
-        ] {
-            match spawn_command(&terminal_command(flavor, child)) {
-                Ok(()) => return Ok(()),
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(err) => return Err(err.into()),
-            }
-        }
-        anyhow::bail!(
-            "no supported terminal found; install x-terminal-emulator, gnome-terminal, or konsole"
-        );
+        return open_linux_terminal_with(child, spawn_command);
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
@@ -541,7 +548,11 @@ pub fn read_ssh_aliases() -> Vec<String> {
     let Some(base) = directories::BaseDirs::new() else {
         return Vec::new();
     };
-    std::fs::read_to_string(base.home_dir().join(".ssh/config"))
+    read_ssh_aliases_from(&base.home_dir().join(".ssh/config"))
+}
+
+fn read_ssh_aliases_from(path: &Path) -> Vec<String> {
+    std::fs::read_to_string(path)
         .map(|text| parse_ssh_aliases(&text))
         .unwrap_or_default()
 }
@@ -550,6 +561,7 @@ pub fn read_ssh_aliases() -> Vec<String> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use yare::parameterized;
 
     struct TempRepo {
         root: PathBuf,
@@ -569,7 +581,7 @@ mod tests {
                 vec!["config", "user.name", "Nodestorm Test"],
                 vec!["config", "user.email", "nodestorm@example.invalid"],
             ] {
-                assert!(
+                assert2::assert!(
                     std::process::Command::new("git")
                         .arg("-C")
                         .arg(&path)
@@ -580,7 +592,7 @@ mod tests {
                 );
             }
             std::fs::write(path.join("README.md"), "fixture\n").unwrap();
-            assert!(
+            assert2::assert!(
                 std::process::Command::new("git")
                     .arg("-C")
                     .arg(&path)
@@ -589,7 +601,7 @@ mod tests {
                     .unwrap()
                     .success()
             );
-            assert!(
+            assert2::assert!(
                 std::process::Command::new("git")
                     .arg("-C")
                     .arg(&path)
@@ -615,7 +627,7 @@ mod tests {
             .args(args)
             .output()
             .unwrap();
-        assert!(
+        assert2::assert!(
             output.status.success(),
             "{}",
             String::from_utf8_lossy(&output.stderr)
@@ -640,75 +652,157 @@ mod tests {
 
     #[test]
     fn defaults_derive_branch_and_sibling_worktree() {
-        assert_eq!(suggest_branch("Cache Redesign"), "nodestorm/cache-redesign");
-        assert_eq!(
-            suggest_worktree("/work/api", "nodestorm/cache-redesign", false).unwrap(),
-            "/work/api-worktrees/nodestorm/cache-redesign"
+        assert2::assert!((suggest_branch("Cache Redesign")) == ("nodestorm/cache-redesign"));
+        assert2::assert!(
+            (suggest_worktree("/work/api", "nodestorm/cache-redesign", false).unwrap())
+                == ("/work/api-worktrees/nodestorm/cache-redesign")
         );
-        assert_eq!(
-            suggest_worktree("/srv/api", "nodestorm/cache-redesign", true).unwrap(),
-            "/srv/api-worktrees/nodestorm/cache-redesign"
+        assert2::assert!(
+            (suggest_worktree("/srv/api", "nodestorm/cache-redesign", true).unwrap())
+                == ("/srv/api-worktrees/nodestorm/cache-redesign")
         );
     }
 
-    #[test]
-    fn every_agent_gets_its_interactive_arguments() {
-        let cases = [
-            (AgentKind::Claude, "claude", vec!["TASK"]),
-            (AgentKind::Codex, "codex", vec!["TASK"]),
-            (AgentKind::OpenCode, "opencode", vec!["--prompt", "TASK"]),
-            (
-                AgentKind::Pi,
-                "pi",
-                vec!["--name", "cache-redesign", "TASK"],
-            ),
-        ];
-        for (agent, program, args) in cases {
-            let spec = agent_command(agent, "cache-redesign", "TASK", "/work/tree");
-            assert_eq!(spec.program, program);
-            assert_eq!(spec.args, args);
-            assert_eq!(spec.current_dir.as_deref(), Some("/work/tree"));
-        }
+    #[parameterized(
+        claude = { AgentKind::Claude, "claude", vec!["TASK"] },
+        codex = { AgentKind::Codex, "codex", vec!["TASK"] },
+        opencode = { AgentKind::OpenCode, "opencode", vec!["--prompt", "TASK"] },
+        pi = { AgentKind::Pi, "pi", vec!["--name", "cache-redesign", "TASK"] },
+    )]
+    fn every_agent_gets_its_interactive_arguments(
+        agent: AgentKind,
+        expected_program: &str,
+        expected_args: Vec<&str>,
+    ) {
+        let spec = agent_command(agent, "cache-redesign", "TASK", "/work/tree");
+        assert2::assert!(
+            spec == CommandSpec {
+                program: expected_program.into(),
+                args: expected_args.into_iter().map(str::to_owned).collect(),
+                current_dir: Some("/work/tree".into()),
+            }
+        );
     }
 
     #[test]
     fn prompt_preserves_task_and_addresses_the_nodestorm_session() {
         let prompt = compose_prompt(&request(AgentKind::Codex), "cache-redesign");
-        assert!(prompt.starts_with("Design the cache; don't run $(touch /tmp/nope)."));
-        assert!(prompt.contains("Nodestorm session `cache-redesign`"));
-        assert!(prompt.contains("agent identity `codex-cache-redesign`"));
-        assert!(prompt.contains("installed Nodestorm skill"));
+        assert2::assert!(prompt.starts_with("Design the cache; don't run $(touch /tmp/nope)."));
+        assert2::assert!(prompt.contains("Nodestorm session `cache-redesign`"));
+        assert2::assert!(prompt.contains("agent identity `codex-cache-redesign`"));
+        assert2::assert!(prompt.contains("installed Nodestorm skill"));
     }
 
     #[test]
     fn ssh_aliases_include_literals_only() {
         let config = "Host prod bastion\n  HostName prod.test\nHost *.corp !blocked\nHost dev\n";
-        assert_eq!(parse_ssh_aliases(config), vec!["bastion", "dev", "prod"]);
+        assert2::assert!((parse_ssh_aliases(config)) == (vec!["bastion", "dev", "prod"]));
+    }
+
+    #[parameterized(
+        plain = { "plain", "'plain'" },
+        embedded_quote = { "a'b", "'a'\\''b'" },
+        shell_syntax_and_newline = {
+            "$(touch /tmp/nope)\nnext",
+            "'$(touch /tmp/nope)\nnext'"
+        },
+    )]
+    fn posix_quote_neutralizes_shell_syntax(input: &str, expected: &str) {
+        assert2::assert!(posix_quote(input) == expected);
     }
 
     #[test]
-    fn posix_quote_neutralizes_shell_syntax() {
-        assert_eq!(posix_quote("plain"), "'plain'");
-        assert_eq!(posix_quote("a'b"), "'a'\\''b'");
-        assert_eq!(
-            posix_quote("$(touch /tmp/nope)\nnext"),
-            "'$(touch /tmp/nope)\nnext'"
+    fn diagnostic_shell_prints_the_quoted_error_then_opens_a_login_shell() {
+        assert2::assert!(
+            (diagnostic_shell("can't launch"))
+                == ("{ printf '%s\\n' 'can'\\''t launch'; exec \"${SHELL:-/bin/sh}\" -l; }")
         );
+    }
+
+    #[parameterized(
+        root_child = { "/repo", "/" },
+        nested = { "/srv/repos/api", "/srv/repos" },
+    )]
+    fn remote_parent_handles_absolute_paths(input: &str, expected: &str) {
+        assert2::assert!(remote_parent(input).unwrap() == expected);
+    }
+
+    #[parameterized(relative = { "relative" }, trailing_slash = { "/srv/repos/" })]
+    fn remote_parent_rejects_invalid_paths(input: &str) {
+        assert2::assert!(remote_parent(input).is_err());
+    }
+
+    #[test]
+    fn spawning_a_missing_program_reports_not_found() {
+        let spec = CommandSpec {
+            program: format!("nodestorm-missing-{}", uuid::Uuid::new_v4()),
+            args: Vec::new(),
+            current_dir: None,
+        };
+        assert2::assert!(
+            (spawn_command(&spec).unwrap_err().kind()) == (std::io::ErrorKind::NotFound)
+        );
+    }
+
+    #[test]
+    fn linux_terminal_fallback_skips_only_missing_programs() {
+        let child = CommandSpec {
+            program: "agent".into(),
+            args: Vec::new(),
+            current_dir: None,
+        };
+        let mut attempts = 0;
+        open_linux_terminal_with(&child, |_| {
+            attempts += 1;
+            if attempts < 3 {
+                Err(std::io::ErrorKind::NotFound.into())
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
+        assert2::assert!((attempts) == (3));
+
+        let mut attempts = 0;
+        let error = open_linux_terminal_with(&child, |_| {
+            attempts += 1;
+            Err(std::io::ErrorKind::PermissionDenied.into())
+        })
+        .unwrap_err();
+        assert2::assert!((attempts) == (1));
+        assert2::assert!(
+            (error.downcast_ref::<std::io::Error>().unwrap().kind())
+                == (std::io::ErrorKind::PermissionDenied)
+        );
+
+        let error = open_linux_terminal_with(&child, |_| Err(std::io::ErrorKind::NotFound.into()))
+            .unwrap_err();
+        assert2::assert!(error.to_string().contains("no supported terminal found"));
+    }
+
+    #[test]
+    fn ssh_alias_file_is_parsed_and_missing_files_are_empty() {
+        let root =
+            std::env::temp_dir().join(format!("nodestorm-ssh-config-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let config = root.join("config");
+        std::fs::write(&config, "Host prod *.internal dev\n").unwrap();
+        assert2::assert!((read_ssh_aliases_from(&config)) == (vec!["dev", "prod"]));
+        assert2::assert!(read_ssh_aliases_from(&root.join("missing")).is_empty());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn validation_names_the_missing_field() {
         let mut req = request(AgentKind::Claude);
         req.task.clear();
-        assert_eq!(
-            validate_request(&req).unwrap_err().to_string(),
-            "initial task is required"
+        assert2::assert!(
+            (validate_request(&req).unwrap_err().to_string()) == ("initial task is required")
         );
         req.task = "task".into();
         req.target = LaunchTarget::Ssh { alias: "".into() };
-        assert_eq!(
-            validate_request(&req).unwrap_err().to_string(),
-            "SSH host alias is required"
+        assert2::assert!(
+            (validate_request(&req).unwrap_err().to_string()) == ("SSH host alias is required")
         );
     }
 
@@ -726,15 +820,11 @@ mod tests {
 
         let prepared = prepare_local(&req, false).unwrap();
 
-        assert_eq!(prepared.directory, worktree.to_string_lossy().into_owned());
-        assert_eq!(
-            git_output(&repo.path, &["branch", "--show-current"]),
-            original
-        );
-        assert!(!worktree.join("dirty.txt").exists());
-        assert_eq!(
-            git_output(&worktree, &["branch", "--show-current"]),
-            "nodestorm/cache-redesign"
+        assert2::assert!((prepared.directory) == (worktree.to_string_lossy().into_owned()));
+        assert2::assert!((git_output(&repo.path, &["branch", "--show-current"])) == (original));
+        assert2::assert!(!worktree.join("dirty.txt").exists());
+        assert2::assert!(
+            (git_output(&worktree, &["branch", "--show-current"])) == ("nodestorm/cache-redesign")
         );
     }
 
@@ -746,20 +836,19 @@ mod tests {
         req.repository = repo.path.to_string_lossy().into_owned();
         req.git_mode = GitMode::ExistingCheckout;
 
-        assert!(inspect_local(&req).unwrap().dirty);
-        assert!(
+        assert2::assert!(inspect_local(&req).unwrap().dirty);
+        assert2::assert!(
             prepare_local(&req, false)
                 .unwrap_err()
                 .to_string()
                 .contains("uncommitted changes")
         );
         let prepared = prepare_local(&req, true).unwrap();
-        assert_eq!(prepared.directory, repo.path.to_string_lossy().into_owned());
-        assert_eq!(
-            git_output(&repo.path, &["branch", "--show-current"]),
-            "nodestorm/cache-redesign"
+        assert2::assert!((prepared.directory) == (repo.path.to_string_lossy().into_owned()));
+        assert2::assert!(
+            (git_output(&repo.path, &["branch", "--show-current"])) == ("nodestorm/cache-redesign")
         );
-        assert!(repo.path.join("dirty.txt").exists());
+        assert2::assert!(repo.path.join("dirty.txt").exists());
     }
 
     #[test]
@@ -769,13 +858,10 @@ mod tests {
         let mut req = request(AgentKind::Claude);
         req.repository = repo.path.to_string_lossy().into_owned();
         req.branch = "bad branch".into();
-        assert!(prepare_local(&req, false).is_err());
-        assert_eq!(
-            git_output(&repo.path, &["branch", "--show-current"]),
-            original
-        );
+        assert2::assert!(prepare_local(&req, false).is_err());
+        assert2::assert!((git_output(&repo.path, &["branch", "--show-current"])) == (original));
 
-        assert!(
+        assert2::assert!(
             std::process::Command::new("git")
                 .arg("-C")
                 .arg(&repo.path)
@@ -785,7 +871,7 @@ mod tests {
                 .success()
         );
         req.branch = "already-there".into();
-        assert!(
+        assert2::assert!(
             prepare_local(&req, false)
                 .unwrap_err()
                 .to_string()
@@ -798,23 +884,20 @@ mod tests {
         req.git_mode = GitMode::NewWorktree {
             path: occupied.to_string_lossy().into_owned(),
         };
-        assert!(
+        assert2::assert!(
             prepare_local(&req, false)
                 .unwrap_err()
                 .to_string()
                 .contains("destination")
         );
-        assert_eq!(
-            git_output(&repo.path, &["branch", "--show-current"]),
-            original
-        );
+        assert2::assert!((git_output(&repo.path, &["branch", "--show-current"])) == (original));
     }
 
     #[test]
     fn executable_check_reports_missing_program() {
-        assert!(ensure_executable("git").is_ok());
-        assert!(ensure_executable("ssh").is_ok());
-        assert!(
+        assert2::assert!(ensure_executable("git").is_ok());
+        assert2::assert!(ensure_executable("ssh").is_ok());
+        assert2::assert!(
             ensure_executable("nodestorm-definitely-not-installed")
                 .unwrap_err()
                 .to_string()
@@ -833,29 +916,28 @@ mod tests {
             path: "/srv/repo-worktrees/nodestorm/cache-redesign".into(),
         };
         let spec = remote_agent_command(&req, "cache-redesign").unwrap();
-        assert_eq!(spec.program, "ssh");
-        assert_eq!(
-            &spec.args[..6],
-            [
-                "-t",
-                "-o",
-                "ExitOnForwardFailure=yes",
-                "-R",
-                "4747:127.0.0.1:8123",
-                "--"
-            ]
+        assert2::assert!((spec.program) == ("ssh"));
+        assert2::assert!(
+            (&spec.args[..6])
+                == ([
+                    "-t",
+                    "-o",
+                    "ExitOnForwardFailure=yes",
+                    "-R",
+                    "4747:127.0.0.1:8123",
+                    "--"
+                ])
         );
-        assert_eq!(spec.args[6], "build-box");
+        assert2::assert!((spec.args[6]) == ("build-box"));
         let script = remote_script(&req, "cache-redesign").unwrap();
-        assert_eq!(
-            spec.args.last().unwrap(),
-            &format!("exec sh -lc {}", posix_quote(&script))
+        assert2::assert!(
+            (spec.args.last().unwrap()) == (&format!("exec sh -lc {}", posix_quote(&script)))
         );
-        assert!(script.contains("command -v 'claude'"));
-        assert!(script.contains("'/srv/repo with spaces'"));
-        assert!(script.contains("worktree add -b"));
-        assert!(script.contains("exec 'claude'"));
-        assert!(script.contains(&posix_quote(&compose_prompt(&req, "cache-redesign"))));
+        assert2::assert!(script.contains("command -v 'claude'"));
+        assert2::assert!(script.contains("'/srv/repo with spaces'"));
+        assert2::assert!(script.contains("worktree add -b"));
+        assert2::assert!(script.contains("exec 'claude'"));
+        assert2::assert!(script.contains(&posix_quote(&compose_prompt(&req, "cache-redesign"))));
     }
 
     #[test]
@@ -867,10 +949,10 @@ mod tests {
         req.repository = "/srv/api".into();
         req.git_mode = GitMode::ExistingCheckout;
         let script = remote_script(&req, "cache-redesign").unwrap();
-        assert!(script.contains("uncommitted changes"));
-        assert!(script.contains("read answer"));
-        assert!(script.contains("switch -c"));
-        assert!(!script.contains("worktree add"));
+        assert2::assert!(script.contains("uncommitted changes"));
+        assert2::assert!(script.contains("read answer"));
+        assert2::assert!(script.contains("switch -c"));
+        assert2::assert!(!script.contains("worktree add"));
     }
 
     #[test]
@@ -881,25 +963,22 @@ mod tests {
             current_dir: Some("/work/tree".into()),
         };
         let windows = terminal_command(TerminalFlavor::WindowsTerminal, &child);
-        assert_eq!(windows.program, "wt.exe");
-        assert_eq!(
-            &windows.args[..5],
-            ["-w", "new", "new-tab", "-d", "/work/tree"]
-        );
-        assert!(
+        assert2::assert!((windows.program) == ("wt.exe"));
+        assert2::assert!((&windows.args[..5]) == (["-w", "new", "new-tab", "-d", "/work/tree"]));
+        assert2::assert!(
             windows
                 .args
                 .ends_with(&["codex".into(), "task with spaces".into()])
         );
 
         let linux = terminal_command(TerminalFlavor::LinuxXTerminal, &child);
-        assert_eq!(linux.program, "x-terminal-emulator");
-        assert_eq!(&linux.args[..2], ["-e", "codex"]);
-        assert_eq!(linux.current_dir.as_deref(), Some("/work/tree"));
+        assert2::assert!((linux.program) == ("x-terminal-emulator"));
+        assert2::assert!((&linux.args[..2]) == (["-e", "codex"]));
+        assert2::assert!((linux.current_dir.as_deref()) == (Some("/work/tree")));
 
         let mac = terminal_command(TerminalFlavor::MacTerminal, &child);
-        assert_eq!(mac.program, "osascript");
-        assert!(
+        assert2::assert!((mac.program) == ("osascript"));
+        assert2::assert!(
             mac.args
                 .last()
                 .unwrap()
@@ -914,7 +993,7 @@ mod tests {
             alias: "build-box".into(),
         };
         req.repository = "relative/repo".into();
-        assert!(
+        assert2::assert!(
             validate_request(&req)
                 .unwrap_err()
                 .to_string()

@@ -264,3 +264,37 @@ pub fn MoreMenu(has_nodes: bool, suggested_name: String) -> Element {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn markdown_and_export_receipts_reflect_the_store() {
+        let store = Store::with_doc(crate::demo::demo_doc());
+        let markdown = render_markdown_now(&store);
+        assert2::assert!(markdown.contains("# Realtime collaboration for the notes app"));
+        assert2::assert!(markdown.contains("```mermaid"));
+
+        report_export(&store, Ok(std::path::PathBuf::from("decision.md")));
+        assert2::assert!(
+            store
+                .snapshot_meta()
+                .activity
+                .last()
+                .unwrap()
+                .text
+                .contains("decision.md")
+        );
+        report_export(&store, Err(anyhow::anyhow!("disk full")));
+        assert2::assert!(
+            store
+                .snapshot_meta()
+                .activity
+                .last()
+                .unwrap()
+                .text
+                .contains("disk full")
+        );
+    }
+}

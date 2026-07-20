@@ -144,10 +144,7 @@ fn perform_launch(
                 Ok(inspection) => inspection,
                 Err(err) => return failed(err, None),
             };
-            if matches!(request.git_mode, GitMode::ExistingCheckout)
-                && inspection.dirty
-                && !allow_dirty
-            {
+            if needs_dirty_confirmation(&request.git_mode, inspection.dirty, allow_dirty) {
                 return LaunchOutcome::NeedsDirtyConfirmation;
             }
             match prepare_local(&request, allow_dirty) {
@@ -197,6 +194,10 @@ fn perform_launch(
             command,
         },
     }
+}
+
+fn needs_dirty_confirmation(mode: &GitMode, dirty: bool, allow_dirty: bool) -> bool {
+    matches!(mode, GitMode::ExistingCheckout) && dirty && !allow_dirty
 }
 
 fn agent_from_value(value: &str) -> AgentKind {
@@ -532,6 +533,7 @@ pub fn AgentLauncher() -> Element {
 mod tests {
     use super::*;
     use clap::Parser;
+    use yare::parameterized;
 
     fn tmp_path(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
@@ -548,17 +550,17 @@ mod tests {
 
         remember_repository(&mut prefs, &cli, "  /work/api  ");
 
-        assert_eq!(prefs.recent_repositories, ["/work/api"]);
-        assert_eq!(crate::prefs::load_or_default(&path), prefs);
+        assert2::assert!((prefs.recent_repositories) == (["/work/api"]));
+        assert2::assert!((crate::prefs::load_or_default(&path)) == (prefs));
         std::fs::remove_file(path).ok();
     }
 
     #[test]
     fn draft_defaults_to_local_claude_new_worktree() {
         let draft = LaunchDraft::default();
-        assert_eq!(draft.agent, crate::agent_launcher::AgentKind::Claude);
-        assert!(!draft.remote);
-        assert!(draft.worktree);
+        assert2::assert!((draft.agent) == (crate::agent_launcher::AgentKind::Claude));
+        assert2::assert!(!draft.remote);
+        assert2::assert!(draft.worktree);
     }
 
     #[test]
@@ -566,19 +568,55 @@ mod tests {
         let mut draft = LaunchDraft::default();
         draft.set_repository("/work/api".into());
         draft.set_session_name("Cache Redesign".into());
-        assert_eq!(draft.branch, "nodestorm/cache-redesign");
-        assert_eq!(
-            draft.worktree_path,
-            "/work/api-worktrees/nodestorm/cache-redesign"
-        );
+        assert2::assert!((draft.branch) == ("nodestorm/cache-redesign"));
+        assert2::assert!((draft.worktree_path) == ("/work/api-worktrees/nodestorm/cache-redesign"));
 
         draft.branch = "feature/custom".into();
         draft.branch_edited = true;
         draft.worktree_path = "/custom/tree".into();
         draft.worktree_edited = true;
         draft.set_session_name("Other Session".into());
-        assert_eq!(draft.branch, "feature/custom");
-        assert_eq!(draft.worktree_path, "/custom/tree");
+        assert2::assert!((draft.branch) == ("feature/custom"));
+        assert2::assert!((draft.worktree_path) == ("/custom/tree"));
+    }
+
+    #[parameterized(
+        missing_repository = { "", "feature/test" },
+        missing_branch = { "/work/api", "" },
+    )]
+    fn worktree_derivation_requires_both_repository_and_branch(repository: &str, branch: &str) {
+        let mut draft = LaunchDraft {
+            repository: repository.into(),
+            branch: branch.into(),
+            ..LaunchDraft::default()
+        };
+        draft.refresh_worktree();
+        assert2::assert!(draft.worktree_path.is_empty());
+    }
+
+    #[parameterized(
+        dirty_unconfirmed = { GitMode::ExistingCheckout, true, false, true },
+        clean = { GitMode::ExistingCheckout, false, false, false },
+        dirty_confirmed = { GitMode::ExistingCheckout, true, true, false },
+        new_worktree = { GitMode::NewWorktree { path: "/tmp/tree".into() }, true, false, false },
+    )]
+    fn dirty_confirmation_covers_every_branch(
+        mode: GitMode,
+        dirty: bool,
+        allow_dirty: bool,
+        expected: bool,
+    ) {
+        assert2::assert!(needs_dirty_confirmation(&mode, dirty, allow_dirty) == expected);
+    }
+
+    #[parameterized(
+        codex = { "codex", AgentKind::Codex },
+        opencode = { "opencode", AgentKind::OpenCode },
+        pi = { "pi", AgentKind::Pi },
+        unknown_defaults_to_claude = { "unknown", AgentKind::Claude },
+    )]
+    fn agent_values_cover_every_branch(value: &str, expected: AgentKind) {
+        assert2::assert!(agent_from_value(value) == expected);
     }
 
     #[test]
@@ -591,19 +629,19 @@ mod tests {
         draft.ssh_alias = "build-box".into();
 
         let request = draft.request(9000);
-        assert_eq!(request.session_name, "Remote Build");
-        assert_eq!(request.mcp_port, 9000);
-        assert_eq!(
-            request.target,
-            crate::agent_launcher::LaunchTarget::Ssh {
-                alias: "build-box".into()
-            }
+        assert2::assert!((request.session_name) == ("Remote Build"));
+        assert2::assert!((request.mcp_port) == (9000));
+        assert2::assert!(
+            (request.target)
+                == (crate::agent_launcher::LaunchTarget::Ssh {
+                    alias: "build-box".into()
+                })
         );
-        assert_eq!(
-            request.git_mode,
-            crate::agent_launcher::GitMode::NewWorktree {
-                path: "/srv/api-worktrees/nodestorm/remote-build".into()
-            }
+        assert2::assert!(
+            (request.git_mode)
+                == (crate::agent_launcher::GitMode::NewWorktree {
+                    path: "/srv/api-worktrees/nodestorm/remote-build".into()
+                })
         );
     }
 }

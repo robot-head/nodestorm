@@ -38,9 +38,13 @@ fn connection_state_label(state: &ConnectionState) -> String {
     }
 }
 
+fn flush_comment(text: &str) -> Option<String> {
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_owned())
+}
+
 fn submit_send(store: &Arc<Store>, mut comment: Signal<String>, mut compose_open: Signal<bool>) {
-    let text = comment.read().trim().to_owned();
-    if send_succeeded(store.request_flush((!text.is_empty()).then_some(text))) {
+    if send_succeeded(store.request_flush(flush_comment(&comment.read()))) {
         comment.set(String::new());
         compose_open.set(false);
     }
@@ -48,48 +52,54 @@ fn submit_send(store: &Arc<Store>, mut comment: Signal<String>, mut compose_open
 
 #[cfg(test)]
 mod tests {
-    use super::{connection_state_label, send_label, send_succeeded};
+    use super::{connection_state_label, flush_comment, send_label, send_succeeded};
     use crate::sessions::ConnectionState;
     use crate::store::SendStatus;
+    use yare::parameterized;
 
-    #[test]
-    fn send_error_preserves_the_draft() {
-        assert!(send_succeeded(Ok::<(), ()>(())), "success clears the draft");
-        assert!(
-            !send_succeeded(Err::<(), ()>(())),
-            "failure preserves the draft"
-        );
+    #[parameterized(success = { Ok(()), true }, failure = { Err(()), false })]
+    fn send_result_controls_draft_preservation(result: Result<(), ()>, expected: bool) {
+        assert2::assert!(send_succeeded(result) == expected);
     }
 
-    #[test]
-    fn send_labels_are_receipt_driven() {
-        assert_eq!(send_label(SendStatus::Idle), "Send");
-        assert_eq!(send_label(SendStatus::Sending), "Sending...");
-        assert_eq!(send_label(SendStatus::Sent), "Sent");
-        assert_eq!(send_label(SendStatus::Reconnecting), "Reconnecting...");
-        assert_eq!(send_label(SendStatus::Failed), "Failed - Retry");
+    #[parameterized(
+        trims_content = { "  ready  ", Some("ready") },
+        omits_whitespace = { "   ", None },
+    )]
+    fn flush_comment_normalizes_content(input: &str, expected: Option<&str>) {
+        assert2::assert!(flush_comment(input).as_deref() == expected);
     }
 
-    #[test]
-    fn connection_labels_name_state_session_and_agent() {
-        assert_eq!(
-            connection_state_label(&ConnectionState::Connected),
-            "Connected"
-        );
-        assert_eq!(
-            connection_state_label(&ConnectionState::Waiting {
+    #[parameterized(
+        idle = { SendStatus::Idle, "Send" },
+        sending = { SendStatus::Sending, "Sending..." },
+        sent = { SendStatus::Sent, "Sent" },
+        reconnecting = { SendStatus::Reconnecting, "Reconnecting..." },
+        failed = { SendStatus::Failed, "Failed - Retry" },
+    )]
+    fn send_labels_are_receipt_driven(status: SendStatus, expected: &str) {
+        assert2::assert!(send_label(status) == expected);
+    }
+
+    #[parameterized(
+        connected = { ConnectionState::Connected, "Connected" },
+        waiting_agent = {
+            ConnectionState::Waiting {
                 session: "plan".into(),
                 agent: Some("alpha".into()),
-            }),
+            },
             "Waiting · plan · alpha"
-        );
-        assert_eq!(
-            connection_state_label(&ConnectionState::Reconnecting {
+        },
+        reconnecting_without_agent = {
+            ConnectionState::Reconnecting {
                 session: "plan".into(),
                 agent: None,
-            }),
+            },
             "Reconnecting · plan"
-        );
+        },
+    )]
+    fn connection_labels_name_state_session_and_agent(state: ConnectionState, expected: &str) {
+        assert2::assert!(connection_state_label(&state) == expected);
     }
 }
 

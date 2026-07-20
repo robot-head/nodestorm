@@ -91,15 +91,49 @@ pub fn render_tile(size: u32) -> RgbaImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use yare::parameterized;
 
     #[test]
     fn bolt_is_open_and_nodes_are_on_the_path() {
-        assert_eq!(BOLT_POINTS.len(), 4);
-        assert_ne!(BOLT_POINTS.first(), BOLT_POINTS.last());
-        assert_eq!(NODE_INDICES, [0, 2, 3]);
+        assert2::assert!((svg_points()) == ("171,49 102,115 154,115 87,207"));
+        assert2::assert!((BOLT_POINTS.len()) == (4));
+        assert2::assert!((BOLT_POINTS.first()) != (BOLT_POINTS.last()));
+        assert2::assert!((NODE_INDICES) == ([0, 2, 3]));
         for index in NODE_INDICES {
-            assert!(index < BOLT_POINTS.len());
+            assert2::assert!(index < BOLT_POINTS.len());
         }
+    }
+
+    #[parameterized(
+        projects_onto_segment = { 5.0, 3.0, 9.0 },
+        clamps_to_start = { -2.0, 0.0, 4.0 },
+        clamps_to_end = { 12.0, 0.0, 4.0 },
+    )]
+    fn segment_distance_clamps_to_each_endpoint(x: f32, y: f32, expected: f32) {
+        let segment = ((0.0, 0.0), (10.0, 0.0));
+        assert2::assert!(distance_sq_to_segment(x, y, segment.0, segment.1) == expected);
+    }
+
+    #[parameterized(
+        node_center = { 171.0, 49.0, true },
+        segment = { 136.5, 82.0, true },
+        node_boundary = { 171.0 + NODE_RADIUS, 49.0, true },
+        outside = { 8.0, 8.0, false },
+    )]
+    fn mark_has_inside_boundary_and_outside_points(x: f32, y: f32, expected: bool) {
+        assert2::assert!(mark_contains(x, y) == expected);
+    }
+
+    #[parameterized(
+        center = { 50.0, 50.0, true },
+        left_boundary = { 8.0, 50.0, true },
+        rounded_boundary = { 248.0, 206.0, true },
+        left_outside = { 7.9, 50.0, false },
+        corner_outside = { 8.0, 8.0, false },
+        right_outside = { 248.1, 206.0, false },
+    )]
+    fn rounded_tile_has_inside_boundary_and_outside_points(x: f32, y: f32, expected: bool) {
+        assert2::assert!(rounded_tile_contains(x, y) == expected);
     }
 
     #[test]
@@ -110,18 +144,25 @@ mod tests {
 
         for index in NODE_INDICES {
             let (x, y) = BOLT_POINTS[index];
-            assert!(x - NODE_RADIUS - TILE_MIN >= MIN_PADDING);
-            assert!(y - NODE_RADIUS - TILE_MIN >= MIN_PADDING);
-            assert!(TILE_MAX - (x + NODE_RADIUS) >= MIN_PADDING);
-            assert!(TILE_MAX - (y + NODE_RADIUS) >= MIN_PADDING);
+            assert2::assert!(x - NODE_RADIUS - TILE_MIN >= MIN_PADDING);
+            assert2::assert!(y - NODE_RADIUS - TILE_MIN >= MIN_PADDING);
+            assert2::assert!(TILE_MAX - (x + NODE_RADIUS) >= MIN_PADDING);
+            assert2::assert!(TILE_MAX - (y + NODE_RADIUS) >= MIN_PADDING);
         }
     }
 
     #[test]
     fn tile_is_square_rgba_with_transparent_corners() {
         let tile = render_tile(64);
-        assert_eq!(tile.dimensions(), (64, 64));
-        assert_eq!(tile.get_pixel(0, 0).0[3], 0);
-        assert_eq!(tile.get_pixel(32, 32).0[3], 255);
+        assert2::assert!((tile.dimensions()) == (64, 64));
+        assert2::assert!((tile.get_pixel(0, 0).0[3]) == (0));
+        assert2::assert!((tile.get_pixel(32, 32).0[3]) == (255));
+        let checksum = tile
+            .as_raw()
+            .iter()
+            .fold(0xcbf29ce484222325_u64, |hash, byte| {
+                (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+            });
+        assert2::assert!((checksum) == (2_698_554_169_112_260_433));
     }
 }
