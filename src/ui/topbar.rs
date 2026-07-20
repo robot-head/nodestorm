@@ -127,6 +127,8 @@ pub fn TopBar(
     let mut launcher_open = use_context::<super::AgentLauncherOpen>().0;
     let mut connections_open = use_signal(|| false);
     let mut compare_with = use_context::<super::CompareWith>().0;
+    let terminals = use_context::<super::Terminals>().0;
+    let panel = use_context::<super::TerminalPanel>();
     let d = doc.read();
     let m = meta.read();
     let has_nodes = !d.nodes.is_empty();
@@ -596,6 +598,30 @@ pub fn TopBar(
                             "{queued_count}"
                             span { class: "seg-word", " queued" }
                         }
+                    }
+                }
+            }
+            div { class: "term-chips",
+                for info in terminals.read().iter().cloned() {
+                    button {
+                        key: "{info.id}",
+                        class: "term-chip",
+                        title: match info.status {
+                            crate::terminal::TerminalStatus::Running => "Focus terminal (running)",
+                            crate::terminal::TerminalStatus::Exited(_) => "Focus terminal (exited)",
+                        },
+                        onclick: {
+                            let id = info.id.clone();
+                            move |_| super::focus_terminal(&panel, &id)
+                        },
+                        span {
+                            class: match info.status {
+                                crate::terminal::TerminalStatus::Running => "term-dot running",
+                                crate::terminal::TerminalStatus::Exited(_) => "term-dot exited",
+                            },
+                            "●"
+                        }
+                        span { style: "color: {super::agent_color(&info.id)};", "{info.id}" }
                     }
                 }
             }

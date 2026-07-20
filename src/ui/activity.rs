@@ -18,6 +18,8 @@ fn entry_count(total: usize, expanded: bool) -> usize {
 #[component]
 pub fn ActivityFeed(meta: Signal<UiMeta>) -> Element {
     let mut expanded = use_signal(|| false);
+    let terminals = use_context::<super::Terminals>().0;
+    let panel = use_context::<super::TerminalPanel>();
     let m = meta.read();
     if m.activity.is_empty() {
         return rsx! {};
@@ -47,10 +49,22 @@ pub fn ActivityFeed(meta: Signal<UiMeta>) -> Element {
                         "●"
                     }
                     if let Some(agent) = &entry.agent {
-                        span {
-                            class: "activity-agent",
-                            style: "color: {super::agent_color(agent)};",
-                            "{agent}"
+                        {
+                            let clickable = super::terminal_for(&terminals.read(), agent);
+                            let id = agent.clone();
+                            rsx! {
+                                span {
+                                    class: if clickable { "activity-agent agent-clickable" } else { "activity-agent" },
+                                    style: "color: {super::agent_color(agent)};",
+                                    title: if clickable { "Focus terminal" } else { "" },
+                                    onclick: move |_| {
+                                        if clickable {
+                                            super::focus_terminal(&panel, &id);
+                                        }
+                                    },
+                                    "{agent}"
+                                }
+                            }
                         }
                     }
                     span { class: "activity-text", "{entry.text}" }

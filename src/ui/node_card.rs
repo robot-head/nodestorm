@@ -103,6 +103,8 @@ pub fn NodeCard(
     #[props(default = ZoomTier::Near)]
     zoom: ZoomTier,
 ) -> Element {
+    let terminals = use_context::<super::Terminals>().0;
+    let panel = use_context::<super::TerminalPanel>();
     let open = node.open_choice_count();
     let decided = node.choices.len() - open;
     let notes = node.notes.len();
@@ -183,11 +185,27 @@ pub fn NodeCard(
                         }
                     }
                     if let Some(agent) = &node.agent {
-                        span {
-                            class: "node-agent",
-                            style: "color: {super::agent_color(agent)}; border-color: {super::agent_color(agent)};",
-                            title: "Proposed by agent “{agent}”",
-                            "◆ {agent}"
+                        {
+                            let clickable = super::terminal_for(&terminals.read(), agent);
+                            let id = agent.clone();
+                            rsx! {
+                                span {
+                                    class: if clickable { "node-agent agent-clickable" } else { "node-agent" },
+                                    style: "color: {super::agent_color(agent)}; border-color: {super::agent_color(agent)};",
+                                    title: if clickable {
+                                        "Focus terminal".to_string()
+                                    } else {
+                                        format!("Proposed by agent “{agent}”")
+                                    },
+                                    onclick: move |ev: MouseEvent| {
+                                        if clickable {
+                                            ev.stop_propagation();
+                                            super::focus_terminal(&panel, &id);
+                                        }
+                                    },
+                                    "◆ {agent}"
+                                }
+                            }
                         }
                     }
                     if let Some(group) = &node.group {

@@ -2028,6 +2028,28 @@ fieldset.agent-launch-options {
   margin-top: 12px;
 }
 
+.term-chips {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.term-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-card);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.term-chip:hover { background: var(--bg-card-hover); color: var(--text); }
+
 .agent-clickable {
   cursor: pointer;
   text-decoration: underline dotted;

@@ -125,9 +125,6 @@ pub(crate) fn focus_terminal(panel: &TerminalPanel, id: &str) {
 }
 
 /// Whether an open terminal tab (running or exited) has exactly this id.
-// ponytail: called from the agent-name click styling landing in Tasks 4-6;
-// exercised by its own unit test until then.
-#[allow(dead_code)]
 pub(crate) fn terminal_for(terminals: &[crate::terminal::TerminalInfo], name: &str) -> bool {
     terminals.iter().any(|t| t.id == name)
 }
