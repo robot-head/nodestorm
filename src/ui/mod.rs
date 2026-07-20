@@ -117,8 +117,6 @@ pub(crate) struct TerminalPanel {
 
 /// Expand the dock and select `id` — the single entry point every
 /// agent-name click target uses.
-// ponytail: called from the agent-name click targets landing in Tasks 4-6.
-#[allow(dead_code)]
 pub(crate) fn focus_terminal(panel: &TerminalPanel, id: &str) {
     let mut open = panel.open;
     let mut focused = panel.focused;
