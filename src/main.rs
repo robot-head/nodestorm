@@ -12,6 +12,7 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let sessions = nodestorm::sessions::Sessions::open_from_cli(&cli)?;
+    let terminals = nodestorm::terminal::TerminalManager::new();
     if cli.demo {
         sessions
             .active_store()
@@ -42,10 +43,14 @@ fn main() -> anyhow::Result<()> {
         .name("mcp-server".into())
         .spawn({
             let sessions = sessions.clone();
+            let terminals = terminals.clone();
             move || {
-                if let Err(err) =
-                    runtime.block_on(nodestorm::server::serve(listener, sessions, shutdown_rx))
-                {
+                if let Err(err) = runtime.block_on(nodestorm::server::serve(
+                    listener,
+                    sessions,
+                    terminals,
+                    shutdown_rx,
+                )) {
                     tracing::error!(error = ?err, "mcp server exited");
                 }
             }
@@ -68,6 +73,9 @@ fn main() -> anyhow::Result<()> {
     } else {
         nodestorm::ui::launch(sessions.clone(), cli);
     }
+
+    // The UI (or ctrl-c) is done: no PTY child outlives the app.
+    terminals.kill_all();
 
     // Final saves (the debounced autosaves may not have caught the last
     // change in every session).

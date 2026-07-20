@@ -4,6 +4,8 @@
 
 pub mod tools;
 
+mod terminal_ws;
+
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
@@ -25,6 +27,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::sessions::Sessions;
 use crate::store::ConnectionId;
+use crate::terminal::TerminalManager;
 
 #[derive(Default)]
 struct SessionRestoreStore(RwLock<BTreeMap<String, TransportSessionState>>);
@@ -138,11 +141,13 @@ pub async fn bind(port: u16) -> anyhow::Result<TcpListener> {
 pub async fn serve(
     listener: TcpListener,
     sessions: Arc<Sessions>,
+    terminals: Arc<TerminalManager>,
     shutdown: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     serve_with_manager(
         listener,
         sessions,
+        terminals,
         shutdown,
         Arc::new(LocalSessionManager::default()),
     )
@@ -152,6 +157,7 @@ pub async fn serve(
 pub async fn serve_with_manager(
     listener: TcpListener,
     sessions: Arc<Sessions>,
+    terminals: Arc<TerminalManager>,
     mut shutdown: watch::Receiver<bool>,
     manager: Arc<LocalSessionManager>,
 ) -> anyhow::Result<()> {
@@ -172,13 +178,13 @@ pub async fn serve_with_manager(
             manager,
             config,
         );
-    let router =
-        axum::Router::new()
-            .nest_service("/mcp", service)
-            .layer(middleware::from_fn_with_state(
-                transport_connections,
-                track_transport_disconnect,
-            ));
+    let router = axum::Router::new()
+        .nest_service("/mcp", service)
+        .layer(middleware::from_fn_with_state(
+            transport_connections,
+            track_transport_disconnect,
+        ))
+        .merge(terminal_ws::routes(terminals));
     let addr = listener.local_addr()?;
     tracing::info!("MCP server ready at http://{addr}/mcp");
     axum::serve(listener, router)
@@ -269,7 +275,12 @@ mod tests {
         let sessions = Sessions::open(root.join("sessions"), None).unwrap();
         let listener = bind(0).await.unwrap();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let task = tokio::spawn(serve(listener, sessions, shutdown_rx));
+        let task = tokio::spawn(serve(
+            listener,
+            sessions,
+            crate::terminal::TerminalManager::new(),
+            shutdown_rx,
+        ));
         tokio::task::yield_now().await;
 
         assert2::assert!(!task.is_finished());
