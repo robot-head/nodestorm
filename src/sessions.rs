@@ -41,6 +41,17 @@ pub struct ConnectionInfo {
     pub state: ConnectionState,
 }
 
+fn client_label(title: Option<&str>, client_name: &str, version: &str) -> String {
+    let client_name = title
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .unwrap_or(client_name);
+    match version.trim() {
+        "" => client_name.to_owned(),
+        version => format!("{client_name} {version}"),
+    }
+}
+
 /// One row of [`Sessions::list`] — what the switcher and `list_sessions`
 /// tool show per session.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -65,6 +76,7 @@ struct Inner {
 
 struct RegistryEntry {
     info: ConnectionInfo,
+    log_label: String,
     live: bool,
 }
 
@@ -232,21 +244,35 @@ impl Sessions {
     }
 
     pub fn connect_client(&self, id: ConnectionId, client_name: String, version: String) {
+        self.connect_client_with_title(id, client_name, version, None);
+    }
+
+    pub(crate) fn connect_client_with_title(
+        &self,
+        id: ConnectionId,
+        client_name: String,
+        version: String,
+        title: Option<String>,
+    ) {
+        let info = ConnectionInfo {
+            id,
+            client_name,
+            version,
+            state: ConnectionState::Connected,
+        };
+        let log_label = client_label(title.as_deref(), &info.client_name, &info.version);
         self.connections
             .lock()
             .expect("connections mutex poisoned")
             .insert(
                 id,
                 RegistryEntry {
-                    info: ConnectionInfo {
-                        id,
-                        client_name,
-                        version,
-                        state: ConnectionState::Connected,
-                    },
+                    info,
+                    log_label: log_label.clone(),
                     live: true,
                 },
             );
+        tracing::info!("{log_label} connected");
         self.bump_connections();
     }
 
@@ -282,22 +308,24 @@ impl Sessions {
         self.set_connection_state(id, ConnectionState::Connected);
     }
 
-    pub fn disconnect_client(&self, id: ConnectionId) {
-        let changed = self
+    pub fn disconnect_client(&self, id: ConnectionId) -> Option<ConnectionInfo> {
+        let disconnected = self
             .connections
             .lock()
             .expect("connections mutex poisoned")
             .get_mut(&id)
-            .is_some_and(|entry| {
+            .and_then(|entry| {
                 if !entry.live {
-                    return false;
+                    return None;
                 }
                 entry.live = false;
-                true
+                Some((entry.info.clone(), entry.log_label.clone()))
             });
-        if changed {
+        if let Some((_, log_label)) = &disconnected {
+            tracing::info!("{log_label} disconnected");
             self.bump_connections();
         }
+        disconnected.map(|(info, _)| info)
     }
 
     pub fn connection(&self, id: ConnectionId) -> Option<ConnectionInfo> {
@@ -712,6 +740,31 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn client_label_prefers_title_and_omits_an_empty_version() {
+        assert_eq!(
+            client_label(Some("Claude Code"), "claude-code", "2.1.215"),
+            "Claude Code 2.1.215"
+        );
+        assert_eq!(client_label(Some("   "), "claude-code", ""), "claude-code");
+        assert_eq!(client_label(None, "claude-code", "   "), "claude-code");
+    }
+
+    #[test]
+    fn disconnect_reports_only_the_first_live_transition() {
+        let root = tmp_root("disconnect-transition");
+        let sessions = Sessions::open(root.join("sessions"), None).unwrap();
+        let id = sessions.next_connection_id();
+        sessions.connect_client(id, "claude-code".into(), "2.1.215".into());
+
+        assert_eq!(
+            sessions.disconnect_client(id).map(|info| info.client_name),
+            Some("claude-code".into())
+        );
+        assert!(sessions.disconnect_client(id).is_none());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
