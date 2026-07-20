@@ -16,7 +16,6 @@ use crate::model::NodeId;
 use crate::sessions::Sessions;
 use crate::store::ToastLevel;
 
-use super::activity::ActivityFeed;
 use super::agent_launcher::AgentLauncher;
 use super::canvas::Canvas;
 use super::choice_panel::ChoicePanel;
@@ -168,8 +167,7 @@ pub fn App() -> Element {
             TopBar { doc, meta, connections, selected, session_name, timeline_open, queued_changes_open, questions_open }
             div { class: "main",
                 if has_nodes {
-                    Canvas { doc, layout, selected, hovered_affects }
-                    ActivityFeed { meta }
+                    Canvas { doc, layout, selected, hovered_affects, meta }
                 } else {
                     div { class: "empty-state",
                         span { class: "empty-bolt", "ϟ" }
