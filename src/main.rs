@@ -71,7 +71,7 @@ fn main() -> anyhow::Result<()> {
             .context("waiting for ctrl-c")?;
         tracing::info!("ctrl-c — shutting down");
     } else {
-        nodestorm::ui::launch(sessions.clone(), cli);
+        nodestorm::ui::launch(sessions.clone(), terminals.clone(), cli);
     }
 
     // The UI (or ctrl-c) is done: no PTY child outlives the app.

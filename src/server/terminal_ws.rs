@@ -37,9 +37,80 @@ fn parse_resize(text: &str) -> Option<(u16, u16)> {
     Some((frame.resize.cols, frame.resize.rows))
 }
 
+/// Every vendored Ferroterm runtime file, keyed by its path under
+/// /terminal/assets/. The module graph's relative imports (src/ -> ../pkg/)
+/// depend on this layout. `mount.js` and the `.d.ts` are not served.
+fn ferroterm_asset(path: &str) -> Option<(&'static [u8], &'static str)> {
+    const JS: &str = "text/javascript";
+    Some(match path {
+        "src/index.js" => (
+            include_bytes!("../../assets/ferroterm/src/index.js").as_slice(),
+            JS,
+        ),
+        "src/ferroterm.js" => (
+            include_bytes!("../../assets/ferroterm/src/ferroterm.js").as_slice(),
+            JS,
+        ),
+        "src/element.js" => (
+            include_bytes!("../../assets/ferroterm/src/element.js").as_slice(),
+            JS,
+        ),
+        "src/model.js" => (
+            include_bytes!("../../assets/ferroterm/src/model.js").as_slice(),
+            JS,
+        ),
+        "src/renderer-canvas.js" => (
+            include_bytes!("../../assets/ferroterm/src/renderer-canvas.js").as_slice(),
+            JS,
+        ),
+        "src/renderer-webgl.js" => (
+            include_bytes!("../../assets/ferroterm/src/renderer-webgl.js").as_slice(),
+            JS,
+        ),
+        "src/keycodes.js" => (
+            include_bytes!("../../assets/ferroterm/src/keycodes.js").as_slice(),
+            JS,
+        ),
+        "src/palette.js" => (
+            include_bytes!("../../assets/ferroterm/src/palette.js").as_slice(),
+            JS,
+        ),
+        "src/links.js" => (
+            include_bytes!("../../assets/ferroterm/src/links.js").as_slice(),
+            JS,
+        ),
+        "pkg/ferroterm_wasm.js" => (
+            include_bytes!("../../assets/ferroterm/pkg/ferroterm_wasm.js").as_slice(),
+            JS,
+        ),
+        "pkg/ferroterm_wasm_bg.wasm" => (
+            include_bytes!("../../assets/ferroterm/pkg/ferroterm_wasm_bg.wasm").as_slice(),
+            "application/wasm",
+        ),
+        _ => return None,
+    })
+}
+
+async fn terminal_asset(Path(path): Path<String>) -> Response {
+    let Some((bytes, mime)) = ferroterm_asset(&path) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, mime),
+            // Module imports and WASM fetches from the webview's custom-scheme
+            // origin are CORS-gated; the assets are public code, no secrets.
+            (axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+
 pub(super) fn routes(manager: Arc<TerminalManager>) -> axum::Router {
     axum::Router::new()
         .route("/terminal/{id}/ws", get(terminal_ws))
+        .route("/terminal/assets/{*path}", get(terminal_asset))
         .with_state(manager)
 }
 
@@ -124,6 +195,38 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         tokio::spawn(axum::serve(listener, routes(manager)).into_future());
         format!("ws://{addr}")
+    }
+
+    #[tokio::test]
+    async fn ferroterm_assets_are_served_with_mime_and_cors() {
+        let manager = TerminalManager::new();
+        let base = serve_terminal_routes(manager).await;
+        let http = base.replace("ws://", "http://");
+
+        let js = reqwest::get(format!("{http}/terminal/assets/src/index.js"))
+            .await
+            .unwrap();
+        assert2::assert!((js.status().as_u16()) == (200));
+        assert2::assert!((js.headers()["content-type"].to_str().unwrap()) == ("text/javascript"));
+        assert2::assert!(
+            (js.headers()["access-control-allow-origin"]
+                .to_str()
+                .unwrap())
+                == ("*")
+        );
+
+        let wasm = reqwest::get(format!("{http}/terminal/assets/pkg/ferroterm_wasm_bg.wasm"))
+            .await
+            .unwrap();
+        assert2::assert!((wasm.status().as_u16()) == (200));
+        assert2::assert!(
+            (wasm.headers()["content-type"].to_str().unwrap()) == ("application/wasm")
+        );
+
+        let missing = reqwest::get(format!("{http}/terminal/assets/evil.js"))
+            .await
+            .unwrap();
+        assert2::assert!((missing.status().as_u16()) == (404));
     }
 
     #[tokio::test]

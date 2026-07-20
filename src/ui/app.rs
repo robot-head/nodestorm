@@ -23,6 +23,7 @@ use super::choice_panel::ChoicePanel;
 use super::diff_panel::DiffPanel;
 use super::questions_panel::QuestionsPanel;
 use super::queued_changes::QueuedChangesPanel;
+use super::terminal_panel::TerminalDock;
 use super::timeline::Timeline;
 use super::topbar::TopBar;
 
@@ -54,6 +55,16 @@ pub fn App() -> Element {
         open: Signal::new(false),
     });
     let mut launcher_open = use_context_provider(|| super::AgentLauncherOpen(Signal::new(false))).0;
+
+    let terminal_manager = use_context::<Arc<crate::terminal::TerminalManager>>();
+    let mut terminals =
+        use_context_provider(|| super::Terminals(Signal::new(terminal_manager.list()))).0;
+    use_context_provider(|| super::TerminalPanel {
+        open: Signal::new(false),
+        focused: Signal::new(None),
+        confirm_close: Signal::new(None),
+        quit_confirm: Signal::new(false),
+    });
 
     // Theme preference: seeded from the file loaded in launch(); the CSS
     // reacts through data-theme/data-mode below, the native title bar
@@ -90,6 +101,23 @@ pub fn App() -> Element {
                 connections.set(sessions.connections());
                 while changes.changed().await.is_ok() {
                     connections.set(sessions.connections());
+                }
+            }
+        }
+    });
+
+    // Terminal dock tabs: refreshed from the manager's generation watch,
+    // independent of session/store state (same shape as the connections loop
+    // above).
+    use_future({
+        let manager = terminal_manager.clone();
+        move || {
+            let manager = manager.clone();
+            async move {
+                let mut changes = manager.subscribe();
+                terminals.set(manager.list());
+                while changes.changed().await.is_ok() {
+                    terminals.set(manager.list());
                 }
             }
         }
@@ -225,6 +253,7 @@ pub fn App() -> Element {
                     QuestionsPanel { doc, on_close: move |()| questions_open.set(false) }
                 }
             }
+            TerminalDock {}
             if launcher_open() {
                 AgentLauncher {}
             }

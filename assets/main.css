@@ -1927,6 +1927,112 @@ fieldset.agent-launch-options {
   font-size: 10.5px;
 }
 
+/* ---------- terminal dock ---------- */
+
+.term-dock {
+  display: flex;
+  flex-direction: column;
+  height: 40vh;
+  min-height: 0;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+}
+
+.term-dock.collapsed {
+  display: none;
+}
+
+.term-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 6px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.term-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  color: var(--text-dim);
+}
+
+.term-tab.active {
+  background: var(--bg-card);
+  color: var(--text);
+}
+
+.term-dot.running { color: var(--volt); }
+.term-dot.exited { color: var(--text-dim); }
+
+.term-tab-close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.term-tab-close:hover { color: var(--text); }
+
+.term-collapse {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.term-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.term-host {
+  position: absolute;
+  inset: 0;
+  padding: 4px 0 0 6px;
+  /* ponytail: fixed Ferroterm default (dark) theme; themed terminals need a
+     setTheme call on palette switch. */
+  background: #000;
+}
+
+.term-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 60;
+}
+
+.term-confirm {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  max-width: 420px;
+  box-shadow: var(--shadow);
+}
+
+.term-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.agent-clickable {
+  cursor: pointer;
+  text-decoration: underline dotted;
+}
+
 /* ---------- canvas ---------- */
 
 .canvas-controls {

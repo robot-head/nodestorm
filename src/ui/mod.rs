@@ -15,6 +15,7 @@ mod more_menu;
 mod node_card;
 mod questions_panel;
 mod queued_changes;
+mod terminal_panel;
 mod theme_menu;
 mod timeline;
 mod topbar;
@@ -96,6 +97,42 @@ pub(crate) struct MessageComposer {
 /// Whether the start-agent modal is open.
 #[derive(Clone, Copy)]
 pub(crate) struct AgentLauncherOpen(pub Signal<bool>);
+
+/// Open terminal tabs, refreshed from the [`crate::terminal::TerminalManager`]
+/// generation watch.
+#[derive(Clone, Copy)]
+pub(crate) struct Terminals(pub Signal<Vec<crate::terminal::TerminalInfo>>);
+
+/// Dock state: visibility, the focused tab, the pending tab-close
+/// confirmation, and the pending quit confirmation.
+#[derive(Clone, Copy)]
+pub(crate) struct TerminalPanel {
+    pub open: Signal<bool>,
+    pub focused: Signal<Option<String>>,
+    pub confirm_close: Signal<Option<String>>,
+    // ponytail: read by the quit-confirmation flow (Task 6), not yet wired up.
+    #[allow(dead_code)]
+    pub quit_confirm: Signal<bool>,
+}
+
+/// Expand the dock and select `id` — the single entry point every
+/// agent-name click target uses.
+// ponytail: called from the agent-name click targets landing in Tasks 4-6.
+#[allow(dead_code)]
+pub(crate) fn focus_terminal(panel: &TerminalPanel, id: &str) {
+    let mut open = panel.open;
+    let mut focused = panel.focused;
+    open.set(true);
+    focused.set(Some(id.to_owned()));
+}
+
+/// Whether an open terminal tab (running or exited) has exactly this id.
+// ponytail: called from the agent-name click styling landing in Tasks 4-6;
+// exercised by its own unit test until then.
+#[allow(dead_code)]
+pub(crate) fn terminal_for(terminals: &[crate::terminal::TerminalInfo], name: &str) -> bool {
+    terminals.iter().any(|t| t.id == name)
+}
 
 /// The live theme/mode preference (loaded in [`launch`], edited by the
 /// topbar's theme menu, persisted to the global preferences file).
@@ -216,7 +253,11 @@ fn app_icon() -> dioxus::desktop::tao::window::Icon {
 }
 
 /// Launch the desktop window. Must be called on the main thread.
-pub fn launch(sessions: Arc<crate::sessions::Sessions>, cli: Cli) {
+pub fn launch(
+    sessions: Arc<crate::sessions::Sessions>,
+    terminals: Arc<crate::terminal::TerminalManager>,
+    cli: Cli,
+) {
     // Load preferences before the window exists so the native title bar is
     // right from first paint; the App seeds its signal from this context.
     let prefs = cli
@@ -235,6 +276,7 @@ pub fn launch(sessions: Arc<crate::sessions::Sessions>, cli: Cli) {
         .with_cfg(Config::new().with_window(window).with_menu(None))
         .with_context(cli)
         .with_context(sessions)
+        .with_context(terminals)
         .with_context(prefs)
         .launch(app::App);
 }
@@ -243,6 +285,47 @@ pub fn launch(sessions: Arc<crate::sessions::Sessions>, cli: Cli) {
 mod tests {
     use super::*;
     use yare::parameterized;
+
+    #[test]
+    fn terminal_lookup_matches_exact_ids_only() {
+        let terminals = vec![
+            crate::terminal::TerminalInfo {
+                id: "claude-cache-redesign".into(),
+                status: crate::terminal::TerminalStatus::Running,
+            },
+            crate::terminal::TerminalInfo {
+                id: "pi-api-v2".into(),
+                status: crate::terminal::TerminalStatus::Exited(0),
+            },
+        ];
+        assert2::assert!(terminal_for(&terminals, "claude-cache-redesign"));
+        // Exited-but-open tabs still count; unknown and partial names do not.
+        assert2::assert!(terminal_for(&terminals, "pi-api-v2"));
+        assert2::assert!(!terminal_for(&terminals, "claude"));
+        assert2::assert!(!terminal_for(&terminals, "codex-cache-redesign"));
+    }
+
+    #[test]
+    fn mount_template_placeholders_are_all_known() {
+        let js = include_str!("../../assets/ferroterm/mount.js");
+        for placeholder in ["__ID__", "__PORT__", "__TOKEN__"] {
+            assert2::assert!(js.contains(placeholder));
+        }
+        // No stray `__UPPERCASE` template markers beyond the three we
+        // substitute (`__nsTerms` and friends are legitimate identifiers).
+        let substituted = js
+            .replace("__ID__", "x")
+            .replace("__PORT__", "1")
+            .replace("__TOKEN__", "t");
+        let stray = substituted
+            .as_bytes()
+            .windows(3)
+            .any(|w| w[0] == b'_' && w[1] == b'_' && w[2].is_ascii_uppercase());
+        assert2::assert!(!stray);
+        // The vendored entry + wasm paths must be referenced.
+        assert2::assert!(substituted.contains("src/index.js"));
+        assert2::assert!(substituted.contains("pkg/ferroterm_wasm_bg.wasm"));
+    }
 
     #[test]
     fn embedded_app_icon_is_a_256px_rgba_png() {
