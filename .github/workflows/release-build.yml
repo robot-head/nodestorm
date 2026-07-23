@@ -23,7 +23,8 @@ jobs:
         with:
           node-version: 24
       - name: Validate synchronized release and external identity gate
-        run: node scripts/validate-release.mjs --release --tag "${GITHUB_REF_NAME}"
+        # A manual dispatch runs off a branch, where there is no tag to match.
+        run: node scripts/validate-release.mjs --release ${{ github.ref_type == 'tag' && format('--tag {0}', github.ref_name) || '' }}
       - name: Test host adapters and installers
         run: node --test tests/plugin_contract.mjs tests/host_adapters.mjs tests/installers.mjs tests/release_gates.mjs
       - name: Validate npm contents
