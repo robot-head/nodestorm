@@ -1,4 +1,5 @@
 /target
+*.msix
 /plugins/nodestorm/node_modules/
 
 # SDD/debug session scratch (review packages, ledgers)

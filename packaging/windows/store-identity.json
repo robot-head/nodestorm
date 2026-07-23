@@ -1,8 +1,9 @@
 {
   "identityName": "DJSpacecat.Nodestorm",
   "publisher": "CN=CBC9F4BD-4A46-4C04-B689-3E1E1CD2355A",
+  "publisherDisplayName": "DJ Spacecat",
   "productId": "9PL98XH1NQZB",
+  "applicationId": "Nodestorm",
   "executionAlias": "nodestorm.exe",
-  "msixVersion": "0.9.0.0",
-  "version": "0.9.0"
+  "msixVersion": "0.9.0.0"
 }
