@@ -355,3 +355,4 @@ selecting a card the panel overlaps, as the script does.
 
 Design cap: ~100 nodes per graph, one brainstorm session at a time.
 Where this is going: see [ROADMAP.md](ROADMAP.md).
+
