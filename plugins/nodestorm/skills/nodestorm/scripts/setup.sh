@@ -244,7 +244,7 @@ else
   "${LAUNCH_COMMAND[@]}"
 fi
 
-INITIALIZE='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"nodestorm-setup","version":"0.9.0"}}}'
+INITIALIZE='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"nodestorm-setup","version":"1.0.0"}}}'
 for ((_attempt = 1; _attempt <= READINESS_ATTEMPTS; _attempt++)); do
   RESPONSE=$(curl --silent --show-error --max-time 2 \
     -H 'Content-Type: application/json' \

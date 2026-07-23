@@ -10,7 +10,7 @@ const identity = JSON.parse(await readFile(identityPath, "utf8"));
 for (const field of ["identityName", "publisher", "productId", "executionAlias", "msixVersion"]) {
   assert.ok(identity[field] && !identity[field].startsWith("REPLACE_"), `Store identity field ${field} is not reserved`);
 }
-assert.equal(identity.msixVersion, "0.9.0.0");
+assert.equal(identity.msixVersion, "1.0.0.0");
 
 await writeFile(outputPath, `${JSON.stringify({
   identityName: identity.identityName,
@@ -18,6 +18,6 @@ await writeFile(outputPath, `${JSON.stringify({
   productId: identity.productId,
   executionAlias: identity.executionAlias,
   msixVersion: identity.msixVersion,
-  version: "0.9.0",
+  version: "1.0.0",
 }, null, 2)}\n`);
 console.log(`Configured ${path.relative(root, outputPath)} for Store Product ID ${identity.productId}.`);

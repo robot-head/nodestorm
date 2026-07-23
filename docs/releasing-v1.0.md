@@ -1,4 +1,4 @@
-# Nodestorm v0.9 release runbook
+# Nodestorm v1.0 release runbook
 
 The release is deliberately blocked until all public identity and signing
 prerequisites are real. No workflow substitutes unsigned downloads or example
@@ -19,12 +19,12 @@ identity values.
 3. Configure npm trusted publishing for the `nodestorm` package and this
    repository's `release-publish.yml` workflow.
 
-`node scripts/validate-release.mjs --release --tag v0.9.0` is the preflight.
+`node scripts/validate-release.mjs --release --tag v1.0.0` is the preflight.
 It rejects missing/example Partner Center values or version drift.
 
 ## Stage 1: build a draft
 
-Push tag `v0.9.0`. `release-build.yml` builds Linux x64/arm64 on native Ubuntu
+Push tag `v1.0.0`. `release-build.yml` builds Linux x64/arm64 on native Ubuntu
 runners, macOS x64/arm64 on native Apple runners, and Windows x64/arm64 on
 native Windows runners. It performs native version and MCP test gates,
 notarizes and staples macOS, attests Linux/macOS artifacts, and creates a draft
@@ -37,9 +37,9 @@ installation and the execution alias in CI; that copy is never uploaded.
 
 ## Stage 2: publish after Store certification
 
-After Microsoft Store reports version `0.9.0.0` live, dispatch
-`release-publish.yml` with Store version `0.9.0.0` and confirmation
-`publish-v0.9.0`. The workflow independently checks the live Store listing,
+After Microsoft Store reports version `1.0.0.0` live, dispatch
+`release-publish.yml` with Store version `1.0.0.0` and confirmation
+`publish-v1.0.0`. The workflow independently checks the live Store listing,
 injects the exact Store Product ID into the npm setup package, publishes npm
 through trusted publishing with provenance, and makes the GitHub draft public.
 

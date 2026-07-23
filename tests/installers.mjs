@@ -12,10 +12,10 @@ const root = path.resolve(import.meta.dirname, "..");
 const scripts = path.join(root, "plugins", "nodestorm", "skills", "nodestorm", "scripts");
 
 for (const [os, arch, asset] of [
-  ["linux", "x64", "nodestorm-v0.9.0-linux-x64.tar.gz"],
-  ["linux", "arm64", "nodestorm-v0.9.0-linux-arm64.tar.gz"],
-  ["macos", "x64", "nodestorm-v0.9.0-macos-x64.zip"],
-  ["macos", "arm64", "nodestorm-v0.9.0-macos-arm64.zip"],
+  ["linux", "x64", "nodestorm-v1.0.0-linux-x64.tar.gz"],
+  ["linux", "arm64", "nodestorm-v1.0.0-linux-arm64.tar.gz"],
+  ["macos", "x64", "nodestorm-v1.0.0-macos-x64.zip"],
+  ["macos", "arm64", "nodestorm-v1.0.0-macos-arm64.zip"],
 ]) {
   test(`POSIX setup dry-run maps ${os}/${arch}`, () => {
     const result = spawnSync(
@@ -33,7 +33,7 @@ test("Windows setup supports both Store architectures and has no direct download
   assert.match(script, /ValidateSet\("x64",\s*"arm64"\)/);
   assert.match(script, /install\s+--id[\s\S]*--source\s+msstore/i);
   assert.match(script, /ms-windows-store:\/\/pdp\/\?ProductId=/);
-  assert.match(script, /0\.9\.0/);
+  assert.match(script, /1\.0\.0/);
   assert.match(script, /Get-AppxPackage -Name \$Store\.identityName/);
   assert.match(script, /\$Store\.msixVersion/);
   assert.match(script, /Microsoft\\WindowsApps/);
@@ -71,14 +71,14 @@ async function linuxFailureFixture({ checksumValid = true, ghExit = 0, missingIc
   await mkdir(staging);
   await mkdir(bin);
   const binary = path.join(staging, "nodestorm");
-  await executable(binary, '#!/bin/bash\nif [[ "${1:-}" == "--version" ]]; then echo "nodestorm 0.9.0"; fi\n');
+  await executable(binary, '#!/bin/bash\nif [[ "${1:-}" == "--version" ]]; then echo "nodestorm 1.0.0"; fi\n');
   for (const size of [48, 128, 256, 512]) {
     if (size === missingIcon) continue;
     const iconDir = path.join(staging, "icons", `${size}x${size}`);
     await mkdir(iconDir, { recursive: true });
     await copyFile(path.join(root, "assets", "icons", `nodestorm-${size}.png`), path.join(iconDir, "nodestorm.png"));
   }
-  const asset = "nodestorm-v0.9.0-linux-x64.tar.gz";
+  const asset = "nodestorm-v1.0.0-linux-x64.tar.gz";
   const tar = spawnSync("tar", ["-C", staging, "-czf", path.join(release, asset), "nodestorm", "icons"], { encoding: "utf8" });
   assert.equal(tar.status, 0, tar.stderr);
   const archive = await readFile(path.join(release, asset));
@@ -126,7 +126,7 @@ test("Linux setup installs launcher and hicolor icons", async () => {
   const result = runLinuxFixture(fixture.env, { cwd: fixture.fixture, skipLaunch: true });
   assert.equal(result.status, 0, result.stderr);
   const data = fixture.env.XDG_DATA_HOME;
-  const binary = path.join(data, "nodestorm", "0.9.0", "nodestorm");
+  const binary = path.join(data, "nodestorm", "1.0.0", "nodestorm");
   const desktop = path.join(data, "applications", "nodestorm.desktop");
   assert.equal(path.isAbsolute(binary), true);
   assert.equal(await readFile(desktop, "utf8"), desktopEntry(binary));
@@ -145,7 +145,7 @@ test("Linux setup ignores a relative XDG data home", async () => {
   const result = runLinuxFixture(fixture.env, { cwd: fixture.fixture, skipLaunch: true });
   assert.equal(result.status, 0, result.stderr);
   const data = path.join(fixture.env.HOME, ".local", "share");
-  const binary = path.join(data, "nodestorm", "0.9.0", "nodestorm");
+  const binary = path.join(data, "nodestorm", "1.0.0", "nodestorm");
   assert.equal(await readFile(path.join(data, "applications", "nodestorm.desktop"), "utf8"), desktopEntry(binary));
   await assert.rejects(access(path.join(fixture.fixture, fixture.env.XDG_DATA_HOME)), { code: "ENOENT" });
 });
@@ -156,7 +156,7 @@ test("Linux setup falls back from an XDG data home with an unrepresentable Exec 
   const result = runLinuxFixture(fixture.env, { cwd: fixture.fixture, skipLaunch: true });
   assert.equal(result.status, 0, result.stderr);
   const data = path.join(fixture.env.HOME, ".local", "share");
-  const binary = path.join(data, "nodestorm", "0.9.0", "nodestorm");
+  const binary = path.join(data, "nodestorm", "1.0.0", "nodestorm");
   assert.equal(await readFile(path.join(data, "applications", "nodestorm.desktop"), "utf8"), desktopEntry(binary));
   await assert.rejects(access(fixture.env.XDG_DATA_HOME), { code: "ENOENT" });
 });
@@ -170,7 +170,7 @@ test("Linux setup rejects an unrepresentable fallback Exec path before installin
   assert.match(result.stderr, /executable path cannot be represented in a desktop entry/i);
   for (const data of [fixture.env.XDG_DATA_HOME, path.join(fixture.env.HOME, ".local", "share")]) {
     for (const destination of [
-      path.join(data, "nodestorm", "0.9.0", "nodestorm"),
+      path.join(data, "nodestorm", "1.0.0", "nodestorm"),
       ...[48, 128, 256, 512].map((size) => path.join(data, "icons", "hicolor", `${size}x${size}`, "apps", "nodestorm.png")),
       path.join(data, "applications", "nodestorm.desktop"),
     ]) await assert.rejects(access(destination), { code: "ENOENT" });
@@ -184,7 +184,7 @@ test("Linux setup validates every icon before installing files", async () => {
   assert.match(result.stderr, /Release archive has no 48px launcher icon/);
   const data = fixture.env.XDG_DATA_HOME;
   for (const destination of [
-    path.join(data, "nodestorm", "0.9.0", "nodestorm"),
+    path.join(data, "nodestorm", "1.0.0", "nodestorm"),
     ...[48, 128, 256, 512].map((size) => path.join(data, "icons", "hicolor", `${size}x${size}`, "apps", "nodestorm.png")),
     path.join(data, "applications", "nodestorm.desktop"),
   ]) await assert.rejects(access(destination), { code: "ENOENT" });
@@ -238,8 +238,8 @@ test("macOS setup executes a signing failure path", async (t) => {
   await mkdir(release);
   await mkdir(appBinaryDir, { recursive: true });
   await mkdir(bin);
-  await executable(path.join(appBinaryDir, "nodestorm"), '#!/bin/bash\necho "nodestorm 0.9.0"\n');
-  const asset = "nodestorm-v0.9.0-macos-x64.zip";
+  await executable(path.join(appBinaryDir, "nodestorm"), '#!/bin/bash\necho "nodestorm 1.0.0"\n');
+  const asset = "nodestorm-v1.0.0-macos-x64.zip";
   const zip = spawnSync(zipCommand, ["-qry", path.join(release, asset), "Nodestorm.app"], { cwd: staging, encoding: "utf8" });
   assert.equal(zip.status, 0, zip.stderr);
   const archive = await readFile(path.join(release, asset));

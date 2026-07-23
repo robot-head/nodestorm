@@ -17,7 +17,7 @@ foreach ($field in @("identityName", "publisher", "publisherDisplayName", "produ
     $value = $identity.$field
     if (-not $value -or $value -like "REPLACE_*") { throw "Store identity field '$field' is not configured." }
 }
-if ($identity.msixVersion -ne "0.9.0.0") { throw "MSIX version must be 0.9.0.0." }
+if ($identity.msixVersion -ne "1.0.0.0") { throw "MSIX version must be 1.0.0.0." }
 
 $manifest = Get-Content (Join-Path $PSScriptRoot "AppxManifest.template.xml") -Raw
 $manifest = $manifest.Replace("@@IDENTITY_NAME@@", $identity.identityName)

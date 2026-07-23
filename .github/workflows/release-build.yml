@@ -1,8 +1,8 @@
-name: Build signed v0.9.0 release draft
+name: Build signed v1.0.0 release draft
 
 on:
   push:
-    tags: ["v0.9.0"]
+    tags: ["v1.0.0"]
 
 permissions:
   contents: write
@@ -11,7 +11,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  VERSION: 0.9.0
+  VERSION: 1.0.0
 
 jobs:
   validate:
@@ -251,11 +251,11 @@ jobs:
         run: |
           $sdk = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Directory | Sort-Object Name -Descending | Select-Object -First 1
           $makeappx = Join-Path $sdk.FullName "x64\makeappx.exe"
-          & $makeappx bundle /o /d packages /p "nodestorm-v0.9.0-windows.msixbundle"
+          & $makeappx bundle /o /d packages /p "nodestorm-v1.0.0-windows.msixbundle"
       - uses: actions/upload-artifact@v6
         with:
           name: windows-store-msixbundle
-          path: nodestorm-v0.9.0-windows.msixbundle
+          path: nodestorm-v1.0.0-windows.msixbundle
           if-no-files-found: error
           retention-days: 30
 

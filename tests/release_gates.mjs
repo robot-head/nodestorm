@@ -15,8 +15,8 @@ test("release validation hard-fails missing Partner Center identity or a wrong t
     identityExists = false;
   }
   const args = identityExists
-    ? ["scripts/validate-release.mjs", "--release", "--tag", "v0.9.1"]
-    : ["scripts/validate-release.mjs", "--release", "--tag", "v0.9.0"];
+    ? ["scripts/validate-release.mjs", "--release", "--tag", "v1.0.1"]
+    : ["scripts/validate-release.mjs", "--release", "--tag", "v1.0.0"];
   const result = spawnSync("node", args, { cwd: root, encoding: "utf8" });
   assert.notEqual(result.status, 0);
   assert.match(`${result.stdout}\n${result.stderr}`, identityExists ? /tag .* does not match/ : /Partner Center identity is missing/);
@@ -25,7 +25,7 @@ test("release validation hard-fails missing Partner Center identity or a wrong t
 test("npm is published before the GitHub release becomes public", async () => {
   const workflow = await readFile(path.join(root, ".github", "workflows", "release-publish.yml"), "utf8");
   const npmPublish = workflow.indexOf("npm publish --provenance --access public");
-  const githubPublish = workflow.indexOf("gh release edit v0.9.0 --draft=false");
+  const githubPublish = workflow.indexOf("gh release edit v1.0.0 --draft=false");
 
   assert.notEqual(npmPublish, -1);
   assert.notEqual(githubPublish, -1);

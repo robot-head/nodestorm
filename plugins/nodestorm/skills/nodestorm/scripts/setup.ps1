@@ -9,7 +9,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Version = "0.9.0"
+$Version = "1.0.0"
 $McpUrl = "http://127.0.0.1:4747/mcp"
 $testing = $env:NODESTORM_SETUP_TESTING -eq "1"
 $storePath = Join-Path $PSScriptRoot "store.json"
@@ -34,8 +34,8 @@ foreach ($field in @("identityName", "publisher", "productId", "executionAlias",
 if ($Store.version -ne $Version) {
     throw "Store metadata version $($Store.version) does not match plugin version $Version."
 }
-if ($Store.msixVersion -ne "0.9.0.0") {
-    throw "Store MSIX version $($Store.msixVersion) does not match 0.9.0.0."
+if ($Store.msixVersion -ne "1.0.0.0") {
+    throw "Store MSIX version $($Store.msixVersion) does not match 1.0.0.0."
 }
 
 function Confirm-Action([string]$Prompt) {
@@ -116,7 +116,7 @@ $listener = Get-NetTCPConnection -State Listen -LocalPort 4747 -ErrorAction Sile
 if ($listener) { throw "Port 4747 became unavailable before launch." }
 Start-Process $aliasPath
 
-$initialize = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"nodestorm-setup","version":"0.9.0"}}}'
+$initialize = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"nodestorm-setup","version":"1.0.0"}}}'
 for ($attempt = 0; $attempt -lt 60; $attempt++) {
     $response = & $curlPath --silent --show-error --max-time 2 `
         -H "Content-Type: application/json" `
