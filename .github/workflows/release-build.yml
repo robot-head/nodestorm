@@ -3,6 +3,7 @@ name: Build signed v1.0.0 release draft
 on:
   push:
     tags: ["v1.0.0"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -234,7 +235,9 @@ jobs:
           $password = ConvertTo-SecureString "nodestorm-ci" -AsPlainText -Force
           Export-PfxCertificate -Cert $cert -FilePath "$env:RUNNER_TEMP\nodestorm-ci.pfx" -Password $password | Out-Null
           Export-Certificate -Cert $cert -FilePath "$env:RUNNER_TEMP\nodestorm-ci.cer" | Out-Null
-          Import-Certificate -FilePath "$env:RUNNER_TEMP\nodestorm-ci.cer" -CertStoreLocation Cert:\CurrentUser\TrustedPeople | Out-Null
+          # AppX deployment runs as a service and only consults the machine stores.
+          Import-Certificate -FilePath "$env:RUNNER_TEMP\nodestorm-ci.cer" -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+          Import-Certificate -FilePath "$env:RUNNER_TEMP\nodestorm-ci.cer" -CertStoreLocation Cert:\LocalMachine\TrustedPeople | Out-Null
           Copy-Item "nodestorm-v$env:VERSION-windows-${{ matrix.arch }}.msix" "$env:RUNNER_TEMP\signed.msix"
           & $env:SIGNTOOL sign /fd SHA256 /f "$env:RUNNER_TEMP\nodestorm-ci.pfx" /p nodestorm-ci "$env:RUNNER_TEMP\signed.msix"
           Add-AppxPackage "$env:RUNNER_TEMP\signed.msix"
@@ -268,6 +271,8 @@ jobs:
 
   draft-release:
     needs: [linux, macos, windows-bundle]
+    # Manual dispatch rebuilds artifacts only; a release draft comes from the tag.
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v7
