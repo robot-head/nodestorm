@@ -1,8 +1,8 @@
 //! Built-in demo document: `nodestorm --demo` render target and test fixture.
 
 use crate::model::{
-    Choice, ChoiceOption, ChoiceStatus, Edge, EdgeKind, ElementStatus, Node, NodeId, NodeKind,
-    SessionDoc,
+    BuildStatus, Choice, ChoiceOption, ChoiceRef, ChoiceStatus, Edge, EdgeKind, ElementStatus,
+    Node, NodeId, NodeKind, Origin, Question, QuestionId, SessionDoc,
 };
 
 fn n(id: &str, label: &str, kind: NodeKind, status: ElementStatus, description: &str) -> Node {
@@ -12,10 +12,14 @@ fn n(id: &str, label: &str, kind: NodeKind, status: ElementStatus, description: 
         kind,
         description: description.to_owned(),
         status,
+        build: None,
         group: None,
+        lane: None,
         choices: vec![],
         notes: vec![],
+        agent: None,
         position: None,
+        origin: Origin::Agent,
     }
 }
 
@@ -26,6 +30,7 @@ fn e(from: &str, to: &str, kind: EdgeKind, status: ElementStatus) -> Edge {
         kind,
         label: None,
         status,
+        origin: Origin::Agent,
     }
 }
 
@@ -189,6 +194,8 @@ pub fn demo_doc() -> SessionDoc {
         options: vec![crdt, ot, lww],
         selected: None,
         status: ChoiceStatus::Open,
+        depends_on: vec![],
+        needs_review: false,
         reopen: false,
     });
 
@@ -226,8 +233,36 @@ pub fn demo_doc() -> SessionDoc {
         options: vec![dedicated, inprocess],
         selected: None,
         status: ChoiceStatus::Open,
+        // Where sockets terminate only matters once the merge strategy is
+        // chosen — locked until conflict-resolution is decided.
+        depends_on: vec![ChoiceRef {
+            node: NodeId::from("sync-engine"),
+            choice: "conflict-resolution".into(),
+        }],
+        needs_review: false,
         reopen: false,
     });
+
+    // A little implementation progress to show the live build board.
+    nodes[3].build = Some(BuildStatus::Building); // notes-service
+    nodes[4].build = Some(BuildStatus::Planned); // sync-engine
+
+    // Swimlanes: a tiered client → services → data → external arrangement.
+    for (i, lane) in [
+        (0, "Client"),
+        (1, "Services"),
+        (2, "Services"),
+        (3, "Services"),
+        (4, "Services"),
+        (5, "Services"),
+        (6, "Data"),
+        (7, "Data"),
+        (8, "Data"),
+        (9, "External"),
+        (10, "Services"),
+    ] {
+        nodes[i].lane = Some(lane.to_owned());
+    }
 
     SessionDoc {
         version: SessionDoc::VERSION,
@@ -253,6 +288,67 @@ pub fn demo_doc() -> SessionDoc {
             e("auth-service", "postgres", DependsOn, Existing),
             e("auth-service", "redis", Contains, Existing),
         ],
+        questions: vec![Question {
+            id: QuestionId::from("history-retention"),
+            prompt: "How long should full edit history be retained once notes go realtime?".into(),
+            node_id: Some(NodeId::from("postgres")),
+            rationale: Some(
+                "CRDT/OT keep per-edit state — retention drives storage growth and \
+                 compliance."
+                    .into(),
+            ),
+            answer: None,
+            answered_at: None,
+        }],
+        annotations: vec![],
+    }
+}
+
+/// Deterministic large graph for scaling checks (`--demo-big N`): `n`
+/// components in groups of 12, chained plus one cross-group link each.
+pub fn big_doc(n: usize) -> SessionDoc {
+    use EdgeKind::{DataFlow, DependsOn};
+    use ElementStatus::Existing;
+    use NodeKind::Component;
+
+    let mut nodes = Vec::with_capacity(n);
+    let mut edges = Vec::new();
+    for i in 0..n {
+        let mut node = self::n(
+            &format!("node-{i}"),
+            &format!("Component {i}"),
+            Component,
+            Existing,
+            "",
+        );
+        node.group = Some(format!("cluster-{}", i / 12));
+        nodes.push(node);
+        if i > 0 {
+            edges.push(e(
+                &format!("node-{}", i - 1),
+                &format!("node-{i}"),
+                DependsOn,
+                Existing,
+            ));
+        }
+        if i >= 12 {
+            edges.push(e(
+                &format!("node-{}", i - 12),
+                &format!("node-{i}"),
+                DataFlow,
+                Existing,
+            ));
+        }
+    }
+    SessionDoc {
+        version: SessionDoc::VERSION,
+        title: format!("big demo ({n} components)"),
+        revision: 0,
+        focus: None,
+        nodes,
+        edges,
+        questions: vec![],
+        annotations: vec![],
     }
 }
 
@@ -261,17 +357,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn big_doc_is_valid_and_deterministic() {
+        let d = big_doc(200);
+        assert2::assert!((d.nodes.len()) == (200));
+        let v = d.validate();
+        assert2::assert!(v.is_ok(), "errors: {:?}", v.errors);
+        assert2::assert!((big_doc(200)) == (big_doc(200)));
+        let layout = crate::layout::compute(&d);
+        assert2::assert!((layout.rects.len()) == (200));
+    }
+
+    #[test]
+    fn big_doc_connects_adjacent_nodes_and_groups_at_the_boundary() {
+        let d = big_doc(13);
+        assert2::assert!((d.edges.len()) == (13));
+        assert2::assert!(d.edges.iter().any(|edge| {
+            edge.from == NodeId::from("node-0")
+                && edge.to == NodeId::from("node-1")
+                && edge.kind == EdgeKind::DependsOn
+        }));
+        assert2::assert!(d.edges.iter().any(|edge| {
+            edge.from == NodeId::from("node-0")
+                && edge.to == NodeId::from("node-12")
+                && edge.kind == EdgeKind::DataFlow
+        }));
+    }
+
+    #[test]
     fn demo_doc_is_valid() {
         let v = demo_doc().validate();
-        assert!(v.is_ok(), "errors: {:?}", v.errors);
-        assert!(v.warnings.is_empty(), "warnings: {:?}", v.warnings);
+        assert2::assert!(v.is_ok(), "errors: {:?}", v.errors);
+        assert2::assert!(v.warnings.is_empty(), "warnings: {:?}", v.warnings);
     }
 
     #[test]
     fn demo_doc_has_open_choices_and_a_cycle() {
         let doc = demo_doc();
-        assert_eq!(doc.open_choice_count(), 2);
+        assert2::assert!((doc.open_choice_count()) == (2));
         let layout = crate::layout::compute(&doc);
-        assert_eq!(layout.rects.len(), doc.nodes.len());
+        assert2::assert!((layout.rects.len()) == (doc.nodes.len()));
     }
 }

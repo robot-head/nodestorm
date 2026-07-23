@@ -1,0 +1,31 @@
+{
+  "name": "nodestorm",
+  "version": "1.0.0",
+  "description": "Visual architecture brainstorming with human decisions over MCP.",
+  "author": {
+    "name": "robot-head",
+    "url": "https://github.com/robot-head"
+  },
+  "homepage": "https://github.com/robot-head/nodestorm",
+  "repository": "https://github.com/robot-head/nodestorm",
+  "license": "MIT OR Apache-2.0",
+  "keywords": ["mcp", "architecture", "brainstorming", "planning"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Nodestorm",
+    "shortDescription": "Design systems on a shared visual canvas",
+    "longDescription": "Propose architecture graphs, collect human decisions, track session drift, and export the resulting design record through the local Nodestorm MCP server.",
+    "developerName": "robot-head",
+    "category": "Developer Tools",
+    "capabilities": ["Interactive", "Read", "Write"],
+    "websiteURL": "https://github.com/robot-head/nodestorm",
+    "privacyPolicyURL": "https://github.com/robot-head/nodestorm/blob/main/PRIVACY.md",
+    "defaultPrompt": [
+      "Use Nodestorm to design this system with me.",
+      "Put these architecture choices on the Nodestorm canvas.",
+      "Compare my Nodestorm sessions and export the decision record."
+    ],
+    "brandColor": "#7C3AED"
+  }
+}

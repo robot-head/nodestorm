@@ -6,11 +6,20 @@
 //! human picks options in the UI; the agent blocks on `await_decisions` until
 //! the decisions are sent back.
 
+pub mod agent_launcher;
 pub mod cli;
 pub mod demo;
+pub mod diff;
+pub mod export;
+pub mod icon;
 pub mod layout;
+pub mod logging;
 pub mod model;
 pub mod persist;
+pub mod prefs;
 pub mod server;
+pub mod sessions;
 pub mod store;
+pub mod terminal;
+pub mod theme;
 pub mod ui;

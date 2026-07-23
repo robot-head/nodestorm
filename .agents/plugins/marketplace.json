@@ -1,0 +1,20 @@
+{
+  "name": "nodestorm",
+  "interface": {
+    "displayName": "Nodestorm"
+  },
+  "plugins": [
+    {
+      "name": "nodestorm",
+      "source": {
+        "source": "local",
+        "path": "./plugins/nodestorm"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

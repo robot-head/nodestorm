@@ -1,0 +1,92 @@
+1
+00:00:00,012 --> 00:00:03,021
+nodestorm: a live canvas your agent draws on while you decide
+
+2
+00:00:03,022 --> 00:00:06,022
+Claude Code (any MCP agent) proposes an architecture...
+
+3
+00:00:06,022 --> 00:00:09,036
+Components become cards, dependencies become edges
+
+4
+00:00:09,036 --> 00:00:12,556
+Status rails: existing, proposed - and the agent is now waiting on YOU
+
+5
+00:00:13,060 --> 00:00:16,068
+Every open choice is pinned to its component
+
+6
+00:00:16,068 --> 00:00:19,206
+Hover an option - the components it would ripple into light up
+
+7
+00:00:19,206 --> 00:00:21,778
+Picked - with the trade-offs recorded
+
+8
+00:00:21,778 --> 00:00:25,288
+Deciding the last open choice delivers automatically - watch the agent react
+
+9
+00:00:25,288 --> 00:00:29,600
+Notes ride along too - type a message and Send delivers it to the waiting agent
+
+10
+00:00:29,744 --> 00:00:34,916
+The canvas is yours too - add your own components
+
+11
+00:00:34,916 --> 00:00:37,926
+Rename, connect, delete - your edits flow back to the agent
+
+12
+00:00:37,926 --> 00:00:40,947
+Deleting an agent's component asks the agent politely
+
+13
+00:00:40,947 --> 00:00:43,450
+Undo covers every edit until decisions are delivered
+
+14
+00:00:43,500 --> 00:00:48,530
+The minimap pans big graphs - groups collapse into one card
+
+15
+00:00:48,530 --> 00:00:51,542
+Search highlights matches...
+
+16
+00:00:51,542 --> 00:00:52,800
+...and Enter zoom-cycles through them
+
+17
+00:00:53,965 --> 00:00:57,472
+Sessions are parallel brainstorms - agents can wait on one while you work in another
+
+18
+00:00:57,472 --> 00:01:00,485
+Compare shows how two sessions drifted
+
+19
+00:01:00,485 --> 00:01:03,100
+The timeline is the session's full decision log
+
+20
+00:01:03,943 --> 00:01:07,100
+Export writes a Markdown decision record - pros, cons, and the trail
+
+21
+00:01:07,952 --> 00:01:17,458
+Twelve palettes, light and dark, live-switching
+
+22
+00:01:17,500 --> 00:01:20,400
+Narrow window? The bar folds - message the agent from the compose pod
+
+23
+00:01:20,400 --> 00:01:23,476
+Even tiny windows keep every control reachable via More
+

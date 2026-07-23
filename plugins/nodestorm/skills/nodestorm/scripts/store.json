@@ -1,0 +1,8 @@
+{
+  "identityName": "DJSpacecat.Nodestorm",
+  "publisher": "CN=CBC9F4BD-4A46-4C04-B689-3E1E1CD2355A",
+  "productId": "9PL98XH1NQZB",
+  "executionAlias": "nodestorm.exe",
+  "msixVersion": "1.0.0.0",
+  "version": "1.0.0"
+}

@@ -1,0 +1,302 @@
+name: Build signed v1.0.0 release draft
+
+on:
+  push:
+    tags: ["v1.0.0"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  CARGO_TERM_COLOR: always
+  VERSION: 1.0.0
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Validate synchronized release and external identity gate
+        # A manual dispatch runs off a branch, where there is no tag to match.
+        run: node scripts/validate-release.mjs --release ${{ github.ref_type == 'tag' && format('--tag {0}', github.ref_name) || '' }}
+      - name: Test host adapters and installers
+        run: node --test tests/plugin_contract.mjs tests/host_adapters.mjs tests/installers.mjs tests/release_gates.mjs
+      - name: Validate npm contents
+        run: node scripts/validate-npm-pack.mjs
+
+  rust-gates:
+    needs: validate
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Run Rust release gates
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --locked -- -D warnings
+          cargo test --all-targets --locked
+          cargo build --locked
+          ./target/debug/nodestorm --version | grep -Fx "nodestorm ${VERSION}"
+      - name: Run Pi against the real headless server
+        run: |
+          npm --prefix plugins/nodestorm ci --ignore-scripts
+          NODESTORM_BINARY="$GITHUB_WORKSPACE/target/debug/nodestorm" node --test tests/pi_headless_roundtrip.mjs
+
+  linux:
+    needs: [validate, rust-gates]
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build and smoke test
+        run: |
+          cargo build --release --locked
+          ./target/release/nodestorm --version | grep -F "$VERSION"
+          ! ldd ./target/release/nodestorm | grep "not found"
+          bash plugins/nodestorm/skills/nodestorm/scripts/setup.sh --dry-run --os linux --arch "${{ matrix.arch }}"
+      - name: Package pinned artifact
+        run: |
+          mkdir -p dist/icons/{48x48,128x128,256x256,512x512}
+          cp target/release/nodestorm dist/nodestorm
+          cp assets/icons/nodestorm-48.png dist/icons/48x48/nodestorm.png
+          cp assets/icons/nodestorm-128.png dist/icons/128x128/nodestorm.png
+          cp assets/icons/nodestorm-256.png dist/icons/256x256/nodestorm.png
+          cp assets/icons/nodestorm-512.png dist/icons/512x512/nodestorm.png
+          tar -C dist -czf "nodestorm-v${VERSION}-linux-${{ matrix.arch }}.tar.gz" nodestorm icons
+      - uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: nodestorm-v${{ env.VERSION }}-linux-${{ matrix.arch }}.tar.gz
+      - uses: actions/upload-artifact@v6
+        with:
+          name: linux-${{ matrix.arch }}
+          path: nodestorm-v${{ env.VERSION }}-linux-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
+
+  macos:
+    needs: [validate, rust-gates]
+    strategy:
+      matrix:
+        include:
+          - runner: macos-26-intel
+            arch: x64
+          - runner: macos-26
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Import Developer ID certificate
+        env:
+          P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          test -n "$P12_BASE64"
+          KEYCHAIN="$RUNNER_TEMP/nodestorm.keychain-db"
+          P12="$RUNNER_TEMP/developer-id.p12"
+          printf '%s' "$P12_BASE64" | base64 -D > "$P12"
+          security create-keychain -p actions "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p actions "$KEYCHAIN"
+          security import "$P12" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security list-keychain -d user -s "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -s -k actions "$KEYCHAIN"
+      - name: Build app bundle
+        run: |
+          cargo build --release --locked
+          bash plugins/nodestorm/skills/nodestorm/scripts/setup.sh --dry-run --os macos --arch "${{ matrix.arch }}"
+          APP="$RUNNER_TEMP/Nodestorm.app"
+          ICONSET="$RUNNER_TEMP/Nodestorm.iconset"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$ICONSET"
+          cp packaging/macos/Info.plist "$APP/Contents/Info.plist"
+          cp target/release/nodestorm "$APP/Contents/MacOS/nodestorm"
+          cp assets/icons/nodestorm-16.png "$ICONSET/icon_16x16.png"
+          cp assets/icons/nodestorm-32.png "$ICONSET/icon_16x16@2x.png"
+          cp assets/icons/nodestorm-32.png "$ICONSET/icon_32x32.png"
+          cp assets/icons/nodestorm-64.png "$ICONSET/icon_32x32@2x.png"
+          cp assets/icons/nodestorm-128.png "$ICONSET/icon_128x128.png"
+          cp assets/icons/nodestorm-256.png "$ICONSET/icon_128x128@2x.png"
+          cp assets/icons/nodestorm-256.png "$ICONSET/icon_256x256.png"
+          cp assets/icons/nodestorm-512.png "$ICONSET/icon_256x256@2x.png"
+          cp assets/icons/nodestorm-512.png "$ICONSET/icon_512x512.png"
+          cp assets/icons/nodestorm-1024.png "$ICONSET/icon_512x512@2x.png"
+          iconutil -c icns -o "$APP/Contents/Resources/Nodestorm.icns" "$ICONSET"
+          test -s "$APP/Contents/Resources/Nodestorm.icns"
+          "$APP/Contents/MacOS/nodestorm" --version | grep -F "$VERSION"
+      - name: Sign, notarize, staple, and verify
+        env:
+          SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          APP="$RUNNER_TEMP/Nodestorm.app"
+          SUBMISSION="$RUNNER_TEMP/Nodestorm-submission.zip"
+          test -n "$SIGNING_IDENTITY"
+          test -n "$APPLE_ID"
+          test -n "$APPLE_TEAM_ID"
+          test -n "$APPLE_APP_PASSWORD"
+          codesign --force --deep --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          ditto -c -k --keepParent "$APP" "$SUBMISSION"
+          xcrun notarytool submit "$SUBMISSION" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple "$APP"
+          xcrun stapler validate "$APP"
+          spctl --assess --type execute --verbose=2 "$APP"
+          ditto -c -k --keepParent "$APP" "nodestorm-v${VERSION}-macos-${{ matrix.arch }}.zip"
+      - uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: nodestorm-v${{ env.VERSION }}-macos-${{ matrix.arch }}.zip
+      - uses: actions/upload-artifact@v6
+        with:
+          name: macos-${{ matrix.arch }}
+          path: nodestorm-v${{ env.VERSION }}-macos-${{ matrix.arch }}.zip
+          if-no-files-found: error
+
+  windows:
+    needs: [validate, rust-gates]
+    strategy:
+      matrix:
+        include:
+          - runner: windows-2025
+            arch: x64
+          - runner: windows-11-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Execute Windows Store-not-live failure path
+        shell: pwsh
+        run: ./tests/windows_installer.ps1
+      - name: Build and smoke test
+        shell: pwsh
+        run: |
+          cargo build --release --locked
+          ./target/release/nodestorm.exe --version | Select-String -SimpleMatch $env:VERSION
+          $binary = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes("./target/release/nodestorm.exe"))
+          if ($binary -match "VCRUNTIME140|MSVCP140") { throw "The binary imports the Visual C++ Redistributable. Store certification rejects undisclosed non-integrated dependencies; keep the static CRT in .cargo/config.toml." }
+          ./plugins/nodestorm/skills/nodestorm/scripts/setup.ps1 -DryRun -Architecture "${{ matrix.arch }}"
+      - name: Locate Windows SDK packaging tools
+        shell: pwsh
+        run: |
+          # Highest-versioned SDK holding x64 host tools; a plain name sort picks the legacy `bin\x86` directory.
+          $hostTools = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\makeappx.exe" |
+              Sort-Object { [version]$_.Directory.Parent.Name } -Descending |
+              Select-Object -First 1 -ExpandProperty DirectoryName
+          if (-not $hostTools) { throw "makeappx.exe not found. Install the Windows 10/11 SDK." }
+          "MAKEAPPX=$(Join-Path $hostTools 'makeappx.exe')" | Out-File $env:GITHUB_ENV -Append
+          "SIGNTOOL=$(Join-Path $hostTools 'signtool.exe')" | Out-File $env:GITHUB_ENV -Append
+      - name: Create unsigned Store package
+        shell: pwsh
+        run: |
+          $layout = Join-Path $env:RUNNER_TEMP "layout"
+          ./packaging/windows/prepare-layout.ps1 -Binary ./target/release/nodestorm.exe -Layout $layout -Architecture "${{ matrix.arch }}"
+          & $env:MAKEAPPX pack /o /d $layout /p "nodestorm-v$env:VERSION-windows-${{ matrix.arch }}.msix"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: windows-msix-${{ matrix.arch }}
+          path: nodestorm-v${{ env.VERSION }}-windows-${{ matrix.arch }}.msix
+          if-no-files-found: error
+          retention-days: 30
+      - name: Ephemeral self-signed install and execution-alias smoke test
+        shell: pwsh
+        run: |
+          $identity = Get-Content packaging/windows/store-identity.json -Raw | ConvertFrom-Json
+          $cert = New-SelfSignedCertificate -Type Custom -Subject $identity.publisher -KeyUsage DigitalSignature -KeyExportPolicy Exportable -FriendlyName "Nodestorm CI" -CertStoreLocation Cert:\CurrentUser\My -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3")
+          $password = ConvertTo-SecureString "nodestorm-ci" -AsPlainText -Force
+          Export-PfxCertificate -Cert $cert -FilePath "$env:RUNNER_TEMP\nodestorm-ci.pfx" -Password $password | Out-Null
+          Export-Certificate -Cert $cert -FilePath "$env:RUNNER_TEMP\nodestorm-ci.cer" | Out-Null
+          # AppX deployment runs as a service and only consults the machine stores.
+          Import-Certificate -FilePath "$env:RUNNER_TEMP\nodestorm-ci.cer" -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+          Import-Certificate -FilePath "$env:RUNNER_TEMP\nodestorm-ci.cer" -CertStoreLocation Cert:\LocalMachine\TrustedPeople | Out-Null
+          Copy-Item "nodestorm-v$env:VERSION-windows-${{ matrix.arch }}.msix" "$env:RUNNER_TEMP\signed.msix"
+          & $env:SIGNTOOL sign /fd SHA256 /f "$env:RUNNER_TEMP\nodestorm-ci.pfx" /p nodestorm-ci "$env:RUNNER_TEMP\signed.msix"
+          Add-AppxPackage "$env:RUNNER_TEMP\signed.msix"
+          $executionAlias = $identity.executionAlias
+          & $executionAlias --version | Select-String -SimpleMatch $env:VERSION
+          Get-AppxPackage -Name $identity.identityName | Remove-AppxPackage
+
+  windows-bundle:
+    needs: windows
+    runs-on: windows-2025
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: windows-msix-*
+          path: packages
+          merge-multiple: true
+      - name: Create private unsigned Store bundle
+        shell: pwsh
+        run: |
+          $makeappx = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\makeappx.exe" |
+              Sort-Object { [version]$_.Directory.Parent.Name } -Descending |
+              Select-Object -First 1 -ExpandProperty FullName
+          if (-not $makeappx) { throw "makeappx.exe not found. Install the Windows 10/11 SDK." }
+          & $makeappx bundle /o /d packages /p "nodestorm-v1.0.0-windows.msixbundle"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: windows-store-msixbundle
+          path: nodestorm-v1.0.0-windows.msixbundle
+          if-no-files-found: error
+          retention-days: 30
+
+  draft-release:
+    needs: [linux, macos, windows-bundle]
+    # Manual dispatch rebuilds artifacts only; a release draft comes from the tag.
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: linux-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: macos-*
+          path: dist
+          merge-multiple: true
+      - name: Create checksums
+        run: (cd dist && sha256sum nodestorm-v* > SHA256SUMS)
+      - uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: dist/SHA256SUMS
+      - name: Create draft without Windows binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "v${VERSION}" dist/* \
+            --draft=true \
+            --title "Nodestorm v${VERSION}" \
+            --notes "Signed macOS and attested Linux artifacts. Windows production distribution is available only through Microsoft Store after certification."

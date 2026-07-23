@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "nodestorm",
+  "description": "Nodestorm plugins for visual architecture brainstorming.",
+  "owner": {
+    "name": "robot-head",
+    "url": "https://github.com/robot-head"
+  },
+  "plugins": [
+    {
+      "name": "nodestorm",
+      "description": "Design systems on a shared visual canvas.",
+      "source": "./plugins/nodestorm",
+      "category": "development"
+    }
+  ]
+}

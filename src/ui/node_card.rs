@@ -3,9 +3,49 @@
 use dioxus::prelude::*;
 
 use crate::layout::Rect;
-use crate::model::{ElementStatus, Node, NodeKind};
+use crate::model::{BuildStatus, ElementStatus, Node, NodeKind};
 
-fn kind_glyph(kind: NodeKind) -> &'static str {
+/// Semantic-zoom tier derived from the canvas scale: far out cards collapse to
+/// labeled chips, mid shows title + status, close shows the full card. Layered
+/// on top of viewport culling to keep big graphs legible.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum ZoomTier {
+    Far,
+    Mid,
+    Near,
+}
+
+impl ZoomTier {
+    pub(crate) fn from_scale(scale: f64) -> Self {
+        if scale < 0.4 {
+            ZoomTier::Far
+        } else if scale < 0.78 {
+            ZoomTier::Mid
+        } else {
+            ZoomTier::Near
+        }
+    }
+
+    fn class(self) -> &'static str {
+        match self {
+            ZoomTier::Far => "zoom-far",
+            ZoomTier::Mid => "zoom-mid",
+            ZoomTier::Near => "zoom-near",
+        }
+    }
+}
+
+/// Small glyph tracking implementation progress on the card.
+pub(crate) fn build_glyph(build: BuildStatus) -> &'static str {
+    match build {
+        BuildStatus::Planned => "○",
+        BuildStatus::Building => "◐",
+        BuildStatus::Built => "●",
+        BuildStatus::Verified => "✓",
+    }
+}
+
+pub(crate) fn kind_glyph(kind: NodeKind) -> &'static str {
     match kind {
         NodeKind::Service => "⬢",
         NodeKind::Module => "▣",
@@ -18,7 +58,7 @@ fn kind_glyph(kind: NodeKind) -> &'static str {
     }
 }
 
-fn kind_label(kind: NodeKind) -> &'static str {
+pub(crate) fn kind_label(kind: NodeKind) -> &'static str {
     match kind {
         NodeKind::Service => "service",
         NodeKind::Module => "module",
@@ -31,7 +71,7 @@ fn kind_label(kind: NodeKind) -> &'static str {
     }
 }
 
-fn status_class(status: ElementStatus) -> &'static str {
+pub(crate) fn status_class(status: ElementStatus) -> &'static str {
     match status {
         ElementStatus::Existing => "existing",
         ElementStatus::Proposed => "proposed",
@@ -49,18 +89,47 @@ pub fn NodeCard(
     highlighted: bool,
     on_select: EventHandler<MouseEvent>,
     on_drag_start: EventHandler<MouseEvent>,
+    search_hit: bool,
+    search_dim: bool,
+    on_connect_start: EventHandler<MouseEvent>,
+    on_connect_drop: EventHandler<MouseEvent>,
+    on_context: EventHandler<MouseEvent>,
+    on_zoom: EventHandler<MouseEvent>,
+    on_toggle_group: EventHandler<MouseEvent>,
+    /// Unanswered agent questions attached to this node (from the doc).
+    #[props(default = 0)]
+    open_questions: usize,
+    /// Semantic-zoom tier: how much of the card to draw at the current scale.
+    #[props(default = ZoomTier::Near)]
+    zoom: ZoomTier,
 ) -> Element {
+    let terminals = use_context::<super::Terminals>().0;
+    let panel = use_context::<super::TerminalPanel>();
     let open = node.open_choice_count();
     let decided = node.choices.len() - open;
     let notes = node.notes.len();
     let status = status_class(node.status);
     let sel = if selected { " selected" } else { "" };
     let hl = if highlighted { " ripple" } else { "" };
+    let hit = if search_hit { " search-hit" } else { "" };
+    let dim = if search_dim { " search-dim" } else { "" };
+    let bld = node
+        .build
+        .map(|b| format!(" build-{}", b.name()))
+        .unwrap_or_default();
+    let zoom_class = zoom.class();
+    // Semantic zoom: far → label chip only; mid → title + status; near → all.
+    let show_glyph = zoom != ZoomTier::Far;
+    let show_meta = zoom != ZoomTier::Far;
+    let show_body = zoom == ZoomTier::Near;
 
     rsx! {
         div {
-            class: "node-card status-{status}{sel}{hl}",
-            style: "left: {rect.x}px; top: {rect.y}px; width: {rect.w}px;",
+            class: "node-card {zoom_class} status-{status}{sel}{hl}{hit}{dim}{bld}",
+            // max-height clamps the card to its layout rect so it can never
+            // spill out of a swimlane band even if the CSS estimate drifts;
+            // Mid/Far tiers render shorter than the rect, which is fine.
+            style: "left: {rect.x}px; top: {rect.y}px; width: {rect.w}px; max-height: {rect.h}px;",
             onclick: move |ev| {
                 ev.stop_propagation();
                 on_select.call(ev);
@@ -69,26 +138,103 @@ pub fn NodeCard(
                 ev.stop_propagation();
                 on_drag_start.call(ev);
             },
+            // No stop_propagation: a node drag also ends here and the
+            // viewport's mouseup must still clear the gesture.
+            onmouseup: move |ev| on_connect_drop.call(ev),
+            ondoubleclick: move |ev| {
+                ev.stop_propagation();
+                on_zoom.call(ev);
+            },
+            oncontextmenu: move |ev| {
+                ev.prevent_default();
+                ev.stop_propagation();
+                on_context.call(ev);
+            },
+            if show_body {
+                span {
+                    class: "connect-handle",
+                    title: "Drag onto another card to connect",
+                    onmousedown: move |ev| {
+                        ev.stop_propagation();
+                        on_connect_start.call(ev);
+                    },
+                    "◉"
+                }
+            }
             div { class: "node-head",
-                span { class: "node-glyph", "{kind_glyph(node.kind)}" }
-                span { class: "node-label", "{node.label}" }
-            }
-            div { class: "node-meta",
-                span { class: "node-kind", "{kind_label(node.kind)}" }
-                if node.status != ElementStatus::Existing {
-                    span { class: "node-status-tag tag-{status}", "{status}" }
+                if show_glyph {
+                    span { class: "node-glyph", "{kind_glyph(node.kind)}" }
                 }
-                if let Some(group) = &node.group {
-                    span { class: "node-group", "{group}" }
+                span {
+                    class: "node-label",
+                    title: "{node.label}",
+                    "{node.label}"
                 }
             }
-            if !node.description.is_empty() {
-                p { class: "node-desc", "{node.description}" }
+            if show_meta {
+                div { class: "node-meta",
+                    span { class: "node-kind", "{kind_label(node.kind)}" }
+                    if node.status != ElementStatus::Existing {
+                        span { class: "node-status-tag tag-{status}", "{status}" }
+                    }
+                    if let Some(build) = node.build {
+                        span {
+                            class: "node-build build-tag-{build.name()}",
+                            title: "Implementation: {build.name()}",
+                            "{build_glyph(build)} {build.name()}"
+                        }
+                    }
+                    if let Some(agent) = &node.agent {
+                        {
+                            let clickable = super::terminal_for(&terminals.read(), agent);
+                            let id = agent.clone();
+                            rsx! {
+                                span {
+                                    class: if clickable { "node-agent agent-clickable" } else { "node-agent" },
+                                    style: "color: {super::agent_color(agent)}; border-color: {super::agent_color(agent)};",
+                                    title: if clickable {
+                                        "Focus terminal".to_string()
+                                    } else {
+                                        format!("Proposed by agent “{agent}”")
+                                    },
+                                    onclick: move |ev: MouseEvent| {
+                                        if clickable {
+                                            ev.stop_propagation();
+                                            super::focus_terminal(&panel, &id);
+                                        }
+                                    },
+                                    "◆ {agent}"
+                                }
+                            }
+                        }
+                    }
+                    if let Some(group) = &node.group {
+                        span {
+                            class: "node-group",
+                            title: "{group} — collapse this group into one card",
+                            onclick: move |ev| {
+                                ev.stop_propagation();
+                                on_toggle_group.call(ev);
+                            },
+                            "{group}"
+                        }
+                    }
+                }
             }
-            if open > 0 || decided > 0 || notes > 0 {
+            if show_body && !node.description.is_empty() {
+                p {
+                    class: "node-desc",
+                    title: "{node.description}",
+                    "{node.description}"
+                }
+            }
+            if show_body && (open > 0 || decided > 0 || notes > 0 || open_questions > 0) {
                 div { class: "node-badges",
                     if open > 0 {
                         span { class: "badge badge-open", "⚑ {open}" }
+                    }
+                    if open_questions > 0 {
+                        span { class: "badge badge-question", "? {open_questions}" }
                     }
                     if decided > 0 {
                         span { class: "badge badge-decided", "✓ {decided}" }
@@ -99,5 +245,68 @@ pub fn NodeCard(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use yare::parameterized;
+
+    #[parameterized(
+        far = { 0.15, ZoomTier::Far },
+        below_mid_boundary = { 0.39, ZoomTier::Far },
+        at_mid_boundary = { 0.40, ZoomTier::Mid },
+        below_near_boundary = { 0.77, ZoomTier::Mid },
+        at_near_boundary = { 0.78, ZoomTier::Near },
+        zoomed_in = { 2.5, ZoomTier::Near },
+    )]
+    fn zoom_tier_thresholds(scale: f64, expected: ZoomTier) {
+        assert2::assert!(ZoomTier::from_scale(scale) == expected);
+    }
+
+    #[parameterized(
+        far = { ZoomTier::Far, "zoom-far" },
+        mid = { ZoomTier::Mid, "zoom-mid" },
+        near = { ZoomTier::Near, "zoom-near" },
+    )]
+    fn zoom_tier_classes_are_exact(tier: ZoomTier, expected: &str) {
+        assert2::assert!(tier.class() == expected);
+    }
+
+    #[parameterized(
+        planned = { BuildStatus::Planned, "○" },
+        building = { BuildStatus::Building, "◐" },
+        built = { BuildStatus::Built, "●" },
+        verified = { BuildStatus::Verified, "✓" },
+    )]
+    fn build_glyphs_are_exact(build: BuildStatus, expected: &str) {
+        assert2::assert!(build_glyph(build) == expected);
+    }
+
+    #[parameterized(
+        service = { NodeKind::Service, "⬢", "service" },
+        module = { NodeKind::Module, "▣", "module" },
+        component = { NodeKind::Component, "◆", "component" },
+        data_store = { NodeKind::DataStore, "🗃", "data store" },
+        queue = { NodeKind::Queue, "☰", "queue" },
+        ui = { NodeKind::Ui, "▢", "ui" },
+        external = { NodeKind::External, "↗", "external" },
+        other = { NodeKind::Other, "●", "other" },
+    )]
+    fn node_glyphs_and_labels_are_exact(kind: NodeKind, glyph: &str, label: &str) {
+        assert2::assert!(kind_glyph(kind) == glyph);
+        assert2::assert!(kind_label(kind) == label);
+    }
+
+    #[parameterized(
+        existing = { ElementStatus::Existing, "existing" },
+        proposed = { ElementStatus::Proposed, "proposed" },
+        modified = { ElementStatus::Modified, "modified" },
+        affected = { ElementStatus::Affected, "affected" },
+        removed = { ElementStatus::Removed, "removed" },
+    )]
+    fn node_status_classes_are_exact(status: ElementStatus, expected: &str) {
+        assert2::assert!(status_class(status) == expected);
     }
 }

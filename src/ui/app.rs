@@ -1,5 +1,10 @@
-//! Root component: bridges the shared [`Store`] into Dioxus signals and
-//! composes the screen.
+//! Root component: bridges the *active session's* [`Store`] into Dioxus
+//! signals and composes the screen.
+//!
+//! The bridge selects over two watch channels: the active store's revision
+//! (re-snapshot the doc) and the session manager's generation (the list or
+//! the active session changed — reset view state and re-subscribe to the
+//! new active store).
 
 use std::sync::Arc;
 
@@ -8,65 +13,348 @@ use dioxus::prelude::*;
 use crate::cli::Cli;
 use crate::layout::{self, Layout};
 use crate::model::NodeId;
-use crate::store::Store;
+use crate::sessions::Sessions;
+use crate::store::ToastLevel;
 
-use super::activity::ActivityFeed;
+use super::agent_launcher::AgentLauncher;
 use super::canvas::Canvas;
 use super::choice_panel::ChoicePanel;
+use super::diff_panel::DiffPanel;
+use super::questions_panel::QuestionsPanel;
+use super::queued_changes::QueuedChangesPanel;
+use super::terminal_panel::TerminalDock;
+use super::timeline::Timeline;
 use super::topbar::TopBar;
 
 #[component]
 pub fn App() -> Element {
     let cli = use_context::<Cli>();
-    let store = use_context::<Arc<Store>>();
-    let mut doc = use_signal(|| store.snapshot_doc());
-    let mut meta = use_signal(|| store.snapshot_meta());
+    let sessions = use_context::<Arc<Sessions>>();
+    let (initial_name, initial_store) = sessions
+        .resolve_named(None)
+        .expect("active session always exists");
+    let initial_doc = initial_store.snapshot_doc();
+    let initial_meta = initial_store.snapshot_meta();
+    let mut active_store =
+        use_context_provider(move || super::ActiveStore(Signal::new(initial_store))).0;
+    let mut doc = use_signal(move || initial_doc);
+    let mut meta = use_signal(move || initial_meta);
+    let mut session_name = use_signal(move || initial_name);
+    let mut connections = use_signal(|| sessions.connections());
 
-    // Store → UI bridge: whenever any mutation bumps the revision, re-snapshot.
-    // `watch` is executor-agnostic, so awaiting it on the Dioxus runtime is fine.
-    use_future({
-        let store = store.clone();
+    // Cross-component signals (topbar, panel, and canvas all touch them),
+    // wrapped in newtypes because context is type-keyed.
+    let mut connect_from = use_context_provider(|| super::ConnectFrom(Signal::new(None))).0;
+    use_context_provider(|| super::ZoomTarget(Signal::new(None)));
+    let mut search = use_context_provider(|| super::SearchQuery(Signal::new(String::new()))).0;
+    let mut compare_with = use_context_provider(|| super::CompareWith(Signal::new(None))).0;
+    let mut record_diff = use_context_provider(|| super::RecordDiff(Signal::new(None))).0;
+    use_context_provider(|| super::MessageComposer {
+        comment: Signal::new(String::new()),
+        open: Signal::new(false),
+    });
+    let mut launcher_open = use_context_provider(|| super::AgentLauncherOpen(Signal::new(false))).0;
+
+    let terminal_manager = use_context::<Arc<crate::terminal::TerminalManager>>();
+    let mut terminals =
+        use_context_provider(|| super::Terminals(Signal::new(terminal_manager.list()))).0;
+    use_context_provider(|| super::TerminalPanel {
+        open: Signal::new(false),
+        focused: Signal::new(None),
+        confirm_close: Signal::new(None),
+        quit_confirm: Signal::new(false),
+    });
+
+    let desktop = dioxus::desktop::use_window();
+    let panel = use_context::<super::TerminalPanel>();
+    let mut quit_confirm = panel.quit_confirm;
+
+    // While agents run, a close request hides the window (tao cannot veto a
+    // close); the handler below flips it back visible with the confirm open.
+    use_effect({
+        let desktop = desktop.clone();
+        let manager = terminal_manager.clone();
         move || {
-            let store = store.clone();
+            let _ = terminals.read(); // re-run on terminal changes
+            let behaviour = if manager.running_count() > 0 {
+                dioxus::desktop::WindowCloseBehaviour::WindowHides
+            } else {
+                dioxus::desktop::WindowCloseBehaviour::WindowCloses
+            };
+            desktop.set_close_behavior(behaviour);
+            // Race guard: a close click landing just before this effect
+            // flips the behaviour back can still hide the window under the
+            // old WindowHides behaviour, with quit_confirm never set —
+            // reveal it so the next close takes the WindowCloses path.
+            if manager.running_count() == 0 && !quit_confirm() && !desktop.window.is_visible() {
+                desktop.window.set_visible(true);
+            }
+        }
+    });
+    dioxus::desktop::use_wry_event_handler({
+        let manager = terminal_manager.clone();
+        move |event, _| {
+            use dioxus::desktop::tao::event::{Event, WindowEvent};
+            if let Event::WindowEvent {
+                event: WindowEvent::CloseRequested,
+                ..
+            } = event
+                && manager.running_count() > 0
+            {
+                quit_confirm.set(true);
+            }
+        }
+    });
+    use_effect({
+        let desktop = desktop.clone();
+        move || {
+            if quit_confirm() {
+                desktop.window.set_visible(true);
+            }
+        }
+    });
+
+    // Theme preference: seeded from the file loaded in launch(); the CSS
+    // reacts through data-theme/data-mode below, the native title bar
+    // through set_theme (Auto = follow the OS).
+    let initial_prefs = use_context::<crate::prefs::Preferences>();
+    let theme_prefs = use_context_provider(move || super::ThemePref(Signal::new(initial_prefs))).0;
+    let window = dioxus::desktop::use_window();
+    use_effect(move || {
+        window
+            .window
+            .set_theme(super::tao_theme(theme_prefs.read().mode));
+    });
+
+    let layout: Memo<Layout> = use_memo(move || {
+        let m = meta.read();
+        let collapsed: std::collections::BTreeSet<String> =
+            m.collapsed_groups.iter().cloned().collect();
+        layout::compute_view(&doc.read(), &collapsed, &m.declared_lanes)
+    });
+    let mut selected: Signal<Option<NodeId>> = use_signal(|| None);
+    let hovered_affects: Signal<Vec<NodeId>> = use_signal(Vec::new);
+    let mut timeline_open: Signal<bool> = use_signal(|| false);
+    let mut queued_changes_open: Signal<bool> = use_signal(|| false);
+    let mut questions_open: Signal<bool> = use_signal(|| false);
+
+    // Connection changes are independent of active-session generation so
+    // transport churn never resets canvas selection or panel state.
+    use_future({
+        let sessions = sessions.clone();
+        move || {
+            let sessions = sessions.clone();
             async move {
-                let mut rev = store.subscribe();
-                loop {
-                    if rev.changed().await.is_err() {
-                        break;
-                    }
-                    doc.set(store.snapshot_doc());
-                    meta.set(store.snapshot_meta());
+                let mut changes = sessions.subscribe_connections();
+                connections.set(sessions.connections());
+                while changes.changed().await.is_ok() {
+                    connections.set(sessions.connections());
                 }
             }
         }
     });
 
-    let layout: Memo<Layout> = use_memo(move || layout::compute(&doc.read()));
-    let selected: Signal<Option<NodeId>> = use_signal(|| None);
-    let hovered_affects: Signal<Vec<NodeId>> = use_signal(Vec::new);
+    // Terminal dock tabs: refreshed from the manager's generation watch,
+    // independent of session/store state (same shape as the connections loop
+    // above).
+    use_future({
+        let manager = terminal_manager.clone();
+        move || {
+            let manager = manager.clone();
+            async move {
+                let mut changes = manager.subscribe();
+                terminals.set(manager.list());
+                while changes.changed().await.is_ok() {
+                    terminals.set(manager.list());
+                }
+            }
+        }
+    });
+
+    // Store → UI bridge: revision changes re-snapshot; generation changes
+    // re-subscribe to the new active store and reset per-session view state.
+    use_future({
+        let sessions = sessions.clone();
+        move || {
+            let sessions = sessions.clone();
+            async move {
+                let mut generation = sessions.subscribe_generation();
+                loop {
+                    let (name, store) = sessions
+                        .resolve_named(None)
+                        .expect("active session always exists");
+                    let mut rev = store.subscribe();
+                    doc.set(store.snapshot_doc());
+                    meta.set(store.snapshot_meta());
+                    session_name.set(name);
+                    active_store.set(store.clone());
+                    loop {
+                        tokio::select! {
+                            changed = rev.changed() => {
+                                if changed.is_err() {
+                                    return;
+                                }
+                                doc.set(store.snapshot_doc());
+                                meta.set(store.snapshot_meta());
+                            }
+                            changed = generation.changed() => {
+                                if changed.is_err() {
+                                    return;
+                                }
+                                selected.set(None);
+                                connect_from.set(None);
+                                search.set(String::new());
+                                compare_with.set(None);
+                                record_diff.set(None);
+                                queued_changes_open.set(false);
+                                questions_open.set(false);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+
     let mcp_url = cli.mcp_url();
     let has_nodes = !doc.read().nodes.is_empty();
     let selected_node = selected
         .read()
         .as_ref()
         .and_then(|id| doc.read().node(id).cloned());
+    let compare_text = compare_with().and_then(|other| {
+        sessions.get(&other).map(|store| {
+            crate::diff::diff_docs(
+                &session_name.read(),
+                &doc.read(),
+                &other,
+                &store.snapshot_doc(),
+            )
+        })
+    });
 
     rsx! {
+        document::Style { {include_str!("../../assets/fonts.css")} }
         document::Style { {include_str!("../../assets/main.css")} }
-        div { class: "app",
-            TopBar { doc, meta }
+        div {
+            class: "app",
+            "data-theme": "{theme_prefs.read().theme}",
+            "data-mode": "{theme_prefs.read().mode.as_str()}",
+            TopBar { doc, meta, connections, selected, session_name, timeline_open, queued_changes_open, questions_open }
             div { class: "main",
                 if has_nodes {
-                    Canvas { doc, layout, selected, hovered_affects }
-                    ActivityFeed { meta }
-                    if let Some(node) = selected_node {
-                        ChoicePanel { node, selected, hovered_affects }
-                    }
+                    Canvas { doc, layout, selected, hovered_affects, meta }
                 } else {
                     div { class: "empty-state",
+                        span { class: "empty-bolt", "ϟ" }
                         h1 { "nodestorm" }
                         p { "Waiting for an agent to connect." }
-                        code { "claude mcp add --transport http nodestorm {mcp_url}" }
+                        div { class: "empty-actions",
+                            button {
+                                class: "btn btn-primary",
+                                onclick: move |_| launcher_open.set(true),
+                                "Start an agentic session"
+                            }
+                            button {
+                                class: "empty-cmd",
+                                title: "Copy the connect command",
+                                onclick: {
+                                    let store = active_store.read().clone();
+                                    let cmd = format!(
+                                        "claude mcp add --transport http nodestorm {mcp_url}"
+                                    );
+                                    move |_| {
+                                        super::copy_to_clipboard(
+                                            &store,
+                                            cmd.clone(),
+                                            "copied the connect command",
+                                        );
+                                    }
+                                },
+                                code { "claude mcp add --transport http nodestorm {mcp_url}" }
+                                span { class: "empty-copy", "⧉" }
+                            }
+                        }
+                    }
+                }
+                if let Some(node) = selected_node {
+                    // Keyed so switching nodes remounts the panel and its
+                    // edit-form drafts start from the new node's content.
+                    // Selection takes the right-panel slot over Timeline.
+                    ChoicePanel { key: "{node.id}", node, doc, selected, hovered_affects }
+                } else if let Some(text) = compare_text {
+                    DiffPanel { text, on_close: move |()| compare_with.set(None) }
+                } else if let Some(text) = record_diff() {
+                    DiffPanel { text, on_close: move |()| record_diff.set(None) }
+                } else if timeline_open() {
+                    Timeline { doc, meta, on_close: move |()| timeline_open.set(false) }
+                } else if queued_changes_open() {
+                    QueuedChangesPanel {
+                        doc,
+                        meta,
+                        selected,
+                        on_close: move |()| queued_changes_open.set(false),
+                    }
+                } else if questions_open() {
+                    QuestionsPanel { doc, on_close: move |()| questions_open.set(false) }
+                }
+            }
+            TerminalDock {}
+            if launcher_open() {
+                AgentLauncher {}
+            }
+            if quit_confirm() {
+                div { class: "term-confirm-overlay",
+                    div { class: "term-confirm", role: "alertdialog",
+                        p {
+                            {
+                                let n = terminal_manager.running_count();
+                                format!("{n} agent{} still running. Quit and stop {}?",
+                                    if n == 1 { " is" } else { "s are" },
+                                    if n == 1 { "it" } else { "them" })
+                            }
+                        }
+                        div { class: "term-confirm-actions",
+                            button {
+                                class: "btn",
+                                onclick: move |_| quit_confirm.set(false),
+                                "Keep running"
+                            }
+                            button {
+                                class: "btn btn-primary",
+                                onclick: {
+                                    let desktop = desktop.clone();
+                                    let manager = terminal_manager.clone();
+                                    move |_| {
+                                        manager.kill_all();
+                                        desktop.set_close_behavior(
+                                            dioxus::desktop::WindowCloseBehaviour::WindowCloses,
+                                        );
+                                        desktop.close();
+                                    }
+                                },
+                                "Quit and stop agents"
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(toast) = meta.read().toast.clone() {
+                div {
+                    class: match toast.level {
+                        ToastLevel::Warning => "delivery-toast delivery-toast-warning",
+                        ToastLevel::Error => "delivery-toast delivery-toast-error",
+                    },
+                    role: "alert",
+                    span { "{toast.message}" }
+                    button {
+                        aria_label: "Dismiss notification",
+                        onclick: {
+                            let store = active_store.read().clone();
+                            move |_| store.dismiss_toast()
+                        },
+                        "×"
                     }
                 }
             }
@@ -74,7 +362,7 @@ pub fn App() -> Element {
     }
 }
 
-/// Convenience for child components: the store from context.
-pub fn use_store() -> Arc<Store> {
-    use_context::<Arc<Store>>()
+/// Convenience for child components: the store backing the rendered snapshots.
+pub fn use_store() -> Arc<crate::store::Store> {
+    use_context::<super::ActiveStore>().0.read().clone()
 }

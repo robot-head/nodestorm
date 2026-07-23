@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "nodestorm": {
+      "type": "http",
+      "url": "http://127.0.0.1:4747/mcp",
+      "timeout": 600000,
+      "tool_timeout_sec": 600
+    }
+  }
+}
