@@ -91,7 +91,7 @@ jobs:
           cp assets/icons/nodestorm-256.png dist/icons/256x256/nodestorm.png
           cp assets/icons/nodestorm-512.png dist/icons/512x512/nodestorm.png
           tar -C dist -czf "nodestorm-v${VERSION}-linux-${{ matrix.arch }}.tar.gz" nodestorm icons
-      - uses: actions/attest-build-provenance@v3
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-path: nodestorm-v${{ env.VERSION }}-linux-${{ matrix.arch }}.tar.gz
       - uses: actions/upload-artifact@v7
@@ -172,7 +172,7 @@ jobs:
           xcrun stapler validate "$APP"
           spctl --assess --type execute --verbose=2 "$APP"
           ditto -c -k --keepParent "$APP" "nodestorm-v${VERSION}-macos-${{ matrix.arch }}.zip"
-      - uses: actions/attest-build-provenance@v3
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-path: nodestorm-v${{ env.VERSION }}-macos-${{ matrix.arch }}.zip
       - uses: actions/upload-artifact@v7
@@ -288,7 +288,7 @@ jobs:
           merge-multiple: true
       - name: Create checksums
         run: (cd dist && sha256sum nodestorm-v* > SHA256SUMS)
-      - uses: actions/attest-build-provenance@v3
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/SHA256SUMS
       - name: Create draft without Windows binaries
