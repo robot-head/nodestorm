@@ -10,8 +10,8 @@ try {
         publisher = "CN=Test"
         productId = "9TESTNODESTORM"
         executionAlias = "nodestorm.exe"
-        msixVersion = "0.9.0.0"
-        version = "0.9.0"
+        msixVersion = "1.0.0.0"
+        version = "1.0.0"
     } | ConvertTo-Json
     $storePath = Join-Path $fixture "store.json"
     Set-Content -Path $storePath -Value $store -Encoding utf8NoBOM

@@ -1,4 +1,4 @@
-name: Publish certified v0.9.0 release
+name: Publish certified v1.0.0 release
 
 on:
   workflow_dispatch:
@@ -6,9 +6,9 @@ on:
       store_version:
         description: Certified Microsoft Store version
         required: true
-        default: 0.9.0.0
+        default: 1.0.0.0
       confirm:
-        description: Type publish-v0.9.0 after Store certification
+        description: Type publish-v1.0.0 after Store certification
         required: true
 
 permissions:
@@ -21,16 +21,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: v0.9.0
+          ref: v1.0.0
       - uses: actions/setup-node@v6
         with:
           node-version: 24
       - name: Confirm dispatch and repository release gates
         shell: pwsh
         run: |
-          if ("${{ inputs.confirm }}" -ne "publish-v0.9.0") { throw "Explicit publish confirmation is missing." }
-          if ("${{ inputs.store_version }}" -ne "0.9.0.0") { throw "Certified Store version must be 0.9.0.0." }
-          node scripts/validate-release.mjs --release --tag v0.9.0
+          if ("${{ inputs.confirm }}" -ne "publish-v1.0.0") { throw "Explicit publish confirmation is missing." }
+          if ("${{ inputs.store_version }}" -ne "1.0.0.0") { throw "Certified Store version must be 1.0.0.0." }
+          node scripts/validate-release.mjs --release --tag v1.0.0
       - name: Install and confirm the certified Store package
         shell: pwsh
         run: |
@@ -53,7 +53,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: v0.9.0
+          ref: v1.0.0
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -65,9 +65,9 @@ jobs:
         run: |
           npm test
           node ../../scripts/validate-npm-pack.mjs
-          PUBLISHED_VERSION=$(npm view nodestorm@0.9.0 version 2>/dev/null || true)
-          if [ "$PUBLISHED_VERSION" = "0.9.0" ]; then
-            PUBLISHED_REPOSITORY=$(npm view nodestorm@0.9.0 repository.url)
+          PUBLISHED_VERSION=$(npm view nodestorm@1.0.0 version 2>/dev/null || true)
+          if [ "$PUBLISHED_VERSION" = "1.0.0" ]; then
+            PUBLISHED_REPOSITORY=$(npm view nodestorm@1.0.0 repository.url)
             test "$PUBLISHED_REPOSITORY" = "git+https://github.com/robot-head/nodestorm.git"
           else
             npm publish --provenance --access public
@@ -76,9 +76,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          IS_DRAFT=$(gh release view v0.9.0 --json isDraft --jq '.isDraft')
+          IS_DRAFT=$(gh release view v1.0.0 --json isDraft --jq '.isDraft')
           if [ "$IS_DRAFT" = "true" ]; then
-            gh release edit v0.9.0 --draft=false
+            gh release edit v1.0.0 --draft=false
           elif [ "$IS_DRAFT" != "false" ]; then
             exit 1
           fi

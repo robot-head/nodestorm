@@ -1,0 +1,5 @@
+# Static CRT so the app carries no Microsoft Visual C++ Redistributable
+# dependency: the Store rejects packages that depend on non-integrated software
+# unless it is disclosed in the listing description.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

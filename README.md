@@ -59,7 +59,7 @@ architecture-beta
 
 ## Install the plugin
 
-Version 0.9.0 ships one canonical plugin with the MCP connection and shared
+Version 1.0.0 ships one canonical plugin with the MCP connection and shared
 skill for Claude Code, Codex, OpenCode, and Pi. Pin the package version or tag:
 
 ```text
@@ -70,14 +70,14 @@ skill for Claude Code, Codex, OpenCode, and Pi. Pin the package version or tag:
 
 ```sh
 # Codex
-codex plugin marketplace add robot-head/nodestorm --ref v0.9.0
+codex plugin marketplace add robot-head/nodestorm --ref v1.0.0
 codex plugin add nodestorm@nodestorm
 
 # OpenCode
-opencode plugin nodestorm@0.9.0 --global
+opencode plugin nodestorm@1.0.0 --global
 
 # Pi
-pi install npm:nodestorm@0.9.0
+pi install npm:nodestorm@1.0.0
 ```
 
 Claude Code and Codex load the bundled remote MCP declaration. OpenCode merges
@@ -92,10 +92,10 @@ and asks before both installation and launch:
 
 - Windows installs only the certified Microsoft Store listing, by Product ID,
   and launches its App Execution Alias. There is no direct Windows download.
-- Linux downloads the matching x64/arm64 v0.9.0 tarball, checks SHA-256 and
+- Linux downloads the matching x64/arm64 v1.0.0 tarball, checks SHA-256 and
   GitHub provenance, verifies GTK/WebKitGTK dependencies, and installs in the
   user data directory without `sudo` or PATH changes.
-- macOS downloads the matching x64/arm64 v0.9.0 app, checks SHA-256,
+- macOS downloads the matching x64/arm64 v1.0.0 app, checks SHA-256,
   Developer ID signing, and Gatekeeper, then installs under `~/Applications`.
 
 Setup aborts on a trust or version mismatch, unavailable Store listing,
@@ -313,7 +313,7 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 npm --prefix plugins/nodestorm ci --ignore-scripts
 node --test tests/*.mjs           # package, host adapters, installers, Pi proxy
-node scripts/validate-release.mjs # synchronized v0.9.0 package contracts
+node scripts/validate-release.mjs # synchronized v1.0.0 package contracts
 node scripts/validate-npm-pack.mjs
 ```
 
@@ -355,3 +355,4 @@ selecting a card the panel overlaps, as the script does.
 
 Design cap: ~100 nodes per graph, one brainstorm session at a time.
 Where this is going: see [ROADMAP.md](ROADMAP.md).
+
