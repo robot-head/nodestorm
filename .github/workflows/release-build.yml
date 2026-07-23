@@ -201,6 +201,8 @@ jobs:
         run: |
           cargo build --release --locked
           ./target/release/nodestorm.exe --version | Select-String -SimpleMatch $env:VERSION
+          $binary = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes("./target/release/nodestorm.exe"))
+          if ($binary -match "VCRUNTIME140|MSVCP140") { throw "The binary imports the Visual C++ Redistributable. Store certification rejects undisclosed non-integrated dependencies; keep the static CRT in .cargo/config.toml." }
           ./plugins/nodestorm/skills/nodestorm/scripts/setup.ps1 -DryRun -Architecture "${{ matrix.arch }}"
       - name: Locate Windows SDK packaging tools
         shell: pwsh
