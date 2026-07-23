@@ -207,8 +207,11 @@ jobs:
       - name: Locate Windows SDK packaging tools
         shell: pwsh
         run: |
-          $sdk = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Directory | Sort-Object Name -Descending | Select-Object -First 1
-          $hostTools = Join-Path $sdk.FullName "x64"
+          # Highest-versioned SDK holding x64 host tools; a plain name sort picks the legacy `bin\x86` directory.
+          $hostTools = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\makeappx.exe" |
+              Sort-Object { [version]$_.Directory.Parent.Name } -Descending |
+              Select-Object -First 1 -ExpandProperty DirectoryName
+          if (-not $hostTools) { throw "makeappx.exe not found. Install the Windows 10/11 SDK." }
           "MAKEAPPX=$(Join-Path $hostTools 'makeappx.exe')" | Out-File $env:GITHUB_ENV -Append
           "SIGNTOOL=$(Join-Path $hostTools 'signtool.exe')" | Out-File $env:GITHUB_ENV -Append
       - name: Create unsigned Store package
@@ -251,8 +254,10 @@ jobs:
       - name: Create private unsigned Store bundle
         shell: pwsh
         run: |
-          $sdk = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Directory | Sort-Object Name -Descending | Select-Object -First 1
-          $makeappx = Join-Path $sdk.FullName "x64\makeappx.exe"
+          $makeappx = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\makeappx.exe" |
+              Sort-Object { [version]$_.Directory.Parent.Name } -Descending |
+              Select-Object -First 1 -ExpandProperty FullName
+          if (-not $makeappx) { throw "makeappx.exe not found. Install the Windows 10/11 SDK." }
           & $makeappx bundle /o /d packages /p "nodestorm-v1.0.0-windows.msixbundle"
       - uses: actions/upload-artifact@v6
         with:

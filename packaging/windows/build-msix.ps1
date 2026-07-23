@@ -18,8 +18,8 @@ $binary = Join-Path $repo "target/release/nodestorm.exe"
 if (-not (Test-Path $binary)) { throw "Missing $binary. Build first (drop -SkipBuild)." }
 
 # Highest-versioned SDK bin holding an x64 makeappx.exe (host tool packs any target arch).
-$makeappx = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter makeappx.exe -ErrorAction SilentlyContinue |
-    Where-Object { $_.FullName -match '\\x64\\' } | Sort-Object { [version]$_.Directory.Parent.Name } -Descending |
+$makeappx = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\makeappx.exe" -ErrorAction SilentlyContinue |
+    Sort-Object { [version]$_.Directory.Parent.Name } -Descending |
     Select-Object -First 1 -ExpandProperty FullName
 if (-not $makeappx) { throw "makeappx.exe not found. Install the Windows 10/11 SDK." }
 
