@@ -94,7 +94,7 @@ jobs:
       - uses: actions/attest-build-provenance@v3
         with:
           subject-path: nodestorm-v${{ env.VERSION }}-linux-${{ matrix.arch }}.tar.gz
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-${{ matrix.arch }}
           path: nodestorm-v${{ env.VERSION }}-linux-${{ matrix.arch }}.tar.gz
@@ -175,7 +175,7 @@ jobs:
       - uses: actions/attest-build-provenance@v3
         with:
           subject-path: nodestorm-v${{ env.VERSION }}-macos-${{ matrix.arch }}.zip
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: macos-${{ matrix.arch }}
           path: nodestorm-v${{ env.VERSION }}-macos-${{ matrix.arch }}.zip
@@ -222,7 +222,7 @@ jobs:
           $layout = Join-Path $env:RUNNER_TEMP "layout"
           ./packaging/windows/prepare-layout.ps1 -Binary ./target/release/nodestorm.exe -Layout $layout -Architecture "${{ matrix.arch }}"
           & $env:MAKEAPPX pack /o /d $layout /p "nodestorm-v$env:VERSION-windows-${{ matrix.arch }}.msix"
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-msix-${{ matrix.arch }}
           path: nodestorm-v${{ env.VERSION }}-windows-${{ matrix.arch }}.msix
@@ -250,7 +250,7 @@ jobs:
     needs: windows
     runs-on: windows-2025
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: windows-msix-*
           path: packages
@@ -263,7 +263,7 @@ jobs:
               Select-Object -First 1 -ExpandProperty FullName
           if (-not $makeappx) { throw "makeappx.exe not found. Install the Windows 10/11 SDK." }
           & $makeappx bundle /o /d packages /p "nodestorm-v1.0.0-windows.msixbundle"
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-store-msixbundle
           path: nodestorm-v1.0.0-windows.msixbundle
@@ -276,12 +276,12 @@ jobs:
     if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: linux-*
           path: dist
           merge-multiple: true
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: macos-*
           path: dist
