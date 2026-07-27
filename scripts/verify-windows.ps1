@@ -121,12 +121,24 @@ try {
 
     # The choice panel overlays the right edge of the canvas and can cover the
     # next card (UIA still reports the covered card's rect, but a click there
-    # lands on the panel). Close it before selecting another node.
+    # lands on the panel). Close it before reaching for the next decision.
     Click-Element $hwnd ([string][char]0x2715)   # panel close button
     if (-not (Wait-ElementGone 'At-least-once with retries' 10)) { Fail 'choice panel did not close' }
 
-    Click-Element $hwnd 'Delivery Store'
-    if (-not (Wait-Element 'Existing PostgreSQL' 10)) { Fail 'second choice panel did not open' }
+    # The open-decision count is actionable: it opens a session-wide Decisions
+    # panel, and its › steps to the next choice still waiting on the user —
+    # no hunting for the node that carries it.
+    Click-Element $hwnd '1 open decision'
+    if (-not (Wait-Element 'Decisions' 10)) { Fail 'decisions panel did not open' }
+    if (-not (Wait-Element 'Existing PostgreSQL' 10)) {
+        Fail 'decisions panel did not list the remaining open choice'
+    }
+    Click-Element $hwnd 'Next open decision'
+    if (-not (Wait-Element '1 of 1' 10)) { Fail 'decision navigation did not park on the open choice' }
+    Log 'decisions panel navigation verified'
+    Save-WindowPng $hwnd (Join-Path $OutDir '01b-decisions-nav.png')
+
+    # Decide it from the panel itself — the point of the feature.
     Click-Element $hwnd 'Existing PostgreSQL'
     # Last open choice decided -> autoflush -> await_decisions delivers.
     Log 'second decision made; waiting for drive to receive the delivery...'
@@ -141,6 +153,11 @@ try {
         if ($out -notlike "*$expect*") { Fail "delivered decisions missing $expect :`n$out" }
     }
     Log 'drive received both decisions (at-least-once, postgres)'
+
+    # The Decisions panel outranks node selection, so hand the right-panel
+    # slot back before the editing checks below drive the node panel.
+    Click-Element $hwnd ([string][char]0x2715)   # decisions panel close button
+    if (-not (Wait-ElementGone 'Decisions' 10)) { Fail 'decisions panel did not close' }
 
     # ---- v0.3 user editing through the real controls ----
 

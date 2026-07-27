@@ -126,6 +126,9 @@ pub fn TopBar(
     let mut delete_pending = use_signal(|| false);
     let mut launcher_open = use_context::<super::AgentLauncherOpen>().0;
     let mut connections_open = use_signal(|| false);
+    let decision_nav = use_context::<super::DecisionNav>();
+    let mut decisions_open = decision_nav.open;
+    let mut decision_cursor = decision_nav.cursor;
     let mut compare_with = use_context::<super::CompareWith>().0;
     let terminals = use_context::<super::Terminals>().0;
     let panel = use_context::<super::TerminalPanel>();
@@ -284,6 +287,7 @@ pub fn TopBar(
                                             let name = info.name.clone();
                                             move |_| {
                                                 compare_with.set(Some(name.clone()));
+                                                decisions_open.set(false);
                                                 new_session_draft.set(String::new());
                                                 rename_draft.set(String::new());
                                                 manage_open.set(false);
@@ -539,11 +543,29 @@ pub fn TopBar(
                         }
                     }
                     if open > 0 {
-                        span {
-                            class: "seg seg-open",
-                            role: "status",
+                        button {
+                            class: if decisions_open() { "seg seg-open btn-armed" } else { "seg seg-open" },
                             aria_label: "{open} open decision{plural}",
-                            title: "Choices still waiting for a pick",
+                            title: "Review and step through every open decision",
+                            onclick: {
+                                let mut selected = selected;
+                                let mut timeline_open = timeline_open;
+                                let mut queued_changes_open = queued_changes_open;
+                                let mut questions_open = questions_open;
+                                let mut compare_with = compare_with;
+                                move |_| {
+                                    if !decisions_open() {
+                                        selected.set(None);
+                                        timeline_open.set(false);
+                                        queued_changes_open.set(false);
+                                        questions_open.set(false);
+                                        compare_with.set(None);
+                                    } else {
+                                        decision_cursor.set(None);
+                                    }
+                                    decisions_open.toggle();
+                                }
+                            },
                             "{open}"
                             span { class: "seg-word", " open" }
                         }
@@ -565,6 +587,7 @@ pub fn TopBar(
                                         timeline_open.set(false);
                                         queued_changes_open.set(false);
                                         compare_with.set(None);
+                                        decisions_open.set(false);
                                     }
                                     questions_open.toggle();
                                 }
@@ -591,6 +614,7 @@ pub fn TopBar(
                                         timeline_open.set(false);
                                         questions_open.set(false);
                                         compare_with.set(None);
+                                        decisions_open.set(false);
                                     }
                                     queued_changes_open.toggle();
                                 }
@@ -668,6 +692,7 @@ pub fn TopBar(
                         selected.set(None);
                         queued_changes_open.set(false);
                         questions_open.set(false);
+                        decisions_open.set(false);
                         timeline_open.toggle();
                     }
                 },

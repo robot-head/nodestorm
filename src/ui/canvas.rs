@@ -112,6 +112,9 @@ pub fn Canvas(
     let mut gesture: Signal<GestureState> = use_signal(GestureState::default);
     let mut connect_from = use_context::<super::ConnectFrom>().0;
     let mut zoom_target = use_context::<super::ZoomTarget>().0;
+    let decision_nav = use_context::<super::DecisionNav>();
+    let mut decisions_open = decision_nav.open;
+    let mut decision_cursor = decision_nav.cursor;
     let mut search = use_context::<super::SearchQuery>().0;
     // Cursor position (plane coords) while a connect drag is live.
     let mut ghost_to: Signal<Option<(f64, f64)>> = use_signal(|| None);
@@ -216,6 +219,21 @@ pub fn Canvas(
             .and_then(|id| d.nodes.iter().position(|n| n.id == id))
             .map_or(0, |i| (i as isize + step).rem_euclid(len));
         selected.set(Some(d.nodes[cur as usize].id.clone()));
+    };
+
+    // Decision stepping: walk the session's actionable choices, opening the
+    // Decisions panel so the one we land on is visible and decidable.
+    let mut step_decision = move |by: isize| {
+        let next = {
+            let d = doc.read();
+            let refs = super::decisions_panel::actionable_decisions(&d);
+            super::decisions_panel::step_decision(&refs, decision_cursor().as_ref(), by)
+        };
+        let Some(next) = next else { return };
+        decisions_open.set(true);
+        selected.set(Some(next.node.clone()));
+        zoom_target.set(Some(next.node.clone()));
+        decision_cursor.set(Some(next));
     };
 
     // When the agent moves the focus, pan so that node is centered.
@@ -401,6 +419,17 @@ pub fn Canvas(
                                     "const b = document.querySelector('.search-box'); \
                                      if (b) b.focus();",
                                 );
+                            }
+                            // Tab cycles nodes; these cycle *decisions*.
+                            "]" => step_decision(1),
+                            "[" => step_decision(-1),
+                            "d" => {
+                                if decisions_open() {
+                                    decision_cursor.set(None);
+                                } else {
+                                    selected.set(None);
+                                }
+                                decisions_open.toggle();
                             }
                             _ => {}
                         },

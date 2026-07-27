@@ -19,6 +19,7 @@ use crate::store::ToastLevel;
 use super::agent_launcher::AgentLauncher;
 use super::canvas::Canvas;
 use super::choice_panel::ChoicePanel;
+use super::decisions_panel::DecisionsPanel;
 use super::diff_panel::DiffPanel;
 use super::questions_panel::QuestionsPanel;
 use super::queued_changes::QueuedChangesPanel;
@@ -53,6 +54,12 @@ pub fn App() -> Element {
         comment: Signal::new(String::new()),
         open: Signal::new(false),
     });
+    let decision_nav = use_context_provider(|| super::DecisionNav {
+        open: Signal::new(false),
+        cursor: Signal::new(None),
+    });
+    let mut decisions_open = decision_nav.open;
+    let mut decision_cursor = decision_nav.cursor;
     let mut launcher_open = use_context_provider(|| super::AgentLauncherOpen(Signal::new(false))).0;
 
     let terminal_manager = use_context::<Arc<crate::terminal::TerminalManager>>();
@@ -208,6 +215,8 @@ pub fn App() -> Element {
                                 record_diff.set(None);
                                 queued_changes_open.set(false);
                                 questions_open.set(false);
+                                decisions_open.set(false);
+                                decision_cursor.set(None);
                                 break;
                             }
                         }
@@ -278,7 +287,21 @@ pub fn App() -> Element {
                         }
                     }
                 }
-                if let Some(node) = selected_node {
+                if decisions_open() {
+                    // Ahead of selection, unlike every other panel: stepping
+                    // through decisions *sets* the selection, so if selection
+                    // kept winning the slot this panel would close itself on
+                    // the first ›.
+                    DecisionsPanel {
+                        doc,
+                        selected,
+                        hovered_affects,
+                        on_close: move |()| {
+                            decisions_open.set(false);
+                            decision_cursor.set(None);
+                        },
+                    }
+                } else if let Some(node) = selected_node {
                     // Keyed so switching nodes remounts the panel and its
                     // edit-form drafts start from the new node's content.
                     // Selection takes the right-panel slot over Timeline.

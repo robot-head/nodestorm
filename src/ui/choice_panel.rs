@@ -17,6 +17,12 @@ use crate::model::{
 
 use super::app::use_store;
 
+/// Per-choice hesitation trails, keyed by the node the choice lives on as well
+/// as its id — choice ids are only unique *within* a node (hence
+/// [`crate::model::ChoiceRef`]), and the Decisions panel renders choices from
+/// many nodes against one map.
+pub(crate) type ConsideredTrails = HashMap<(NodeId, ChoiceId), Vec<OptionId>>;
+
 /// `<select>` values ↔ [`NodeKind`], in display order.
 const KIND_VALUES: [(&str, NodeKind); 8] = [
     ("service", NodeKind::Service),
@@ -91,7 +97,7 @@ pub fn ChoicePanel(
     selected: Signal<Option<NodeId>>,
     hovered_affects: Signal<Vec<NodeId>>,
 ) -> Element {
-    let considered: Signal<HashMap<ChoiceId, Vec<OptionId>>> = use_signal(HashMap::new);
+    let considered: Signal<ConsideredTrails> = use_signal(HashMap::new);
     let mut note_draft = use_signal(String::new);
     let mut label_draft = use_signal(|| node.label.clone());
     let mut kind_draft = use_signal(|| kind_value(node.kind).to_owned());
@@ -336,6 +342,7 @@ pub fn ChoicePanel(
                     doc,
                     considered,
                     hovered_affects,
+                    selected: None,
                 }
             }
 
@@ -398,15 +405,23 @@ pub fn ChoicePanel(
     }
 }
 
+/// One choice: prompt, dependency/review banners, option cards, and the skip
+/// control. Shared by the node panel (`show_owner: false`) and the Decisions
+/// panel (`true`, which adds a click-through line naming the owning node).
 #[component]
-fn ChoiceBlock(
+pub(crate) fn ChoiceBlock(
     node_id: NodeId,
     choice: Choice,
     doc: Signal<SessionDoc>,
-    considered: Signal<HashMap<ChoiceId, Vec<OptionId>>>,
+    considered: Signal<ConsideredTrails>,
     hovered_affects: Signal<Vec<NodeId>>,
+    /// `Some` in the Decisions panel: clicking the owner line selects and
+    /// zooms that node. `None` in the node panel, where the owner is implicit.
+    selected: Option<Signal<Option<NodeId>>>,
 ) -> Element {
     let store = use_store();
+    let mut zoom_target = use_context::<super::ZoomTarget>().0;
+    let owner_label = selected.and_then(|_| doc.read().node(&node_id).map(|n| n.label.clone()));
     let status_class = match choice.status {
         ChoiceStatus::Open => "open",
         ChoiceStatus::Decided => "decided",
@@ -440,6 +455,22 @@ fn ChoiceBlock(
             div { class: "choice-head",
                 span { class: "choice-flag", if locked { "🔒" } else { "⚑" } }
                 h3 { "{choice.prompt}" }
+            }
+            if let Some(label) = owner_label {
+                button {
+                    class: "choice-owner",
+                    title: "Select and center this component",
+                    onclick: {
+                        let node_id = node_id.clone();
+                        move |_| {
+                            if let Some(mut selected) = selected {
+                                selected.set(Some(node_id.clone()));
+                            }
+                            zoom_target.set(Some(node_id.clone()));
+                        }
+                    },
+                    "on {label}"
+                }
             }
             if locked {
                 div { class: "choice-lock",
@@ -490,7 +521,8 @@ fn ChoiceBlock(
                                         return;
                                     }
                                     let trail = considered.with_mut(|map| {
-                                        let trail = map.entry(choice_id.clone()).or_default();
+                                        let key = (node_id.clone(), choice_id.clone());
+                                        let trail = map.entry(key).or_default();
                                         if trail.last() != Some(&option_id) {
                                             trail.push(option_id.clone());
                                         }

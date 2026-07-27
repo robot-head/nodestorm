@@ -868,6 +868,67 @@ fieldset.agent-launch-options {
   overflow-wrap: anywhere;
 }
 
+/* ---------- decisions panel ---------- */
+
+.decisions-panel .decisions-section {
+  margin: 16px 0 4px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+/* Prev / count / next, sat between the panel title and its close button. */
+.panel-nav {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.panel-nav .ctl-btn {
+  padding: 2px 8px;
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.panel-nav .ctl-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+  border-color: var(--border);
+  color: var(--text-dim);
+}
+
+.panel-nav-count {
+  min-width: 56px;
+  text-align: center;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+/* Which component a choice hangs off — only shown in the Decisions panel,
+   where the owner is not implied by the panel header. */
+.choice-owner {
+  display: block;
+  margin: 6px 0 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  font: inherit;
+  font-size: 11.5px;
+  text-align: left;
+  color: var(--text-dim);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.choice-owner:hover {
+  color: var(--accent);
+}
+
 /* ---------- agent questions ---------- */
 
 .panel-questions {

@@ -573,6 +573,49 @@ mod tests {
     }
 
     #[test]
+    fn opening_decisions_closes_every_other_right_panel() {
+        let button = TOPBAR_SOURCE
+            .find("title: \"Review and step through every open decision\"")
+            .expect("TopBar must make the open-decision count actionable");
+        let rest = &TOPBAR_SOURCE[button..];
+        let handler_end = rest
+            .find("},\n                            \"{open}\"")
+            .expect("the open-decision segment must have an onclick handler");
+        let handler = &rest[..handler_end];
+
+        for reset in [
+            "selected.set(None);",
+            "timeline_open.set(false);",
+            "queued_changes_open.set(false);",
+            "questions_open.set(false);",
+            "compare_with.set(None);",
+        ] {
+            assert2::assert!(
+                handler.contains(reset),
+                "opening decisions must reset `{reset}` so it owns the right-panel slot"
+            );
+        }
+    }
+
+    #[test]
+    fn the_decisions_panel_outranks_node_selection() {
+        // Every other panel yields the slot to a selected node. This one must
+        // not: stepping through decisions *sets* the selection, so if
+        // selection won the panel would close itself on the first ›.
+        let decisions = APP_SOURCE
+            .find("if decisions_open() {")
+            .expect("App must render the decisions panel");
+        let selection = APP_SOURCE
+            .find("} else if let Some(node) = selected_node {")
+            .expect("App must render the selected node's panel");
+
+        assert2::assert!(
+            decisions < selection,
+            "the decisions panel must be branched before the selected-node panel"
+        );
+    }
+
+    #[test]
     fn minimum_viewport_keeps_topbar_and_menus_reachable() {
         const MEDIA: &str = "@media (max-width: 519px) {";
         let media_start = CSS
