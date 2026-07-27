@@ -3,10 +3,11 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
-const root = path.resolve(import.meta.dirname, "..");
+import { msixVersion, releaseVersion, root } from "../scripts/release-version.mjs";
+
 const plugin = path.join(root, "plugins", "nodestorm");
-const expectedVersion = "1.0.0";
-const expectedMsixVersion = "1.0.0.0";
+const expectedVersion = await releaseVersion();
+const expectedMsixVersion = msixVersion(expectedVersion);
 const tools = [
   "propose_graph",
   "update_graph",

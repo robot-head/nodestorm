@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 
-const root = path.resolve(import.meta.dirname, "..");
+import { msixVersion, releaseVersion, root, versionPattern } from "./release-version.mjs";
+
 const pluginRoot = path.join(root, "plugins", "nodestorm");
-const expected = "1.0.0";
-const msixExpected = "1.0.0.0";
+const expected = await releaseVersion();
+const msixExpected = msixVersion(expected);
+const v = versionPattern(expected);
 const releaseMode = process.argv.includes("--release");
 const tagIndex = process.argv.indexOf("--tag");
 
@@ -30,16 +32,20 @@ const skillAgent = await text("plugins/nodestorm/skills/nodestorm/agents/openai.
 const rootAgent = await text("plugins/nodestorm/agents/openai.yaml");
 const piAdapter = await text("plugins/nodestorm/pi.js");
 const windowsSetup = await text("plugins/nodestorm/skills/nodestorm/scripts/setup.ps1");
+const posixSetup = await text("plugins/nodestorm/skills/nodestorm/scripts/setup.sh");
 
 assert.equal(version, expected);
 assert.equal(packageJson.version, expected);
 assert.equal(claude.version, expected);
 assert.equal(codex.version, expected);
-assert.match(cargo, /^version = "1\.0\.0"$/m);
-assert.match(cargoLock, /name = "nodestorm"\nversion = "1\.0\.0"/);
-assert.match(plist, /<key>CFBundleShortVersionString<\/key><string>1\.0\.0<\/string>/);
-assert.match(piAdapter, /version: "1\.0\.0"/);
-assert.match(windowsSetup, /\$Version = "1\.0\.0"/);
+assert.match(cargo, new RegExp(`^version = "${v}"$`, "m"));
+assert.match(cargoLock, new RegExp(`name = "nodestorm"\\nversion = "${v}"`));
+assert.match(plist, new RegExp(`<key>CFBundleShortVersionString</key><string>${v}</string>`));
+assert.match(piAdapter, new RegExp(`version: "${v}"`));
+// Both setup scripts derive the version from the shipped VERSION file rather
+// than pinning a literal, so assert the derivation instead of the value.
+assert.match(windowsSetup, /\$Version = \(Get-Content \(Join-Path \$PSScriptRoot "\.\.\\\.\.\\\.\.\\VERSION"\)/);
+assert.match(posixSetup, /VERSION=\$\(tr -d '\[:space:\]' < "\$SCRIPT_DIR\/\.\.\/\.\.\/\.\.\/VERSION"\)/);
 assert.equal(mcp.mcpServers.nodestorm.timeout, 600_000);
 assert.equal(mcp.mcpServers.nodestorm.tool_timeout_sec, 600);
 assert.equal(mcp.mcpServers.nodestorm.url, "http://127.0.0.1:4747/mcp");
