@@ -178,3 +178,8 @@ subgraphs were all considered and cut.
 ### Ongoing polish (unscheduled)
 
 - Semantic-zoom tuning and lane/annotation polish from real-world use.
+- Right-panel decision navigation: the topbar's open-decision count is a
+  button that opens a session-wide Decisions panel (every choice grouped
+  open / dependency-blocked / decided / skipped), with ‹ › prev-next over the
+  actionable ones — selecting and centering each owning node — plus `]` / `[`
+  to step and `d` to toggle. Deciding auto-advances to the next one.

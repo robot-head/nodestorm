@@ -42,6 +42,7 @@ pub fn MoreMenu(has_nodes: bool, suggested_name: String) -> Element {
     let cli = use_context::<Cli>();
     let sessions = use_context::<Arc<crate::sessions::Sessions>>();
     let mut record_diff = use_context::<super::RecordDiff>().0;
+    let mut decisions_open = use_context::<super::DecisionNav>().open;
     let mut open = use_signal(|| false);
     let mut section = use_signal(|| Section::None);
 
@@ -237,6 +238,7 @@ pub fn MoreMenu(has_nodes: bool, suggested_name: String) -> Element {
                                             Ok(diff) => diff,
                                             Err(err) => format!("# Compare with record\n\n_{err}_\n"),
                                         }));
+                                        decisions_open.set(false);
                                     }
                                 },
                                 "Compare with record file…"

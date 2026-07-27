@@ -8,6 +8,7 @@ mod canvas;
 mod choice_panel;
 mod cluster_card;
 mod context_menu;
+mod decisions_panel;
 mod diff_panel;
 mod edge_layer;
 mod minimap;
@@ -92,6 +93,15 @@ pub(crate) struct RecordDiff(pub Signal<Option<String>>);
 pub(crate) struct MessageComposer {
     pub comment: Signal<String>,
     pub open: Signal<bool>,
+}
+
+/// The Decisions panel: whether it holds the right-panel slot, and which
+/// actionable decision the prev/next controls are parked on. Context rather
+/// than props because the canvas keyboard handler drives it too.
+#[derive(Clone, Copy)]
+pub(crate) struct DecisionNav {
+    pub open: Signal<bool>,
+    pub cursor: Signal<Option<crate::model::ChoiceRef>>,
 }
 
 /// Whether the start-agent modal is open.
