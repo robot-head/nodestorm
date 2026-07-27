@@ -4,8 +4,8 @@ import path from "node:path";
 
 const root = path.resolve(import.meta.dirname, "..");
 const pluginRoot = path.join(root, "plugins", "nodestorm");
-const expected = "1.0.0";
-const msixExpected = "1.0.0.0";
+const expected = "1.0.1";
+const msixExpected = "1.0.1.0";
 const releaseMode = process.argv.includes("--release");
 const tagIndex = process.argv.indexOf("--tag");
 
@@ -35,11 +35,11 @@ assert.equal(version, expected);
 assert.equal(packageJson.version, expected);
 assert.equal(claude.version, expected);
 assert.equal(codex.version, expected);
-assert.match(cargo, /^version = "1\.0\.0"$/m);
-assert.match(cargoLock, /name = "nodestorm"\nversion = "1\.0\.0"/);
-assert.match(plist, /<key>CFBundleShortVersionString<\/key><string>1\.0\.0<\/string>/);
-assert.match(piAdapter, /version: "1\.0\.0"/);
-assert.match(windowsSetup, /\$Version = "1\.0\.0"/);
+assert.match(cargo, /^version = "1\.0\.1"$/m);
+assert.match(cargoLock, /name = "nodestorm"\nversion = "1\.0\.1"/);
+assert.match(plist, /<key>CFBundleShortVersionString<\/key><string>1\.0\.1<\/string>/);
+assert.match(piAdapter, /version: "1\.0\.1"/);
+assert.match(windowsSetup, /\$Version = "1\.0\.1"/);
 assert.equal(mcp.mcpServers.nodestorm.timeout, 600_000);
 assert.equal(mcp.mcpServers.nodestorm.tool_timeout_sec, 600);
 assert.equal(mcp.mcpServers.nodestorm.url, "http://127.0.0.1:4747/mcp");

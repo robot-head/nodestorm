@@ -18,7 +18,7 @@ async function defaultCreateClient({ url }) {
     import("@modelcontextprotocol/sdk/client/index.js"),
     import("@modelcontextprotocol/sdk/client/streamableHttp.js"),
   ]);
-  const client = new Client({ name: "nodestorm-pi", version: "1.0.0" });
+  const client = new Client({ name: "nodestorm-pi", version: "1.0.1" });
   await client.connect(new StreamableHTTPClientTransport(new URL(url)));
   return client;
 }

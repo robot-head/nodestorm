@@ -1,6 +1,6 @@
 {
   "name": "nodestorm",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Nodestorm plugin for Claude Code, Codex, OpenCode, and Pi",
   "type": "module",
   "exports": {

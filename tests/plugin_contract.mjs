@@ -5,8 +5,8 @@ import test from "node:test";
 
 const root = path.resolve(import.meta.dirname, "..");
 const plugin = path.join(root, "plugins", "nodestorm");
-const expectedVersion = "1.0.0";
-const expectedMsixVersion = "1.0.0.0";
+const expectedVersion = "1.0.1";
+const expectedMsixVersion = "1.0.1.0";
 const tools = [
   "propose_graph",
   "update_graph",
