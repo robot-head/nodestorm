@@ -1,14 +1,13 @@
-name: Publish certified v1.0.1 release
+name: Publish certified release
 
 on:
   workflow_dispatch:
     inputs:
-      store_version:
-        description: Certified Microsoft Store version
+      version:
+        description: Release version to publish, three-part, e.g. 2.3.4
         required: true
-        default: 1.0.1.0
       confirm:
-        description: Type publish-v1.0.1 after Store certification
+        description: Type publish-v<version> after Store certification
         required: true
 
 permissions:
@@ -21,16 +20,18 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: v1.0.1
+          ref: v${{ inputs.version }}
       - uses: actions/setup-node@v7
         with:
           node-version: 24
       - name: Confirm dispatch and repository release gates
         shell: pwsh
         run: |
-          if ("${{ inputs.confirm }}" -ne "publish-v1.0.1") { throw "Explicit publish confirmation is missing." }
-          if ("${{ inputs.store_version }}" -ne "1.0.1.0") { throw "Certified Store version must be 1.0.1.0." }
-          node scripts/validate-release.mjs --release --tag v1.0.1
+          if ("${{ inputs.confirm }}" -ne "publish-v${{ inputs.version }}") { throw "Explicit publish confirmation is missing." }
+          # The checked-out tag must be the version it claims to be.
+          $pinned = (Get-Content plugins/nodestorm/VERSION -Raw).Trim()
+          if ($pinned -ne "${{ inputs.version }}") { throw "Tag v${{ inputs.version }} pins version $pinned." }
+          node scripts/validate-release.mjs --release --tag v${{ inputs.version }}
       - name: Install and confirm the certified Store package
         shell: pwsh
         run: |
@@ -41,7 +42,7 @@ jobs:
             Where-Object {
               $_.Name -eq $identity.identityName -and
               $_.Publisher -eq $identity.publisher -and
-              $_.Version.ToString() -eq "${{ inputs.store_version }}"
+              $_.Version.ToString() -eq "${{ inputs.version }}.0"
             } |
             Select-Object -First 1
           if (-not $package) { throw "Installed Store package identity, publisher, or version does not match certification." }
@@ -53,7 +54,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: v1.0.1
+          ref: v${{ inputs.version }}
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -62,12 +63,14 @@ jobs:
         run: node scripts/configure-store.mjs packaging/windows/store-identity.json
       - name: Revalidate package and publish through npm trusted publishing
         working-directory: plugins/nodestorm
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
           npm test
           node ../../scripts/validate-npm-pack.mjs
-          PUBLISHED_VERSION=$(npm view nodestorm@1.0.1 version 2>/dev/null || true)
-          if [ "$PUBLISHED_VERSION" = "1.0.1" ]; then
-            PUBLISHED_REPOSITORY=$(npm view nodestorm@1.0.1 repository.url)
+          PUBLISHED_VERSION=$(npm view "nodestorm@$VERSION" version 2>/dev/null || true)
+          if [ "$PUBLISHED_VERSION" = "$VERSION" ]; then
+            PUBLISHED_REPOSITORY=$(npm view "nodestorm@$VERSION" repository.url)
             test "$PUBLISHED_REPOSITORY" = "git+https://github.com/robot-head/nodestorm.git"
           else
             npm publish --provenance --access public
@@ -75,10 +78,11 @@ jobs:
       - name: Publish the existing GitHub draft idempotently
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
         run: |
-          IS_DRAFT=$(gh release view v1.0.1 --json isDraft --jq '.isDraft')
+          IS_DRAFT=$(gh release view "v$VERSION" --json isDraft --jq '.isDraft')
           if [ "$IS_DRAFT" = "true" ]; then
-            gh release edit v1.0.1 --draft=false
+            gh release edit "v$VERSION" --draft=false
           elif [ "$IS_DRAFT" != "false" ]; then
             exit 1
           fi

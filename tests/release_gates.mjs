@@ -4,7 +4,8 @@ import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
-const root = path.resolve(import.meta.dirname, "..");
+import { mismatchedTag, releaseVersion, root } from "../scripts/release-version.mjs";
+
 const scripts = path.join(root, "plugins", "nodestorm", "skills", "nodestorm", "scripts");
 
 test("release validation hard-fails missing Partner Center identity or a wrong tag", async () => {
@@ -14,11 +15,9 @@ test("release validation hard-fails missing Partner Center identity or a wrong t
   } catch {
     identityExists = false;
   }
-  // Both tags must be *wrong* for the release version — the point is to prove
-  // validation rejects a mismatch. Bump these whenever the version bumps.
-  const args = identityExists
-    ? ["scripts/validate-release.mjs", "--release", "--tag", "v1.0.2"]
-    : ["scripts/validate-release.mjs", "--release", "--tag", "v1.0.1"];
+  // The tag must be *wrong* for the release version — the point is to prove
+  // validation rejects a mismatch. Derived, so it stays wrong across bumps.
+  const args = ["scripts/validate-release.mjs", "--release", "--tag", mismatchedTag(await releaseVersion())];
   const result = spawnSync("node", args, { cwd: root, encoding: "utf8" });
   assert.notEqual(result.status, 0);
   assert.match(`${result.stdout}\n${result.stderr}`, identityExists ? /tag .* does not match/ : /Partner Center identity is missing/);
@@ -27,11 +26,53 @@ test("release validation hard-fails missing Partner Center identity or a wrong t
 test("npm is published before the GitHub release becomes public", async () => {
   const workflow = await readFile(path.join(root, ".github", "workflows", "release-publish.yml"), "utf8");
   const npmPublish = workflow.indexOf("npm publish --provenance --access public");
-  const githubPublish = workflow.indexOf("gh release edit v1.0.1 --draft=false");
+  const githubPublish = workflow.indexOf("gh release edit \"v$VERSION\" --draft=false");
 
   assert.notEqual(npmPublish, -1);
   assert.notEqual(githubPublish, -1);
   assert.ok(npmPublish < githubPublish, "npm must be published before the GitHub draft is made public");
+});
+
+test("no workflow, script, or test pins the release version literally", async () => {
+  // The bump used to mean editing ~25 files, and the wrong-tag fixture in this
+  // very file silently turned correct at the next version. Everything now
+  // derives from plugins/nodestorm/VERSION, so nothing may name it outright.
+  const version = await releaseVersion();
+  const literal = new RegExp(version.replace(/\./g, "\\."));
+  for (const file of [
+    ".github/workflows/release-build.yml",
+    ".github/workflows/release-publish.yml",
+    "scripts/validate-release.mjs",
+    "scripts/configure-store.mjs",
+    "scripts/submit-store.mjs",
+    "tests/installers.mjs",
+    "tests/plugin_contract.mjs",
+    "tests/release_gates.mjs",
+    "tests/windows_installer.ps1",
+  ]) {
+    const contents = await readFile(path.join(root, file), "utf8");
+    assert.doesNotMatch(contents, literal, `${file} hardcodes the release version`);
+  }
+});
+
+test("Store submission is tag-gated and reads its credentials from secrets", async () => {
+  const workflow = await readFile(path.join(root, ".github", "workflows", "release-build.yml"), "utf8");
+  const job = workflow.slice(workflow.indexOf("\n  store-submit:"), workflow.indexOf("\n  draft-release:"));
+
+  // A manual dispatch rebuilds artifacts; it must never touch the live listing.
+  assert.match(job, /if: github\.ref_type == 'tag'/);
+  assert.match(job, /needs: \[validate, windows-bundle\]/);
+  for (const secret of ["MSSTORE_TENANT_ID", "MSSTORE_CLIENT_ID", "MSSTORE_CLIENT_SECRET"]) {
+    assert.match(job, new RegExp(`${secret}: \\$\\{\\{ secrets\\.${secret} \\}\\}`));
+  }
+  // The API takes a zip, not the bundle itself.
+  assert.match(job, /zip -j .*\.zip.*\.msixbundle/);
+
+  const script = await readFile(path.join(root, "scripts", "submit-store.mjs"), "utf8");
+  assert.match(script, /x-ms-blob-type/, "the SAS upload needs an explicit block-blob header");
+  assert.match(script, /PendingDelete/, "superseded packages must be retired");
+  assert.match(script, /PendingUpload/, "the new package must be marked for upload");
+  assert.match(script, /CommitFailed/, "a rejected commit must fail the job");
 });
 
 test("POSIX setup contains executable abort gates for every trust boundary", async () => {

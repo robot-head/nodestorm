@@ -1,6 +1,8 @@
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 $setup = Join-Path $root "plugins\nodestorm\skills\nodestorm\scripts\setup.ps1"
+# Single source of truth, same as the Node scripts read.
+$version = (Get-Content (Join-Path $root "plugins\nodestorm\VERSION") -Raw).Trim()
 $fixture = Join-Path ([System.IO.Path]::GetTempPath()) ("nodestorm-store-test-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory $fixture | Out-Null
 
@@ -10,8 +12,8 @@ try {
         publisher = "CN=Test"
         productId = "9TESTNODESTORM"
         executionAlias = "nodestorm.exe"
-        msixVersion = "1.0.1.0"
-        version = "1.0.1"
+        msixVersion = "$version.0"
+        version = $version
     } | ConvertTo-Json
     $storePath = Join-Path $fixture "store.json"
     Set-Content -Path $storePath -Value $store -Encoding utf8NoBOM

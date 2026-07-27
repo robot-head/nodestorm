@@ -1,8 +1,10 @@
-name: Build signed v1.0.1 release draft
+name: Build signed release draft
 
 on:
   push:
-    tags: ["v1.0.1"]
+    # Version-agnostic: the tag carries the version and `validate` proves it
+    # matches plugins/nodestorm/VERSION, the single source of truth.
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -12,11 +14,12 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  VERSION: 1.0.1
 
 jobs:
   validate:
     runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -25,6 +28,9 @@ jobs:
       - name: Validate synchronized release and external identity gate
         # A manual dispatch runs off a branch, where there is no tag to match.
         run: node scripts/validate-release.mjs --release ${{ github.ref_type == 'tag' && format('--tag {0}', github.ref_name) || '' }}
+      - name: Publish the release version to downstream jobs
+        id: version
+        run: echo "version=$(cat plugins/nodestorm/VERSION)" >> "$GITHUB_OUTPUT"
       - name: Test host adapters and installers
         run: node --test tests/plugin_contract.mjs tests/host_adapters.mjs tests/installers.mjs tests/release_gates.mjs
       - name: Validate npm contents
@@ -33,6 +39,8 @@ jobs:
   rust-gates:
     needs: validate
     runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
     steps:
       - uses: actions/checkout@v7
       - name: Install native dependencies
@@ -68,6 +76,8 @@ jobs:
           - runner: ubuntu-24.04-arm
             arch: arm64
     runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
     steps:
       - uses: actions/checkout@v7
       - name: Install native dependencies
@@ -110,6 +120,8 @@ jobs:
           - runner: macos-26
             arch: arm64
     runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -191,6 +203,8 @@ jobs:
           - runner: windows-11-arm
             arch: arm64
     runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -247,8 +261,10 @@ jobs:
           Get-AppxPackage -Name $identity.identityName | Remove-AppxPackage
 
   windows-bundle:
-    needs: windows
+    needs: [validate, windows]
     runs-on: windows-2025
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -262,19 +278,48 @@ jobs:
               Sort-Object { [version]$_.Directory.Parent.Name } -Descending |
               Select-Object -First 1 -ExpandProperty FullName
           if (-not $makeappx) { throw "makeappx.exe not found. Install the Windows 10/11 SDK." }
-          & $makeappx bundle /o /d packages /p "nodestorm-v1.0.1-windows.msixbundle"
+          & $makeappx bundle /o /d packages /p "nodestorm-v$env:VERSION-windows.msixbundle"
       - uses: actions/upload-artifact@v7
         with:
           name: windows-store-msixbundle
-          path: nodestorm-v1.0.1-windows.msixbundle
+          path: nodestorm-v${{ needs.validate.outputs.version }}-windows.msixbundle
           if-no-files-found: error
           retention-days: 30
 
+  # Push the built bundle straight to Store certification. Tag-only: a manual
+  # dispatch rebuilds artifacts without touching the live listing.
+  store-submit:
+    needs: [validate, windows-bundle]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-store-msixbundle
+      - name: Submit the bundle to the Microsoft Store
+        env:
+          MSSTORE_TENANT_ID: ${{ secrets.MSSTORE_TENANT_ID }}
+          MSSTORE_CLIENT_ID: ${{ secrets.MSSTORE_CLIENT_ID }}
+          MSSTORE_CLIENT_SECRET: ${{ secrets.MSSTORE_CLIENT_SECRET }}
+        run: |
+          # The submission API takes a zip; its entry name is what the
+          # submission JSON references.
+          zip -j "nodestorm-v${VERSION}-windows.zip" "nodestorm-v${VERSION}-windows.msixbundle"
+          node scripts/submit-store.mjs "nodestorm-v${VERSION}-windows.zip"
+
   draft-release:
-    needs: [linux, macos, windows-bundle]
+    needs: [validate, linux, macos, windows-bundle]
     # Manual dispatch rebuilds artifacts only; a release draft comes from the tag.
     if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
     steps:
       - uses: actions/download-artifact@v8
         with:
