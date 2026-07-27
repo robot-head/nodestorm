@@ -29,9 +29,13 @@ export function msixVersion(version) {
   return `${version}.0`;
 }
 
-/** `version` escaped for embedding in a RegExp. */
+/**
+ * `version` escaped for embedding in a RegExp. Escapes every metacharacter,
+ * not just the dots — a partial escape is the classic way this helper rots
+ * once someone passes it something other than a bare version.
+ */
 export function versionPattern(version) {
-  return version.replace(/\./g, "\\.");
+  return version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**

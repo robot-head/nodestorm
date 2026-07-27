@@ -4,7 +4,7 @@ import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
-import { mismatchedTag, releaseVersion, root } from "../scripts/release-version.mjs";
+import { mismatchedTag, releaseVersion, root, versionPattern } from "../scripts/release-version.mjs";
 
 const scripts = path.join(root, "plugins", "nodestorm", "skills", "nodestorm", "scripts");
 
@@ -37,8 +37,7 @@ test("no workflow, script, or test pins the release version literally", async ()
   // The bump used to mean editing ~25 files, and the wrong-tag fixture in this
   // very file silently turned correct at the next version. Everything now
   // derives from plugins/nodestorm/VERSION, so nothing may name it outright.
-  const version = await releaseVersion();
-  const literal = new RegExp(version.replace(/\./g, "\\."));
+  const literal = new RegExp(versionPattern(await releaseVersion()));
   for (const file of [
     ".github/workflows/release-build.yml",
     ".github/workflows/release-publish.yml",

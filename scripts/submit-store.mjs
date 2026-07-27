@@ -117,9 +117,11 @@ submission.applicationPackages = [
 
 await api("PUT", `/applications/${applicationId}/submissions/${submission.id}`, submission);
 
-// The SAS URI is a single block blob: one PUT of the whole zip.
+// The SAS URI is a single block blob: one PUT of the whole zip. Use the URI
+// exactly as the API returned it — its signature is already percent-encoded,
+// and re-encoding any of it invalidates the signature.
 const archive = await readFile(packageZip);
-const upload = await fetch(submission.fileUploadUrl.replace("+", "%2B"), {
+const upload = await fetch(submission.fileUploadUrl, {
   method: "PUT",
   headers: { "x-ms-blob-type": "BlockBlob" },
   body: archive,
