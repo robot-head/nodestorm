@@ -60,7 +60,7 @@ test("Store submission is tag-gated and reads its credentials from secrets", asy
 
   // A manual dispatch rebuilds artifacts; it must never touch the live listing.
   assert.match(job, /if: github\.ref_type == 'tag'/);
-  assert.match(job, /needs: \[validate, windows-bundle\]/);
+  assert.match(job, /needs: \[validate, windows-bundle, store-assets\]/);
   for (const secret of ["MSSTORE_TENANT_ID", "MSSTORE_CLIENT_ID", "MSSTORE_CLIENT_SECRET"]) {
     assert.match(job, new RegExp(`${secret}: \\$\\{\\{ secrets\\.${secret} \\}\\}`));
   }
@@ -72,6 +72,66 @@ test("Store submission is tag-gated and reads its credentials from secrets", asy
   assert.match(script, /PendingDelete/, "superseded packages must be retired");
   assert.match(script, /PendingUpload/, "the new package must be marked for upload");
   assert.match(script, /CommitFailed/, "a rejected commit must fail the job");
+});
+
+test("the Store listing is refreshed from the changelog and this build's artwork", async () => {
+  const script = await readFile(path.join(root, "scripts", "submit-store.mjs"), "utf8");
+
+  // A submission clone carries the previous listing; leaving it untouched is
+  // how a release ships the release before it.
+  assert.match(script, /baseListing\.releaseNotes = releaseNotes/, "release notes must come from the changelog");
+  assert.match(script, /changelogSection/);
+  // The same images array holds the hand-uploaded store logos. Retiring those
+  // strips artwork nothing in this pipeline can regenerate.
+  assert.match(
+    script,
+    /image\.imageType === "Screenshot" \? \{ \.\.\.image, fileStatus: "PendingDelete" \} : image/,
+    "only superseded screenshots may be retired",
+  );
+  assert.match(script, /imageType: "Screenshot"/);
+  assert.match(script, /videoFileName/, "the trailer must be attached to the listing");
+
+  // Assets are checked before the first API call: a submission referencing a
+  // file the zip lacks fails at commit, leaving a pending submission behind.
+  const assetCheck = script.indexOf("listing asset missing from");
+  const firstApiCall = script.indexOf("await api(");
+  assert.notEqual(assetCheck, -1);
+  assert.ok(assetCheck < firstApiCall, "listing assets must be verified before any API call");
+
+  const listing = JSON.parse(
+    await readFile(path.join(root, "packaging", "windows", "store-listing.json"), "utf8"),
+  );
+  const verifier = await readFile(path.join(root, "scripts", "verify-windows.ps1"), "utf8");
+  assert.ok(listing.screenshots.length <= 10, "the Store accepts at most 10 desktop screenshots");
+  for (const shot of listing.screenshots) {
+    assert.ok(shot.caption.length <= 200, `caption for ${shot.file} exceeds 200 characters`);
+    // Every listed screenshot must be one the verifier actually captures, and
+    // not one of its narrow-window shots (below the Store's 1366px floor).
+    assert.ok(verifier.includes(`'${shot.file}'`), `${shot.file} is not captured by verify-windows.ps1`);
+    assert.doesNotMatch(shot.file, /narrow/, "narrow-window captures are below the Store's 1366x768 floor");
+  }
+});
+
+test("listing artwork is regenerated from the shipped build, and its failure blocks the release", async () => {
+  const workflow = await readFile(path.join(root, ".github", "workflows", "release-build.yml"), "utf8");
+  const job = workflow.slice(workflow.indexOf("\n  store-assets:"), workflow.indexOf("\n  # Push the built bundle"));
+
+  // Blocking is the point: a listing that could not be regenerated must stop
+  // the release rather than quietly ship the previous version's screenshots.
+  assert.doesNotMatch(job, /continue-on-error/);
+  // Hosted runners boot below the Store's screenshot floor.
+  assert.match(job, /Set-DisplayResolution 1920 1080/);
+  assert.match(job, /verify-windows\.ps1 -NoBuild -WindowSize 1600x1000/);
+  assert.match(job, /record-demo\.ps1 -NoBuild -Publish/);
+  // The Store rejects anything but exactly 1920x1080 for a trailer and its thumbnail.
+  assert.match(job, /pad=1920:1080/);
+  assert.match(job, /-c:a aac/, "a trailer with no audio stream risks certification");
+  assert.match(job, /at least 1366x768/, "undersized screenshots must fail before upload");
+
+  const draft = workflow.slice(workflow.indexOf("\n  draft-release:"));
+  assert.match(draft, /needs: \[validate, linux, macos, windows-bundle, store-assets\]/);
+  assert.match(draft, /node scripts\/release-notes\.mjs > notes\.md/);
+  assert.match(draft, /--notes-file notes\.md/, "the GitHub release must publish the changelog too");
 });
 
 test("POSIX setup contains executable abort gates for every trust boundary", async () => {

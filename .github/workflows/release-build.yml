@@ -286,10 +286,70 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  # Regenerate the Store listing artwork from the build this release ships, so
+  # the listing can never show UI that no longer exists. Capture is the E2E
+  # verifier plus the demo recorder: a broken UI fails here rather than reaching
+  # customers as a stale screenshot. Runs on dispatch too — that is the dry run
+  # for the capture path, since store-submit stays tag-gated.
+  store-assets:
+    needs: [validate]
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Widen the runner desktop
+        shell: powershell
+        run: |
+          # Hosted runners boot at 1024x768, under the Store's 1366x768 floor.
+          . ./scripts/uia-lib.ps1
+          Set-DisplayResolution 1920 1080
+      - name: Install ffmpeg
+        run: choco install ffmpeg -y --no-progress
+      - name: Build the app, the drive example, and the demo agent
+        run: cargo build --locked --bins --examples
+      # Windows PowerShell 5.1, not pwsh: both capture scripts declare it and
+      # are written against that host (see record-demo.ps1's UTF-8 note).
+      - name: Capture the Store screenshots
+        shell: powershell
+        run: ./scripts/verify-windows.ps1 -NoBuild -WindowSize 1600x1000
+      - name: Record the demo video
+        shell: powershell
+        run: ./scripts/record-demo.ps1 -NoBuild -Publish
+      - name: Assemble the listing assets
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Drawing
+          New-Item -ItemType Directory -Force target/store | Out-Null
+          $listing = Get-Content packaging/windows/store-listing.json -Raw | ConvertFrom-Json
+          foreach ($shot in $listing.screenshots) {
+            $source = Join-Path 'target/verify' $shot.file
+            if (-not (Test-Path $source)) { throw "verify-windows.ps1 did not capture $($shot.file)" }
+            $bitmap = New-Object System.Drawing.Bitmap $source
+            $width = $bitmap.Width; $height = $bitmap.Height
+            $bitmap.Dispose()
+            if ($width -lt 1366 -or $height -lt 768) { throw "$($shot.file) is ${width}x${height}; Store desktop screenshots must be at least 1366x768" }
+            Copy-Item $source (Join-Path 'target/store' $shot.file)
+          }
+          # The Store requires exactly 1920x1080 for both the trailer and its
+          # thumbnail, and names an audio codec — a video with no audio stream
+          # at all is a certification risk, so pad the 1160x800 recording and
+          # give it a silent stereo AAC track.
+          ffmpeg -y -i docs/demo/nodestorm-demo.mp4 -f lavfi -i anullsrc=r=48000:cl=stereo -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1" -r 30 -c:v libx264 -profile:v high -pix_fmt yuv420p -bf 2 -g 15 -crf 20 -movflags +faststart -c:a aac -b:a 384k -ar 48000 -ac 2 -shortest target/store/trailer.mp4
+          if ($LASTEXITCODE -ne 0) { throw "ffmpeg failed to build the trailer" }
+          ffmpeg -y -i docs/demo/poster.png -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2" target/store/trailer-thumb.png
+          if ($LASTEXITCODE -ne 0) { throw "ffmpeg failed to build the trailer thumbnail" }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: store-assets
+          path: target/store
+          if-no-files-found: error
+          retention-days: 30
+
   # Push the built bundle straight to Store certification. Tag-only: a manual
   # dispatch rebuilds artifacts without touching the live listing.
   store-submit:
-    needs: [validate, windows-bundle]
+    needs: [validate, windows-bundle, store-assets]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     env:
@@ -302,25 +362,38 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: windows-store-msixbundle
+      - uses: actions/download-artifact@v8
+        with:
+          name: store-assets
+          path: store-assets
       - name: Submit the bundle to the Microsoft Store
         env:
           MSSTORE_TENANT_ID: ${{ secrets.MSSTORE_TENANT_ID }}
           MSSTORE_CLIENT_ID: ${{ secrets.MSSTORE_CLIENT_ID }}
           MSSTORE_CLIENT_SECRET: ${{ secrets.MSSTORE_CLIENT_SECRET }}
         run: |
-          # The submission API takes a zip; its entry name is what the
-          # submission JSON references.
-          zip -j "nodestorm-v${VERSION}-windows.zip" "nodestorm-v${VERSION}-windows.msixbundle"
-          node scripts/submit-store.mjs "nodestorm-v${VERSION}-windows.zip"
+          # The submission API takes a zip; its entry names are what the
+          # submission JSON references. -j flattens, so the screenshots and the
+          # trailer land at the zip root under the names the listing uses.
+          zip -j "nodestorm-v${VERSION}-windows.zip" "nodestorm-v${VERSION}-windows.msixbundle" store-assets/*
+          node scripts/submit-store.mjs "nodestorm-v${VERSION}-windows.zip" store-assets
 
   draft-release:
-    needs: [validate, linux, macos, windows-bundle]
+    # store-assets is a gate, not an input: a release whose Store listing could
+    # not be regenerated must not get a GitHub draft either.
+    needs: [validate, linux, macos, windows-bundle, store-assets]
     # Manual dispatch rebuilds artifacts only; a release draft comes from the tag.
     if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     env:
       VERSION: ${{ needs.validate.outputs.version }}
     steps:
+      # Checkout first: it cleans the workspace, which would delete the
+      # downloaded artifacts if it ran after them.
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
       - uses: actions/download-artifact@v8
         with:
           pattern: linux-*
@@ -341,7 +414,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          # Same changelog section the Store listing publishes as release notes.
+          node scripts/release-notes.mjs > notes.md
+          echo "" >> notes.md
+          echo "Signed macOS and attested Linux artifacts. Windows production distribution is available only through Microsoft Store after certification." >> notes.md
           gh release create "v${VERSION}" dist/* \
             --draft=true \
             --title "Nodestorm v${VERSION}" \
-            --notes "Signed macOS and attested Linux artifacts. Windows production distribution is available only through Microsoft Store after certification."
+            --notes-file notes.md

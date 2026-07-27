@@ -16,8 +16,25 @@ Add-Type -Namespace NodestormVerify -Name Native -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
 [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int w, int ht, uint flags);
 [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int attr, out int val, int size);
+// IntPtr, not string, for the device name: PowerShell marshals a $null string
+// argument as an empty one, which this API rejects. IntPtr.Zero is a real NULL,
+// meaning "the current display device".
+[DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern bool EnumDisplaySettings(IntPtr device, int mode, ref DEVMODE dm);
+[DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int ChangeDisplaySettings(ref DEVMODE dm, int flags);
 public delegate bool EnumProc(IntPtr h, IntPtr lp);
 public struct RECT { public int Left, Top, Right, Bottom; }
+[StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
+public struct DEVMODE {
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst=32)] public string dmDeviceName;
+    public short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
+    public int dmFields, dmPositionX, dmPositionY, dmDisplayOrientation, dmDisplayFixedOutput;
+    public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst=32)] public string dmFormName;
+    public short dmLogPixels;
+    public int dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency;
+    public int dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2;
+    public int dmPanningWidth, dmPanningHeight;
+}
 '@
 }
 [void][NodestormVerify.Native]::SetProcessDPIAware()
@@ -198,6 +215,30 @@ function Save-WindowPng([IntPtr]$TopHwnd, [string]$Path) {
     $bmp.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
     $bmp.Dispose()
     Log "captured $Path"
+}
+
+function Set-DisplayResolution([int]$Width, [int]$Height) {
+    # Hosted CI runners boot at 1024x768, which is below the Store's 1366x768
+    # screenshot floor - and a window bigger than the desktop captures blank,
+    # since the offscreen part of a WebView2 never repaints. So the desktop is
+    # widened first and the capture window stays inside it.
+    $dm = New-Object NodestormVerify.Native+DEVMODE
+    # dmSize must be set by the caller; EnumDisplaySettings fails outright
+    # against a zeroed one. ENUM_CURRENT_SETTINGS (-1) fills in the rest.
+    $dm.dmSize = [System.Runtime.InteropServices.Marshal]::SizeOf($dm)
+    if (-not [NodestormVerify.Native]::EnumDisplaySettings([IntPtr]::Zero, -1, [ref]$dm)) {
+        Fail 'EnumDisplaySettings failed; cannot read the current display mode'
+    }
+    if ($dm.dmPelsWidth -eq $Width -and $dm.dmPelsHeight -eq $Height) {
+        Log "display already ${Width}x${Height}"
+        return
+    }
+    $dm.dmPelsWidth = $Width
+    $dm.dmPelsHeight = $Height
+    $dm.dmFields = 0x80000 -bor 0x100000   # DM_PELSWIDTH | DM_PELSHEIGHT
+    $result = [NodestormVerify.Native]::ChangeDisplaySettings([ref]$dm, 0)
+    if ($result -ne 0) { Fail "ChangeDisplaySettings(${Width}x${Height}) returned $result" }
+    Log "display set to ${Width}x${Height}"
 }
 
 function Wait-Tcp([int]$TcpPort, [int]$TimeoutSec = 60) {

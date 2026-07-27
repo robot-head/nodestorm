@@ -14,14 +14,19 @@ version literally again.
 ## Cutting a release
 
 1. Set the new version in `plugins/nodestorm/VERSION`.
-2. Update the files that carry their own copy — `Cargo.toml` (then `cargo check`
+2. Write the `CHANGELOG.md` section for it (`## [<version>] - YYYY-MM-DD`). That
+   text is published verbatim as the Microsoft Store release notes and as the
+   GitHub release body, so write it for the people reading the listing, not as a
+   commit log. Validation rejects a tag whose version has no section, or whose
+   section exceeds the Store's 1500-character release-notes field.
+3. Update the files that carry their own copy — `Cargo.toml` (then `cargo check`
    to refresh `Cargo.lock`), `plugins/nodestorm/package.json` (and its lock),
    both plugin manifests, `packaging/macos/Info.plist`, `pi.js`, and
    `msixVersion` in `packaging/windows/store-identity.json` (which is
    `<version>.0`).
-3. Run `node scripts/configure-store.mjs packaging/windows/store-identity.json`
+4. Run `node scripts/configure-store.mjs packaging/windows/store-identity.json`
    to regenerate the plugin's `store.json`.
-4. Run `node scripts/validate-release.mjs --release --tag v<version>` as the
+5. Run `node scripts/validate-release.mjs --release --tag v<version>` as the
    preflight. It rejects missing/example Partner Center values or version drift.
 
 ## One-time external prerequisites
@@ -81,6 +86,24 @@ and **submitted automatically** to the Store by the `store-submit` job, which
 uses the Store submission API to clone the last published submission, retire
 its packages, upload the new bundle, and commit. Microsoft signs the package
 during certification; the repository never holds a Store signing key.
+
+The submission carries a fresh listing, not just a fresh package. Release notes
+come from the `CHANGELOG.md` section for this version, and the `store-assets`
+job regenerates the artwork from the build that is shipping: it widens the
+runner desktop to 1920x1080, runs `verify-windows.ps1` at 1600x1000 for the
+screenshots named in `packaging/windows/store-listing.json`, records the demo
+with `record-demo.ps1`, and pads that video and its poster to the 1920x1080 the
+Store demands for a trailer. Everything travels in the same zip as the bundle.
+Hand-uploaded store logos are left alone — only the previous screenshots are
+retired.
+
+`store-assets` runs on manual dispatch too, and that is the way to rehearse it:
+a dispatch proves the capture works and produces a downloadable `store-assets`
+artifact to eyeball, while `store-submit` stays tag-gated and never fires. If
+capture fails, no submission and no GitHub draft happen — a listing that cannot
+be regenerated blocks the release rather than shipping last version's pictures.
+Updating the listing copy (screenshot order, captions, trailer title) means
+editing `packaging/windows/store-listing.json`, not Partner Center.
 
 **Store credentials are optional.** With none of the three `MSSTORE_*` secrets
 set, `store-submit` skips: it annotates the run with a warning, writes the
