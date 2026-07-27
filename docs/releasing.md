@@ -39,11 +39,12 @@ version literally again.
 3. Configure repository secrets `APPLE_DEVELOPER_ID_P12_BASE64`,
    `APPLE_DEVELOPER_ID_P12_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`,
    `APPLE_TEAM_ID`, and `APPLE_APP_SPECIFIC_PASSWORD`.
-4. Associate a Microsoft Entra ID (Azure AD) application with the Partner
-   Center account, grant it the **Manager** role, and configure repository
-   secrets `MSSTORE_TENANT_ID`, `MSSTORE_CLIENT_ID`, and
+4. *(Optional)* Associate a Microsoft Entra ID (Azure AD) application with the
+   Partner Center account, grant it the **Manager** role, and configure
+   repository secrets `MSSTORE_TENANT_ID`, `MSSTORE_CLIENT_ID`, and
    `MSSTORE_CLIENT_SECRET`. These authorize the automated Store submission in
-   stage 1.
+   stage 1. Skip it and stage 1 still succeeds, printing manual upload steps
+   instead — set up all three later to automate.
 
    **No company, Microsoft 365 subscription, or existing Entra tenant is
    required.** A personal Microsoft account with an individual Partner Center
@@ -80,6 +81,14 @@ and **submitted automatically** to the Store by the `store-submit` job, which
 uses the Store submission API to clone the last published submission, retire
 its packages, upload the new bundle, and commit. Microsoft signs the package
 during certification; the repository never holds a Store signing key.
+
+**Store credentials are optional.** With none of the three `MSSTORE_*` secrets
+set, `store-submit` skips: it annotates the run with a warning, writes the
+manual upload steps to the job summary, and exits 0, so an unconfigured
+repository still gets a fully green release build. With **all three** set it
+submits, and a genuine API error fails the job. A *partial* set fails
+immediately — that means someone believes submission is wired up, and silently
+skipping would quietly not ship the release.
 
 The workflow also creates a disposable self-signed copy solely to test MSIX
 installation and the execution alias in CI; that copy is never uploaded.

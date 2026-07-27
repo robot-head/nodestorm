@@ -22,7 +22,7 @@
 //! Docs: https://learn.microsoft.com/en-us/windows/uwp/monetize/manage-app-submissions
 
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { appendFile, readFile } from "node:fs/promises";
 import path from "node:path";
 
 import { msixVersion, releaseVersion, root } from "./release-version.mjs";
@@ -36,13 +36,53 @@ const packageZip = process.argv[2];
 assert.ok(packageZip, "usage: node scripts/submit-store.mjs <package.zip>");
 
 const { MSSTORE_TENANT_ID, MSSTORE_CLIENT_ID, MSSTORE_CLIENT_SECRET } = process.env;
-for (const [name, value] of Object.entries({
+const missing = Object.entries({
   MSSTORE_TENANT_ID,
   MSSTORE_CLIENT_ID,
   MSSTORE_CLIENT_SECRET,
-})) {
-  assert.ok(value, `${name} is not set; configure the Azure AD application secrets`);
+})
+  .filter(([, value]) => !value)
+  .map(([name]) => name);
+
+// Absent credentials mean the Entra application has not been set up yet, which
+// is a legitimate state — the manual Partner Center upload reaches exactly the
+// same place. Say so loudly and hand back the manual steps, but do not fail the
+// release build over it. A *broken* credential still fails hard below; only a
+// wholly unconfigured one skips.
+if (missing.length === 3) {
+  const identity = JSON.parse(
+    await readFile(path.join(root, "packaging/windows/store-identity.json"), "utf8"),
+  );
+  const steps = [
+    "Store submission skipped: no Microsoft Entra credentials configured.",
+    "",
+    `Upload \`${path.basename(packageZip, ".zip")}.msixbundle\` by hand instead:`,
+    "",
+    `1. Download the \`windows-store-msixbundle\` artifact from this run.`,
+    `2. In Partner Center, open product \`${identity.productId}\` and create a submission.`,
+    `3. Upload the bundle (version ${msixVersion(await releaseVersion())}) and submit for certification.`,
+    "",
+    "To automate this next time, see the Microsoft Entra setup in docs/releasing.md.",
+    "No company or paid subscription is needed — a free tenant can be created",
+    "from inside Partner Center.",
+  ].join("\n");
+
+  console.warn(`::warning title=Store submission skipped::${steps.split("\n")[0]}`);
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    await appendFile(process.env.GITHUB_STEP_SUMMARY, `## Microsoft Store\n\n${steps}\n`);
+  }
+  console.log(steps);
+  process.exit(0);
 }
+
+// A partial configuration is a mistake, not a choice — fail rather than
+// silently skipping a submission the operator believes is wired up.
+assert.equal(
+  missing.length,
+  0,
+  `incomplete Store credentials: ${missing.join(", ")} not set. ` +
+    "Set all three or none (none skips submission with instructions).",
+);
 
 const identity = JSON.parse(
   await readFile(path.join(root, "packaging/windows/store-identity.json"), "utf8"),

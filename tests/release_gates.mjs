@@ -161,3 +161,37 @@ test("Linux release packages and installs launcher artwork", async () => {
   assert.match(script, /icons\/hicolor\/\$\{size\}x\$\{size\}\/apps/);
   assert.match(script, /Icon=nodestorm/);
 });
+
+test("Store submission skips cleanly without credentials but rejects a partial set", async () => {
+  const submit = path.join(root, "scripts", "submit-store.mjs");
+  const run = (env) =>
+    spawnSync(process.execPath, [submit, "nodestorm-windows.zip"], {
+      encoding: "utf8",
+      // Strip any real credentials so a developer's shell cannot change the result.
+      env: {
+        ...Object.fromEntries(
+          Object.entries(process.env).filter(([name]) => !name.startsWith("MSSTORE_")),
+        ),
+        ...env,
+      },
+    });
+
+  // No credentials: a legitimate state. The release build must stay green and
+  // the operator must be told how to upload by hand.
+  const skipped = run({});
+  assert.equal(skipped.status, 0, skipped.stderr);
+  assert.match(skipped.stdout, /Store submission skipped/);
+  assert.match(skipped.stdout, /Partner Center/);
+  assert.match(skipped.stderr, /^::warning title=/m, "must annotate the workflow run");
+
+  // A partial set means someone believes submission is wired up. Skipping there
+  // would silently not ship a release, so it has to fail.
+  for (const partial of [
+    { MSSTORE_TENANT_ID: "t" },
+    { MSSTORE_TENANT_ID: "t", MSSTORE_CLIENT_ID: "c" },
+  ]) {
+    const result = run(partial);
+    assert.notEqual(result.status, 0, `partial credentials must fail: ${Object.keys(partial)}`);
+    assert.match(result.stderr, /incomplete Store credentials/);
+  }
+});
