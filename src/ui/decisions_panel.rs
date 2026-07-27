@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 use dioxus::prelude::*;
 
-use crate::model::{Choice, ChoiceRef, ChoiceStatus, NodeId, SessionDoc};
+use crate::model::{Choice, ChoiceId, ChoiceRef, ChoiceStatus, NodeId, SessionDoc};
 
 use super::choice_panel::{ChoiceBlock, ConsideredTrails};
 
@@ -84,6 +84,67 @@ pub(crate) fn resume_after(
         .cloned()
 }
 
+/// The collapsed group hiding `node`, if any.
+///
+/// `layout::compute_view` replaces the members of a collapsed group with a
+/// single synthetic `group:<name>` card and emits no rect for the members
+/// themselves. Centering on a hidden member would therefore be dropped on the
+/// floor by the canvas's zoom effect, leaving navigation looking broken —
+/// expand the group first.
+pub(crate) fn collapsed_group_of(
+    doc: &SessionDoc,
+    collapsed: &[String],
+    node: &NodeId,
+) -> Option<String> {
+    let group = doc.node(node)?.group.clone()?;
+    collapsed.contains(&group).then_some(group)
+}
+
+/// Park the navigation on `next`: reveal its node if a collapsed group hides
+/// it, then select and center it. The single entry point every step, jump, and
+/// auto-advance goes through.
+pub(crate) fn focus_decision(
+    store: &crate::store::Store,
+    doc: Signal<SessionDoc>,
+    mut selected: Signal<Option<NodeId>>,
+    mut zoom_target: Signal<Option<NodeId>>,
+    node: &NodeId,
+) {
+    // Scoped so the doc borrow is released before the store mutation below.
+    let hidden = collapsed_group_of(&doc.read(), &store.snapshot_meta().collapsed_groups, node);
+    if let Some(group) = hidden {
+        store.toggle_group_collapsed(&group);
+    }
+    selected.set(Some(node.clone()));
+    zoom_target.set(Some(node.clone()));
+}
+
+/// Move the cursor `by` places through `refs`, bringing the canvas along.
+/// Shared by the panel's ‹ › controls and the canvas's `]` / `[` keys.
+pub(crate) fn step_and_focus(
+    store: &crate::store::Store,
+    doc: Signal<SessionDoc>,
+    refs: &[ChoiceRef],
+    mut cursor: Signal<Option<ChoiceRef>>,
+    selected: Signal<Option<NodeId>>,
+    zoom_target: Signal<Option<NodeId>>,
+    by: isize,
+) {
+    let Some(next) = step_decision(refs, cursor().as_ref(), by) else {
+        return;
+    };
+    focus_decision(store, doc, selected, zoom_target, &next.node);
+    cursor.set(Some(next));
+}
+
+/// Sibling key for one choice block. Node and choice ids are unrestricted
+/// strings, so plain concatenation is ambiguous — `("a-b", "c")` and
+/// `("a", "b-c")` would both render `a-b-c` and collide. Prefixing the node
+/// id's length makes the split point unambiguous.
+fn block_key(node: &NodeId, choice: &ChoiceId) -> String {
+    format!("{}:{}:{}", node.as_str().len(), node, choice)
+}
+
 /// The four buckets the panel lists, in the order it lists them.
 fn bucket(doc: &SessionDoc, choice: &Choice) -> usize {
     match choice.status {
@@ -105,26 +166,30 @@ pub fn DecisionsPanel(
 ) -> Element {
     let considered: Signal<ConsideredTrails> = use_signal(HashMap::new);
     let mut cursor = use_context::<super::DecisionNav>().cursor;
-    let mut zoom_target = use_context::<super::ZoomTarget>().0;
-    let mut selected = selected;
+    let zoom_target = use_context::<super::ZoomTarget>().0;
+    let store = super::app::use_store();
 
     // Auto-advance: when the parked decision stops being actionable — the user
     // just decided or skipped it, or the agent resolved it from its side —
     // walk to the next one instead of stranding the cursor. Only fires when
     // the target has genuinely left the list, so it never fights the user.
-    use_effect(move || {
-        let d = doc.read();
-        let refs = actionable_decisions(&d);
-        let Some(current) = cursor() else { return };
-        if refs.contains(&current) {
-            return;
+    use_effect({
+        let store = store.clone();
+        move || {
+            let next = {
+                let d = doc.read();
+                let refs = actionable_decisions(&d);
+                let Some(current) = cursor() else { return };
+                if refs.contains(&current) {
+                    return;
+                }
+                resume_after(&d, &refs, &current)
+            };
+            if let Some(next) = &next {
+                focus_decision(&store, doc, selected, zoom_target, &next.node);
+            }
+            cursor.set(next);
         }
-        let next = resume_after(&d, &refs, &current);
-        if let Some(next) = &next {
-            selected.set(Some(next.node.clone()));
-            zoom_target.set(Some(next.node.clone()));
-        }
-        cursor.set(next);
     });
 
     // Snapshot everything the render needs, then drop the doc borrow.
@@ -148,17 +213,6 @@ pub fn DecisionsPanel(
         (n, Some(i)) => format!("{} of {n}", i + 1),
     };
 
-    // Step the cursor and take the canvas along: selecting centers the owning
-    // node through the canvas's existing zoom-target effect.
-    let mut step = move |refs: &[ChoiceRef], by: isize| {
-        let Some(next) = step_decision(refs, cursor().as_ref(), by) else {
-            return;
-        };
-        selected.set(Some(next.node.clone()));
-        zoom_target.set(Some(next.node.clone()));
-        cursor.set(Some(next));
-    };
-
     rsx! {
         aside { class: "panel decisions-panel",
             div { class: "panel-head",
@@ -171,7 +225,12 @@ pub fn DecisionsPanel(
                         disabled: total == 0,
                         onclick: {
                             let refs = refs.clone();
-                            move |_| step(&refs, -1)
+                            let store = store.clone();
+                            move |_| {
+                                step_and_focus(
+                                    &store, doc, &refs, cursor, selected, zoom_target, -1,
+                                );
+                            }
                         },
                         "‹"
                     }
@@ -183,7 +242,12 @@ pub fn DecisionsPanel(
                         disabled: total == 0,
                         onclick: {
                             let refs = refs.clone();
-                            move |_| step(&refs, 1)
+                            let store = store.clone();
+                            move |_| {
+                                step_and_focus(
+                                    &store, doc, &refs, cursor, selected, zoom_target, 1,
+                                );
+                            }
                         },
                         "›"
                     }
@@ -206,7 +270,7 @@ pub fn DecisionsPanel(
                 h3 { class: "decisions-section", key: "{heading}", "{heading}" }
                 for (node_id, choice) in entries {
                     ChoiceBlock {
-                        key: "{node_id}-{choice.id}",
+                        key: "{block_key(&node_id, &choice.id)}",
                         node_id,
                         choice,
                         doc,
@@ -398,6 +462,43 @@ mod tests {
         let refs = actionable_decisions(&d);
 
         assert2::assert!(resume_after(&d, &refs, &cref("api", "a")) == refs.first().cloned());
+    }
+
+    #[test]
+    fn a_collapsed_group_hides_its_members_from_centering() {
+        // Members of a collapsed group have no layout rect, so navigation must
+        // expand the group before asking the canvas to center on one.
+        let mut d = doc();
+        d.nodes[0].group = Some("Platform".into());
+
+        assert2::assert!(
+            collapsed_group_of(&d, &["Platform".to_owned()], &NodeId::from("api"))
+                == Some("Platform".to_owned())
+        );
+        // Expanded, ungrouped, and unknown nodes need no reveal.
+        assert2::assert!(collapsed_group_of(&d, &[], &NodeId::from("api")).is_none());
+        assert2::assert!(
+            collapsed_group_of(&d, &["Platform".to_owned()], &NodeId::from("store")).is_none()
+        );
+        assert2::assert!(
+            collapsed_group_of(&d, &["Platform".to_owned()], &NodeId::from("ghost")).is_none()
+        );
+    }
+
+    #[test]
+    fn sibling_keys_stay_distinct_when_ids_contain_the_separator() {
+        // ("a-b", "c") and ("a", "b-c") both concatenate to "a-b-c"; the
+        // length prefix keeps them apart. Duplicate sibling keys make Dioxus
+        // reconcile the wrong block and retain the other choice's handlers.
+        assert2::assert!(
+            block_key(&NodeId::from("a-b"), &ChoiceId::from("c"))
+                != block_key(&NodeId::from("a"), &ChoiceId::from("b-c"))
+        );
+        // Colons are just as legal inside an id, and must not collide either.
+        assert2::assert!(
+            block_key(&NodeId::from("a:b"), &ChoiceId::from("c"))
+                != block_key(&NodeId::from("a"), &ChoiceId::from("b:c"))
+        );
     }
 
     #[parameterized(

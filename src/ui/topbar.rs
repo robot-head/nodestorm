@@ -130,6 +130,7 @@ pub fn TopBar(
     let mut decisions_open = decision_nav.open;
     let mut decision_cursor = decision_nav.cursor;
     let mut compare_with = use_context::<super::CompareWith>().0;
+    let record_diff = use_context::<super::RecordDiff>().0;
     let terminals = use_context::<super::Terminals>().0;
     let panel = use_context::<super::TerminalPanel>();
     let d = doc.read();
@@ -553,6 +554,7 @@ pub fn TopBar(
                                 let mut queued_changes_open = queued_changes_open;
                                 let mut questions_open = questions_open;
                                 let mut compare_with = compare_with;
+                                let mut record_diff = record_diff;
                                 move |_| {
                                     if !decisions_open() {
                                         selected.set(None);
@@ -560,6 +562,11 @@ pub fn TopBar(
                                         queued_changes_open.set(false);
                                         questions_open.set(false);
                                         compare_with.set(None);
+                                        // Decisions outranks the record diff in
+                                        // the panel chain, so leaving it set
+                                        // would resurrect a stale comparison on
+                                        // close instead of clearing the slot.
+                                        record_diff.set(None);
                                     } else {
                                         decision_cursor.set(None);
                                     }

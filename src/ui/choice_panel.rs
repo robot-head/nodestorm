@@ -420,8 +420,17 @@ pub(crate) fn ChoiceBlock(
     selected: Option<Signal<Option<NodeId>>>,
 ) -> Element {
     let store = use_store();
-    let mut zoom_target = use_context::<super::ZoomTarget>().0;
+    let zoom_target = use_context::<super::ZoomTarget>().0;
+    let mut cursor = use_context::<super::DecisionNav>().cursor;
     let owner_label = selected.and_then(|_| doc.read().node(&node_id).map(|n| n.label.clone()));
+    // In the Decisions panel, resolving a choice directly — without having
+    // stepped onto it — must still park the cursor there, or auto-advance has
+    // nothing to advance *from* and the panel sits still. `None` means the
+    // node panel, which does not drive navigation.
+    let this_ref = selected.map(|_| crate::model::ChoiceRef {
+        node: node_id.clone(),
+        choice: choice.id.clone(),
+    });
     let status_class = match choice.status {
         ChoiceStatus::Open => "open",
         ChoiceStatus::Decided => "decided",
@@ -462,11 +471,13 @@ pub(crate) fn ChoiceBlock(
                     title: "Select and center this component",
                     onclick: {
                         let node_id = node_id.clone();
+                        let store = store.clone();
                         move |_| {
-                            if let Some(mut selected) = selected {
-                                selected.set(Some(node_id.clone()));
+                            if let Some(selected) = selected {
+                                super::decisions_panel::focus_decision(
+                                    &store, doc, selected, zoom_target, &node_id,
+                                );
                             }
-                            zoom_target.set(Some(node_id.clone()));
                         }
                     },
                     "on {label}"
@@ -500,6 +511,7 @@ pub(crate) fn ChoiceBlock(
                         let choice_id = choice.id.clone();
                         let node_id = node_id.clone();
                         let store = store.clone();
+                        let this_ref = this_ref.clone();
                         let option_class = match (picked, locked) {
                             (_, true) => "option locked",
                             (true, false) => "option picked",
@@ -528,6 +540,11 @@ pub(crate) fn ChoiceBlock(
                                         }
                                         trail.clone()
                                     });
+                                    // Park the cursor before mutating, so the
+                                    // panel's auto-advance has a "from".
+                                    if let Some(this_ref) = &this_ref {
+                                        cursor.set(Some(this_ref.clone()));
+                                    }
                                     if let Err(err) =
                                         store.select_option(&node_id, &choice_id, &option_id, trail)
                                     {
@@ -587,7 +604,11 @@ pub(crate) fn ChoiceBlock(
                         let store = store.clone();
                         let node_id = node_id.clone();
                         let choice_id = choice.id.clone();
+                        let this_ref = this_ref.clone();
                         move |_| {
+                            if let Some(this_ref) = &this_ref {
+                                cursor.set(Some(this_ref.clone()));
+                            }
                             if let Err(err) = store.dismiss_choice(&node_id, &choice_id, None) {
                                 tracing::warn!(%err, "dismiss_choice failed");
                             }

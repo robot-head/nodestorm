@@ -223,17 +223,24 @@ pub fn Canvas(
 
     // Decision stepping: walk the session's actionable choices, opening the
     // Decisions panel so the one we land on is visible and decidable.
-    let mut step_decision = move |by: isize| {
-        let next = {
-            let d = doc.read();
-            let refs = super::decisions_panel::actionable_decisions(&d);
-            super::decisions_panel::step_decision(&refs, decision_cursor().as_ref(), by)
-        };
-        let Some(next) = next else { return };
-        decisions_open.set(true);
-        selected.set(Some(next.node.clone()));
-        zoom_target.set(Some(next.node.clone()));
-        decision_cursor.set(Some(next));
+    let mut step_decision = {
+        let store = store.clone();
+        move |by: isize| {
+            let refs = super::decisions_panel::actionable_decisions(&doc.read());
+            if refs.is_empty() {
+                return;
+            }
+            decisions_open.set(true);
+            super::decisions_panel::step_and_focus(
+                &store,
+                doc,
+                &refs,
+                decision_cursor,
+                selected,
+                zoom_target,
+                by,
+            );
+        }
     };
 
     // When the agent moves the focus, pan so that node is centered.
