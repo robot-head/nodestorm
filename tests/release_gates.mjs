@@ -242,6 +242,12 @@ test("Store submission skips cleanly without credentials but rejects a partial s
   assert.equal(skipped.status, 0, skipped.stderr);
   assert.match(skipped.stdout, /Store submission skipped/);
   assert.match(skipped.stdout, /Partner Center/);
+  // The manual path must reach the whole place the API path does. Instructions
+  // that mention only the package ship the stale listing this pipeline exists
+  // to prevent, and nothing downstream would catch it.
+  assert.match(skipped.stdout, /store-assets/, "the fallback must refresh the screenshots");
+  assert.match(skipped.stdout, /trailer\.mp4/, "the fallback must refresh the trailer");
+  assert.match(skipped.stdout, /Release notes:/, "the fallback must hand over the release notes");
   assert.match(skipped.stderr, /^::warning title=/m, "must annotate the workflow run");
 
   // A partial set means someone believes submission is wired up. Skipping there

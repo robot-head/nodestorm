@@ -63,14 +63,31 @@ if (missing.length === 3) {
   const identity = JSON.parse(
     await readFile(path.join(root, "packaging/windows/store-identity.json"), "utf8"),
   );
+  // The manual path has to reach the *whole* place the API path does. Listing
+  // steps and the notes text are spelled out here, because a fallback that only
+  // mentions the package ships exactly the stale listing this pipeline exists
+  // to prevent — and nothing downstream would catch it.
+  const skipVersion = await releaseVersion();
   const steps = [
     "Store submission skipped: no Microsoft Entra credentials configured.",
     "",
-    `Upload \`${path.basename(packageZip, ".zip")}.msixbundle\` by hand instead:`,
+    `Upload \`${path.basename(packageZip, ".zip")}.msixbundle\` by hand instead, and`,
+    "refresh the listing while you are there — the package alone leaves customers",
+    "looking at the previous release's notes and screenshots:",
     "",
-    `1. Download the \`windows-store-msixbundle\` artifact from this run.`,
+    "1. Download the `windows-store-msixbundle` and `store-assets` artifacts from this run.",
     `2. In Partner Center, open product \`${identity.productId}\` and create a submission.`,
-    `3. Upload the bundle (version ${msixVersion(await releaseVersion())}) and submit for certification.`,
+    `3. Upload the bundle (version ${msixVersion(skipVersion)}).`,
+    "4. On the Store listing page, replace the screenshots with the PNGs from",
+    "   `store-assets` — order and captions are in `packaging/windows/store-listing.json`.",
+    "5. Replace the trailer with `trailer.mp4` from `store-assets`, using",
+    "   `trailer-thumb.png` as its thumbnail.",
+    "6. Paste the release notes below into the listing's Release notes field.",
+    "7. Submit for certification.",
+    "",
+    "Release notes:",
+    "",
+    (await changelogSection(skipVersion)).replace(/^#+ /gm, ""),
     "",
     "To automate this next time, see the Microsoft Entra setup in docs/releasing.md.",
     "No company or paid subscription is needed — a free tenant can be created",

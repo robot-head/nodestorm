@@ -107,8 +107,11 @@ editing `packaging/windows/store-listing.json`, not Partner Center.
 
 **Store credentials are optional.** With none of the three `MSSTORE_*` secrets
 set, `store-submit` skips: it annotates the run with a warning, writes the
-manual upload steps to the job summary, and exits 0, so an unconfigured
-repository still gets a fully green release build. With **all three** set it
+manual steps to the job summary, and exits 0, so an unconfigured repository
+still gets a fully green release build. Those steps cover the *listing*, not
+just the package — which artifacts to download, where the screenshots and
+trailer go, and the release-notes text to paste — because uploading the bundle
+alone leaves customers on the previous release's listing. With **all three** set it
 submits, and a genuine API error fails the job. A *partial* set fails
 immediately — that means someone believes submission is wired up, and silently
 skipping would quietly not ship the release.
@@ -137,10 +140,14 @@ artifacts and never touches the live listing.
 ### Manual fallback
 
 The Store submission API is a convenience, not a dependency. If `store-submit`
-fails for any reason, download the `windows-store-msixbundle` artifact from the
-build run and upload it to the product in Partner Center by hand. Everything
-downstream — certification, stage 2, `winget` verification — is identical. Only
-delete any pending API-created submission first, so the manual one starts clean.
+fails for any reason, download the `windows-store-msixbundle` and `store-assets`
+artifacts from the build run and apply both by hand: upload the bundle, replace
+the screenshots and trailer from `store-assets` (order and captions live in
+`packaging/windows/store-listing.json`), and paste this version's `CHANGELOG.md`
+section into Release notes. Uploading the package alone certifies fine and
+leaves the listing a release behind, which nothing downstream checks. Everything
+else — certification, stage 2, `winget` verification — is identical. Only delete
+any pending API-created submission first, so the manual one starts clean.
 
 ## Stage 2: publish after Store certification
 
