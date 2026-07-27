@@ -39,10 +39,31 @@ version literally again.
 3. Configure repository secrets `APPLE_DEVELOPER_ID_P12_BASE64`,
    `APPLE_DEVELOPER_ID_P12_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`,
    `APPLE_TEAM_ID`, and `APPLE_APP_SPECIFIC_PASSWORD`.
-4. Associate an Azure AD application with the Partner Center account, grant it
-   the **Manager** role, and configure repository secrets `MSSTORE_TENANT_ID`,
-   `MSSTORE_CLIENT_ID`, and `MSSTORE_CLIENT_SECRET`. These authorize the
-   automated Store submission in stage 1.
+4. Associate a Microsoft Entra ID (Azure AD) application with the Partner
+   Center account, grant it the **Manager** role, and configure repository
+   secrets `MSSTORE_TENANT_ID`, `MSSTORE_CLIENT_ID`, and
+   `MSSTORE_CLIENT_SECRET`. These authorize the automated Store submission in
+   stage 1.
+
+   **No company, Microsoft 365 subscription, or existing Entra tenant is
+   required.** A personal Microsoft account with an individual Partner Center
+   account is enough. If you have no directory, create a free one from inside
+   Partner Center: *gear icon → Account settings → Tenants → Create Microsoft
+   Entra ID*. It asks for a `<name>.onmicrosoft.com` domain, a contact email,
+   and a global-administrator user to create — no business verification, no
+   Azure subscription, no charge. Microsoft's prerequisites say so directly:
+   "you can [create a new Azure AD in Partner Center] for no additional
+   charge."
+
+   The directory exists only to hold the service principal the workflow
+   authenticates as. Note the global-admin account it creates is a *new*
+   identity in that tenant (`you@<name>.onmicrosoft.com`), not your existing
+   personal Microsoft account — keep its credentials, since only a Partner
+   Center user with the **Manager** role can associate tenants later.
+
+   The workflow uses the client-credentials (app-only) grant, so the MFA
+   enforcement that applies to App+User Partner Center API calls from
+   1 April 2026 does not affect it.
 5. Configure npm trusted publishing for the `nodestorm` package and this
    repository's `release-publish.yml` workflow.
 
@@ -71,6 +92,23 @@ installation and the execution alias in CI; that copy is never uploaded.
 
 `store-submit` only runs for tag pushes. A manual `workflow_dispatch` rebuilds
 artifacts and never touches the live listing.
+
+> **If the app is on Pricing Version 2, `store-submit` may fail to commit.**
+> Microsoft documents that the submission API returns an unknown tier for the
+> pricing part of such products; other modules stay usable. Because
+> `submit-store.mjs` clones the previous submission wholesale and PUTs it back,
+> a degraded pricing part travels with it. Check whether *Pricing and
+> availability* shows a **Review price per market** button — if it does, expect
+> this. Recovery is the manual path below; the automation is an optimization,
+> never the only route.
+
+### Manual fallback
+
+The Store submission API is a convenience, not a dependency. If `store-submit`
+fails for any reason, download the `windows-store-msixbundle` artifact from the
+build run and upload it to the product in Partner Center by hand. Everything
+downstream — certification, stage 2, `winget` verification — is identical. Only
+delete any pending API-created submission first, so the manual one starts clean.
 
 ## Stage 2: publish after Store certification
 
