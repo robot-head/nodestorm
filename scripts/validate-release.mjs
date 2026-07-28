@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 
-import { msixVersion, releaseVersion, root, versionPattern } from "./release-version.mjs";
+import {
+  changelogSection,
+  msixVersion,
+  RELEASE_NOTES_LIMIT,
+  releaseVersion,
+  root,
+  versionPattern,
+} from "./release-version.mjs";
 
 const pluginRoot = path.join(root, "plugins", "nodestorm");
 const expected = await releaseVersion();
@@ -88,6 +95,26 @@ for (const field of ["identityName", "publisher", "publisherDisplayName", "produ
 }
 
 if (releaseMode) {
+  // The Store listing and the GitHub release both publish this text, and the
+  // submission API rejects an over-long field after the packages are already
+  // uploaded. Catch both here, before anything reaches Partner Center.
+  const notes = await changelogSection(expected);
+  assert.ok(notes, `CHANGELOG.md section for ${expected} is empty`);
+  assert.ok(
+    notes.length <= RELEASE_NOTES_LIMIT,
+    `CHANGELOG.md section for ${expected} is ${notes.length} chars; the Store release-notes field holds ${RELEASE_NOTES_LIMIT}`,
+  );
+
+  const listing = await json("packaging/windows/store-listing.json");
+  assert.ok(listing.screenshots.length > 0, "store-listing.json lists no screenshots");
+  // The Store shows at most 10 desktop screenshots and truncates captions at 200.
+  assert.ok(listing.screenshots.length <= 10, "the Store accepts at most 10 desktop screenshots");
+  for (const shot of listing.screenshots) {
+    assert.match(shot.file, /\.png$/, `screenshot ${shot.file} must be a .png`);
+    assert.ok(shot.caption.length <= 200, `caption for ${shot.file} exceeds 200 characters`);
+  }
+  assert.ok(listing.trailerTitle.length <= 255, "trailerTitle exceeds 255 characters");
+
   const storeSetup = await json("plugins/nodestorm/skills/nodestorm/scripts/store.json");
   assert.equal(storeSetup.identityName, identity.identityName, "plugin Store identity is stale; run scripts/configure-store.mjs");
   assert.equal(storeSetup.publisher, identity.publisher, "plugin Store publisher is stale; run scripts/configure-store.mjs");

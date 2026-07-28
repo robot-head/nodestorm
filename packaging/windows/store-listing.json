@@ -1,0 +1,34 @@
+{
+  "_comment": "Store listing copy that is not the changelog. `file` names a capture that scripts/verify-windows.ps1 writes to target/verify/; the release build ships them in listing order. Captions are limited to 200 characters, the trailer title to 255.",
+  "screenshots": [
+    {
+      "file": "01-proposed.png",
+      "caption": "Your coding agent proposes an architecture on the canvas and flags the choices it needs you to make."
+    },
+    {
+      "file": "01b-decisions-nav.png",
+      "caption": "The Decisions panel lists every choice still waiting on you, and steps through them one at a time."
+    },
+    {
+      "file": "02-decided.png",
+      "caption": "Pick an option and the agent, blocked on await_decisions, receives your answer and carries on."
+    },
+    {
+      "file": "03-edited.png",
+      "caption": "Edit the graph yourself: add, rename, connect, and remove components, with full undo and redo."
+    },
+    {
+      "file": "04-sessions-timeline.png",
+      "caption": "The session timeline records everything the agent and you did, in order."
+    },
+    {
+      "file": "05-manage-diff.png",
+      "caption": "Compare two sessions side by side to see how a design changed between attempts."
+    },
+    {
+      "file": "06-theme-gruvbox-light.png",
+      "caption": "Seven themes in light and dark, matched to the native Windows title bar."
+    }
+  ],
+  "trailerTitle": "Nodestorm: the canvas your coding agent draws on"
+}

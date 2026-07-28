@@ -38,6 +38,26 @@ export function versionPattern(version) {
   return version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** Partner Center's limit on the release-notes field of a Store listing. */
+export const RELEASE_NOTES_LIMIT = 1500;
+
+/**
+ * The `CHANGELOG.md` body for `version`: everything between its `## [version]`
+ * heading and the next release heading. This is what customers read in the
+ * Store listing and on the GitHub release, so it is derived from one file
+ * rather than retyped into each.
+ */
+export async function changelogSection(version) {
+  const changelog = await readFile(path.join(root, "CHANGELOG.md"), "utf8");
+  const heading = changelog.search(new RegExp(`^## \\[${versionPattern(version)}\\]`, "m"));
+  if (heading === -1) {
+    throw new Error(`CHANGELOG.md has no section for ${version}; add one before releasing.`);
+  }
+  const body = changelog.slice(changelog.indexOf("\n", heading) + 1);
+  const next = body.search(/^## \[/m);
+  return (next === -1 ? body : body.slice(0, next)).trim();
+}
+
 /**
  * A tag that can never match `version`, for tests that prove the tag gate
  * rejects a mismatch. Derived so it stays wrong across bumps.

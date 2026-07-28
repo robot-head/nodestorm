@@ -17,7 +17,10 @@
 #   powershell -File scripts\verify-windows.ps1            # full E2E
 #   powershell -File scripts\verify-windows.ps1 -DemoShot  # render smoke test
 #
-# Artifacts (screenshots, logs) land in target\verify\.
+# Artifacts (screenshots, logs) land in target\verify\. The release build runs
+# this with -WindowSize to regenerate the Microsoft Store screenshots listed in
+# packaging\windows\store-listing.json, so the listing can only ever show UI
+# that still passes this verification.
 
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -26,7 +29,8 @@ param(
     [switch]$DemoShot,      # only launch --demo, verify render, screenshot
     [switch]$NoBuild,       # skip cargo build (use existing target\debug)
     [switch]$KeepOpen,      # leave the app running afterwards
-    [string]$OutDir
+    [string]$OutDir,
+    [string]$WindowSize     # e.g. 1600x1000; Store screenshots need >=1366x768
 )
 
 $ErrorActionPreference = 'Stop'
@@ -69,6 +73,9 @@ if (-not $DemoShot -and -not (Test-Path $driveExe)) { Fail "$driveExe not built"
 
 $appArgs = @('--port', $Port, '--session', $SessionFile, '--sessions-dir', $SessionsDir, '--prefs', $PrefsFile)
 if ($DemoShot) { $appArgs += '--demo' }
+# The window must stay smaller than the desktop: an oversized WebView2 stops
+# repainting the offscreen part and PrintWindow captures it blank.
+if ($WindowSize) { $appArgs += @('--window-size', $WindowSize) }
 $appLog = Join-Path $OutDir 'nodestorm.log'
 Log "launching nodestorm on port $Port..."
 $app = Start-Process -FilePath $exe -ArgumentList $appArgs -PassThru `
