@@ -9,7 +9,7 @@ rust-version = "1.97.1"
 
 [dependencies]
 dioxus = { version = "0.7.9", features = ["desktop"] }
-rmcp = { version = "2.2.0", features = ["transport-streamable-http-server"] }
+rmcp = { version = "3.1.3", features = ["transport-streamable-http-server"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
 axum = { version = "0.8", features = ["ws"] }
 serde = { version = "1", features = ["derive"] }
@@ -35,7 +35,7 @@ tokio = { version = "1", features = ["test-util"] }
 yare = "3"
 # Raw HTTP client for the session-restore regression test.
 reqwest = { version = "0.13", default-features = false }
-rmcp = { version = "2.2.0", features = [
+rmcp = { version = "3.1.3", features = [
     "client",
     "transport-streamable-http-client-reqwest",
     "reqwest",
