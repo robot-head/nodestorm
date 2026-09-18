@@ -17,7 +17,7 @@ env:
 
 jobs:
   validate:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -38,7 +38,7 @@ jobs:
 
   rust-gates:
     needs: validate
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     env:
       VERSION: ${{ needs.validate.outputs.version }}
     steps:
@@ -351,7 +351,7 @@ jobs:
   store-submit:
     needs: [validate, windows-bundle, store-assets]
     if: github.ref_type == 'tag'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     env:
       VERSION: ${{ needs.validate.outputs.version }}
     steps:
@@ -384,7 +384,7 @@ jobs:
     needs: [validate, linux, macos, windows-bundle, store-assets]
     # Manual dispatch rebuilds artifacts only; a release draft comes from the tag.
     if: github.ref_type == 'tag'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     env:
       VERSION: ${{ needs.validate.outputs.version }}
     steps:
