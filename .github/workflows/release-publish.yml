@@ -23,7 +23,7 @@ jobs:
           ref: v${{ inputs.version }}
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 26
       - name: Confirm dispatch and repository release gates
         shell: pwsh
         run: |
@@ -57,7 +57,7 @@ jobs:
           ref: v${{ inputs.version }}
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 26
           registry-url: https://registry.npmjs.org
       - name: Configure Store-backed Windows setup
         run: node scripts/configure-store.mjs packaging/windows/store-identity.json
